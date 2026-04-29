@@ -10,10 +10,11 @@
     "dev:local": "tsx src/dev/local.ts",
     "setup": "tsx src/setup/server.ts",
     "app:dev": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
-    "app:build": "npm run build && env -u ELECTRON_RUN_AS_NODE electron-builder --mac dir",
-    "app:dist": "npm run build && env -u ELECTRON_RUN_AS_NODE electron-builder --mac dmg",
+    "app:build": "npm run build && env -u ELECTRON_RUN_AS_NODE electron-builder --mac dir && node scripts/install-electron-better-sqlite3.mjs",
+    "app:dist": "npm run build && env -u ELECTRON_RUN_AS_NODE electron-builder --mac dir && node scripts/install-electron-better-sqlite3.mjs && node scripts/build-mac-dmg-from-app.mjs",
     "check:env": "tsx src/cli/checkEnv.ts",
     "build": "tsc && esbuild src/setup/server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-bundle/setup-server.js && node scripts/copy-setup-ui.mjs",
+    "smoke:setup": "npm run build && node scripts/smoke-setup-ui.mjs",
     "start": "node --enable-source-maps dist/index.js",
     "typecheck": "tsc --noEmit"
   },
@@ -44,6 +45,7 @@
       "output": "release"
     },
     "asar": false,
+    "npmRebuild": false,
     "files": [
       "dist/**/*",
       "dist-bundle/**/*",
