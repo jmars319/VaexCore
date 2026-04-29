@@ -19,7 +19,8 @@ const envSchema = z.object({
   TWITCH_EVENTSUB_URL: z
     .string()
     .url()
-    .default("wss://eventsub.wss.twitch.tv/ws")
+    .default("wss://eventsub.wss.twitch.tv/ws"),
+  DATABASE_URL: z.string().trim().min(1).default("file:./data/vaexcore.sqlite")
 });
 
 export type Env = ReturnType<typeof loadEnv>;
@@ -34,7 +35,8 @@ export const loadEnv = () => {
     twitchBotUserId: env.TWITCH_BOT_USER_ID,
     commandPrefix: env.COMMAND_PREFIX,
     logLevel: env.LOG_LEVEL,
-    twitchEventSubUrl: env.TWITCH_EVENTSUB_URL
+    twitchEventSubUrl: env.TWITCH_EVENTSUB_URL,
+    databaseUrl: env.DATABASE_URL
   };
 };
 

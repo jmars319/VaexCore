@@ -6,6 +6,8 @@ import { TwitchEventSubClient } from "../twitch/eventsub";
 import { TwitchChatSender } from "../twitch/sendMessage";
 import type { ChatMessageEvent } from "../twitch/types";
 import { StartupChecklist } from "./startupChecklist";
+import { createDbClient, type DbClient } from "../db/client";
+import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 
 type BotOptions = {
   env: Env;
@@ -17,6 +19,7 @@ export class VaexCoreBot {
   private readonly eventSubClient: TwitchEventSubClient;
   private readonly messageQueue: MessageQueue;
   private readonly startupChecklist: StartupChecklist;
+  private readonly db: DbClient;
 
   constructor(private readonly options: BotOptions) {
     const sender = new TwitchChatSender({
@@ -36,6 +39,12 @@ export class VaexCoreBot {
       prefix: options.env.commandPrefix,
       logger: options.logger,
       enqueueMessage: (message) => this.messageQueue.enqueue(message)
+    });
+
+    this.db = createDbClient(options.env.databaseUrl);
+    registerGiveawaysModule({
+      router: this.commandRouter,
+      db: this.db
     });
 
     this.eventSubClient = new TwitchEventSubClient({
@@ -78,6 +87,7 @@ export class VaexCoreBot {
   async stop() {
     this.messageQueue.stop();
     await this.eventSubClient.close();
+    this.db.close();
   }
 
   private async handleChatMessage(event: ChatMessageEvent) {

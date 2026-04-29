@@ -63,6 +63,23 @@ Expected output after the queue interval:
 [queued outbound] pong
 ```
 
+For giveaway testing, unprefixed lines run as the local broadcaster. Viewer identities can be simulated with `name: message`:
+
+```text
+!gstart codes=6 keyword=enter title="IOI code giveaway"
+alice: !enter
+bob: !enter
+carol: !enter
+dave: !enter
+erin: !enter
+frank: !enter
+!gstatus
+!gclose
+!gdraw 6
+!greroll alice
+!gend
+```
+
 Exit local mode with `/quit`, `/exit`, or `Ctrl+C`.
 
 ## Live Startup
@@ -94,6 +111,13 @@ If Twitch rejects startup with `401` or `403`, check:
 ## Current Commands
 
 - `!ping`: replies with `pong`
+- `!enter`: enters the active giveaway when its keyword is `enter`
+- `!gstart codes=6 keyword=enter title="IOI code giveaway"`: starts one active giveaway
+- `!gstatus`: reports active giveaway status
+- `!gclose`: closes entries before drawing
+- `!gdraw` / `!gdraw 6`: draws winners
+- `!greroll username`: rerolls an active winner while preserving history
+- `!gend`: ends the active giveaway
 
 ## Roadmap
 

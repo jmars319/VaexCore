@@ -6,16 +6,54 @@ import { createLogger } from "../core/logger";
 import { CommandRouter } from "../core/commandRouter";
 import { MessageQueue } from "../core/messageQueue";
 import type { ChatMessageEvent } from "../twitch/types";
+import { createDbClient } from "../db/client";
+import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 
 const localEnvSchema = z.object({
   COMMAND_PREFIX: z.string().min(1).default("!"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
-    .default("info")
+    .default("info"),
+  LOCAL_DATABASE_URL: z.string().min(1).default(":memory:")
 });
 
 const env = localEnvSchema.parse(process.env);
 const logger = createLogger(env.LOG_LEVEL);
+
+const parseLocalLine = (line: string) => {
+  const match = /^(?<speaker>[A-Za-z0-9_]+):\s*(?<message>.*)$/.exec(line);
+  const speaker = match?.groups?.speaker ?? "broadcaster";
+  const message = match?.groups?.message ?? line;
+  const normalized = speaker.toLowerCase();
+
+  if (normalized === "mod") {
+    return {
+      userId: "local-mod",
+      login: "mod",
+      displayName: "Mod",
+      message,
+      badges: [{ set_id: "moderator", id: "1", info: "" }]
+    };
+  }
+
+  if (normalized === "broadcaster") {
+    return {
+      userId: "local-broadcaster",
+      login: "broadcaster",
+      displayName: "Broadcaster",
+      message,
+      badges: [{ set_id: "broadcaster", id: "1", info: "" }]
+    };
+  }
+
+  return {
+    userId: `local-${normalized}`,
+    login: normalized,
+    displayName: speaker,
+    message,
+    badges: []
+  };
+};
 
 const messageQueue = new MessageQueue({
   logger,
@@ -30,12 +68,19 @@ const commandRouter = new CommandRouter({
   enqueueMessage: (message) => messageQueue.enqueue(message)
 });
 
+const db = createDbClient(env.LOCAL_DATABASE_URL);
+registerGiveawaysModule({
+  router: commandRouter,
+  db
+});
+
 messageQueue.start();
 
 const rl = createInterface({ input, output });
 
 const shutdown = async () => {
   messageQueue.stop();
+  db.close();
   rl.close();
 };
 
@@ -44,7 +89,8 @@ process.on("SIGINT", () => {
 });
 
 console.log("VaexCore local command mode");
-console.log(`Type chat messages and press Enter. Current live command: ${env.COMMAND_PREFIX}ping`);
+console.log(`Type chat messages and press Enter. Current live commands: ${env.COMMAND_PREFIX}ping, ${env.COMMAND_PREFIX}enter, ${env.COMMAND_PREFIX}g*`);
+console.log("Optional identity prefix: alice: !enter, mod: !gstatus, broadcaster: !gstart codes=6 keyword=enter");
 
 if (input.isTTY) {
   rl.setPrompt("> ");
@@ -56,16 +102,17 @@ for await (const text of rl) {
     break;
   }
 
+  const parsed = parseLocalLine(text);
   const event: ChatMessageEvent = {
     broadcasterUserId: "local-broadcaster",
     broadcasterLogin: "local",
     broadcasterName: "Local",
-    chatterUserId: "local-chatter",
-    chatterLogin: "localuser",
-    chatterName: "LocalUser",
+    chatterUserId: parsed.userId,
+    chatterLogin: parsed.login,
+    chatterName: parsed.displayName,
     messageId: crypto.randomUUID(),
-    text,
-    badges: []
+    text: parsed.message,
+    badges: parsed.badges
   };
 
   await commandRouter.handle(event);
