@@ -77,7 +77,7 @@ Expected output after the queue interval:
 For giveaway testing, unprefixed lines run as the local broadcaster. Viewer identities can be simulated with `name: message`:
 
 ```text
-!gstart codes=6 keyword=enter title="IOI code giveaway"
+!gstart codes=3 keyword=enter title="Community Giveaway"
 alice: !enter
 bob: !enter
 carol: !enter
@@ -146,36 +146,50 @@ Common live errors:
 
 Enable `VAEXCORE_DEBUG=true` only when debugging. It logs truncated raw EventSub payloads and normalized chat messages.
 
-## Local Setup UI
+## Using The Local Operator Console
 
-The setup UI is local-only and binds to `127.0.0.1:3434`. It stores Twitch app credentials and OAuth tokens in `config/local.secrets.json`, which is ignored by Git.
+VaexCore includes a localhost-only operator console for setup, live readiness checks, giveaway operation, chat tools, testing, and audit review. It binds to `127.0.0.1:3434` and is not intended for public hosting.
 
-1. Create a Twitch Developer app.
-2. Set the redirect URI exactly:
-
-```text
-http://localhost:3434/auth/twitch/callback
-```
-
-3. Run:
+Run the console from the project:
 
 ```bash
 npm run setup
 ```
 
-4. Open `http://localhost:3434`.
-5. Enter your Twitch app client ID, client secret, broadcaster login, and bot login.
-6. Click `Save Config`.
-7. Click `Connect Twitch` and approve `user:read:chat` and `user:write:chat`.
-8. Click `Validate Setup`.
-9. Click `Send Test Message`.
-10. Run the bot:
+Then open:
 
-```bash
-npm run check:env
-npm run build
-npm run dev
+```text
+http://localhost:3434
 ```
+
+The console is organized into durable sections:
+
+- `Dashboard`: high-level Twitch, queue, chat, and active giveaway readiness.
+- `Giveaways`: start, close, draw, reroll, claim, deliver, and end giveaways.
+- `Chat Tools`: send chat messages, send test messages, and control optional chat echo.
+- `Testing`: simulate entrants and commands before using a live stream.
+- `Settings`: configure mode, Twitch OAuth, bot identity, and broadcaster identity.
+- `Audit Log`: review the latest 100 local audit entries.
+
+Direct UI actions call the local service layer first. Optional chat echo is visibility only; if enabled, VaexCore queues the equivalent chat command after the local action succeeds.
+
+## Configuring Twitch
+
+Create a Twitch Developer app and set the redirect URI exactly:
+
+```text
+http://localhost:3434/auth/twitch/callback
+```
+
+In the `Settings` section:
+
+1. Select `live` mode.
+2. Enter Twitch client ID and client secret.
+3. Enter broadcaster login and bot login.
+4. Save settings.
+5. Connect Twitch and approve `user:read:chat` and `user:write:chat`.
+6. Validate setup.
+7. Send a setup test message from `Chat Tools`.
 
 Common setup errors:
 
@@ -183,63 +197,110 @@ Common setup errors:
 - `403`: missing scopes. Reconnect and approve both chat scopes.
 - Redirect mismatch: the Twitch Developer app redirect URI does not exactly match `http://localhost:3434/auth/twitch/callback`.
 
-The setup UI never displays tokens after OAuth, never logs tokens, and never stores giveaway codes.
+The setup UI never displays tokens after OAuth, never logs tokens, and never stores giveaway prizes.
 
 ## Security Notes
 
 VaexCore treats Twitch chat and local UI input as untrusted. Commands, giveaway fields, logins, display names, and manual chat messages are normalized and length-limited before use. Unknown commands are ignored, denied commands do not expose internals, and command handling includes lightweight per-user and global burst limits.
 
-The setup/operator console binds only to `127.0.0.1`, rejects non-localhost host headers, sends basic browser security headers, and disables caching for API/UI responses. API routes return safe status only; tokens, refresh tokens, client secrets, OAuth codes, and local secrets are never returned.
+The setup/operator console binds only to `127.0.0.1`, rejects non-localhost host headers, sends basic browser security headers, and disables caching for API/UI responses. API routes return safe status only; tokens, refresh tokens, client secrets, OAuth authorization values, and local secrets are never returned.
 
 See [SECURITY.md](SECURITY.md) for local data paths and reset notes.
 
-## Local Operator Console
+## Running Giveaways
 
-`npm run setup` also opens the local operator console. This is not a public dashboard; it is a localhost-only control surface for existing VaexCore functionality.
+VaexCore supports one active giveaway at a time. Entries are unique by Twitch user ID in live mode and by simulated user identity in local testing.
 
-The console can:
+Recommended operator flow:
 
-- Show safe config and token status.
-- Show setup-server queue status.
-- Show bot run commands for start/stop/restart. The setup server does not fake process control for the separate `npm run dev` bot.
-- Send a chat message when live validation passes.
-- Start, close, draw, reroll, claim, deliver, and end giveaways using the same SQLite giveaway service as chat commands.
-- Add simulated entrants for local testing through the same `!enter` entry logic.
-- Run simulated chat commands through the real command router with viewer, mod, or broadcaster roles.
-- Show entrants, winners, and the latest 100 audit log rows.
+1. Confirm the Dashboard shows Twitch auth, queue readiness, and live chat confirmation.
+2. Open `Giveaways`.
+3. Start a giveaway with a title, keyword, and number of winners.
+4. Announce the entry keyword in chat.
+5. Monitor entry count.
+6. Close entries.
+7. Draw winners.
+8. Reroll, claim, or deliver winners as needed.
+9. End the giveaway after operator work is complete.
 
-Codes are still manual. VaexCore does not store, reveal, whisper, or post giveaway codes.
+Current chat command syntax:
 
-### Operator Console Usage
+```text
+!gstart codes=3 keyword=enter title="Community Giveaway"
+!enter
+!gstatus
+!gclose
+!gdraw 3
+!greroll username
+!gclaim username
+!gdeliver username
+!gend
+```
 
-The UI is the primary local control path. Chat commands remain available for manual operation in Twitch chat, but the console does not depend on Twitch chat to start, close, draw, reroll, claim, deliver, or end a giveaway.
+The `codes` option in `!gstart` is the current command name for the number of winners. The UI labels this as `Number of winners`.
 
-All giveaway buttons call the shared giveaway service directly. The simulated command panel routes through the real command router, so permission checks and command parsing match live chat behavior.
+## Manual Prize Delivery
 
-`Echo command to chat` is optional and defaults off. When enabled, the UI runs the action first, then queues the equivalent chat command such as `!gdraw 6`. Echo failures do not undo the local operation, and echoed messages still use VaexCore's outbound rate limit.
+VaexCore does not store or reveal giveaway prizes. Delivery remains manual.
 
-Use the testing tools before stream:
+Use these actions only to track operator state:
 
-1. Start the setup console with `npm run setup`.
-2. Use `Run command` as a viewer to confirm protected `!g*` commands are denied.
-3. Use `Run command` as broadcaster or the giveaway buttons to start a test giveaway.
-4. Add simulated entrants.
-5. Close, draw, reroll if needed, mark claimed, mark delivered, and end.
-6. Check the audit log for `local-ui` and `simulated-chat` actions.
+```text
+!gclaim username
+!gdeliver username
+```
 
-Recommended stream flow:
+Before ending a giveaway, VaexCore logs a summary of winners, claimed status, delivered status, and rerolled status.
 
-1. Run `npm run setup`.
-2. Validate the Twitch connection.
-3. Send the setup test message.
-4. Run `npm run dev` in another terminal.
-5. Keep `http://localhost:3434` open as the operator console.
-6. Confirm `!ping` in Twitch chat and wait for `LIVE CHAT CONFIRMED`.
-7. Start, close, and draw the giveaway from either the UI or chat commands.
+## Testing Before Stream
+
+Use local testing to verify command parsing, permissions, and giveaway lifecycle behavior without Twitch.
+
+CLI local mode:
+
+```bash
+npm run dev:local
+```
+
+Example transcript:
+
+```text
+broadcaster: !gstart codes=3 keyword=enter title="Community Giveaway"
+alice: !enter
+bob: !enter
+carol: !enter
+alice: !enter
+broadcaster: !gclose
+broadcaster: !gdraw 3
+broadcaster: !gclaim alice
+broadcaster: !gdeliver alice
+broadcaster: !gend
+```
+
+Expected behavior:
+
+```text
+Giveaway started: Community Giveaway. Type !enter to enter. Winners: 3.
+Giveaway closed: Community Giveaway.
+Winners: ...
+alice marked claimed.
+alice marked delivered.
+Giveaway ended: Community Giveaway.
+```
+
+Permission check example:
+
+```text
+alice: !gstart codes=3 keyword=enter
+mod: !ghelp
+broadcaster: !gstart codes=3 keyword=enter title="Community Giveaway"
+```
+
+Normal users are denied for protected giveaway commands. Mod and broadcaster commands run according to centralized permissions.
 
 ## Using VaexCore As A macOS App
 
-The macOS app wraps the same local setup/operator console. It starts the local server internally and opens a VaexCore window, so you do not need to run `npm run setup` manually.
+The macOS app wraps the same local operator console. It starts the local server internally and opens a VaexCore window, so you do not need to run `npm run setup` manually.
 
 Build the app:
 
@@ -282,143 +343,14 @@ npm run dev
 - `!ghelp`: shows concise giveaway operator commands
 - `!vcstatus`: shows mode, EventSub, subscription, queue, and giveaway status
 - `!enter`: enters the active giveaway when its keyword is `enter`
-- `!gstart codes=6 keyword=enter title="IOI code giveaway"`: starts one active giveaway
+- `!gstart codes=3 keyword=enter title="Community Giveaway"`: starts one active giveaway
 - `!gstatus`: reports active giveaway status
 - `!gclose`: closes entries before drawing
-- `!gdraw` / `!gdraw 6`: draws winners
+- `!gdraw` / `!gdraw 3`: draws winners
 - `!greroll username`: rerolls an active winner while preserving history
-- `!gclaim username`: marks a winner as claimed; no code is stored or sent
-- `!gdeliver username`: marks a winner as delivered; no code is stored or sent
+- `!gclaim username`: marks a winner as claimed; no prize is stored or sent
+- `!gdeliver username`: marks a winner as delivered; no prize is stored or sent
 - `!gend`: ends the active giveaway
-
-## Running An IOI Code Giveaway
-
-Before stream:
-
-```bash
-npm run check:env
-npm run build
-npm run dev
-```
-
-Confirm in chat:
-
-```text
-!ping
-```
-
-Opening:
-
-```text
-!gstart codes=6 keyword=enter title="IOI code giveaway"
-```
-
-Chat announcement:
-
-```text
-Type !enter once to enter. Codes will be sent manually. Do not post codes in chat.
-```
-
-During:
-
-```text
-!gstatus
-```
-
-Closing:
-
-```text
-!gclose
-```
-
-Drawing:
-
-```text
-!gdraw 6
-```
-
-If someone does not respond:
-
-```text
-!greroll username
-```
-
-After manual delivery:
-
-```text
-!gclaim username
-!gdeliver username
-```
-
-End:
-
-```text
-!gend
-```
-
-Never paste codes into public chat. VaexCore does not store or reveal codes. Before ending, the console logs a winner summary with claimed, delivered, and rerolled status.
-
-## Local Test Transcripts
-
-Normal case:
-
-```text
-broadcaster: !gstart codes=6 keyword=enter title="IOI code giveaway"
-alice: !enter
-bob: !enter
-carol: !enter
-dave: !enter
-erin: !enter
-frank: !enter
-alice: !enter
-broadcaster: !gclose
-broadcaster: !gdraw 6
-broadcaster: !gclaim alice
-broadcaster: !gdeliver alice
-broadcaster: !gend
-```
-
-Expected chat shape:
-
-```text
-Giveaway started: IOI code giveaway. Type !enter to enter. Winners: 6.
-Giveaway closed: IOI code giveaway.
-Winners: ...
-alice marked claimed.
-alice marked delivered.
-Giveaway ended: IOI code giveaway.
-```
-
-Edge case, fewer entrants than codes:
-
-```text
-broadcaster: !gstart codes=6 keyword=enter title="IOI code giveaway"
-alice: !enter
-bob: !enter
-carol: !enter
-broadcaster: !gclose
-broadcaster: !gdraw 6
-broadcaster: !greroll alice
-broadcaster: !gend
-```
-
-Expected chat shape:
-
-```text
-Winners (only 3/6 eligible): ...
-alice was rerolled. No eligible replacement remains.
-Giveaway ended: IOI code giveaway.
-```
-
-Permission case:
-
-```text
-alice: !gstart codes=6 keyword=enter
-mod: !ghelp
-broadcaster: !gstart codes=6 keyword=enter title="IOI code giveaway"
-```
-
-Expected behavior: normal users are denied in console and do not run `!g*`; mod/broadcaster commands succeed.
 
 ## Roadmap
 

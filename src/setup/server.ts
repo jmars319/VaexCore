@@ -816,7 +816,7 @@ const runLocalLifecycleTest = (options: { echoToChat: boolean; confirmed: boolea
 
     const giveaway = giveawaysService.start({
       actor: localUiActor,
-      title: "IOI code giveaway",
+      title: "Community Giveaway",
       keyword: "enter",
       winnerCount: 6
     });
@@ -843,7 +843,7 @@ const runLocalLifecycleTest = (options: { echoToChat: boolean; confirmed: boolea
 
     maybeEchoCommand(
       options.echoToChat,
-      '!gstart codes=6 keyword=enter title="IOI code giveaway"'
+      '!gstart codes=6 keyword=enter title="Community Giveaway"'
     );
     maybeEchoCommand(options.echoToChat, "!gclose");
     maybeEchoCommand(options.echoToChat, "!gdraw 6");
@@ -1236,7 +1236,7 @@ const setupHtml = String.raw`<!doctype html>
         <p id="endWarning" class="notice"></p>
         <div class="grid">
           <label>Title
-            <input id="giveawayTitle" value="IOI code giveaway" />
+            <input id="giveawayTitle" value="Community Giveaway" />
           </label>
           <label>Keyword
             <input id="giveawayKeyword" value="enter" />
