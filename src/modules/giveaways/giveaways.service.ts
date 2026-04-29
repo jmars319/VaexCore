@@ -1,10 +1,10 @@
 import type { DbClient } from "../../db/client";
 import type { Logger } from "../../core/logger";
-import type { ChatMessageEvent } from "../../twitch/types";
+import type { ChatMessage } from "../../core/chatMessage";
 import type { Giveaway, GiveawayEntry, GiveawayWinner } from "./giveaways.types";
 
 type StartGiveawayInput = {
-  actor: ChatMessageEvent;
+  actor: ChatMessage;
   title: string;
   keyword: string;
   winnerCount: number;
@@ -67,8 +67,8 @@ export class GiveawaysService {
         title: giveaway.title,
         keyword: giveaway.keyword,
         winnerCount: giveaway.winner_count,
-        actor: input.actor.chatterLogin,
-        mode: input.actor.mode
+        actor: input.actor.userLogin,
+        mode: input.actor.source
       },
       "Giveaway opened"
     );
@@ -76,7 +76,7 @@ export class GiveawaysService {
     return giveaway;
   }
 
-  enter(event: ChatMessageEvent, keyword: string) {
+  enter(event: ChatMessage, keyword: string) {
     const giveaway = this.getActiveGiveaway();
 
     if (!giveaway || giveaway.status !== "open") {
@@ -98,9 +98,9 @@ export class GiveawaysService {
       )
       .run({
         giveawayId: giveaway.id,
-        twitchUserId: event.chatterUserId,
-        login: event.chatterLogin,
-        displayName: event.chatterName,
+        twitchUserId: event.userId,
+        login: event.userLogin,
+        displayName: event.userDisplayName,
         enteredAt: timestamp()
       });
 
@@ -113,11 +113,22 @@ export class GiveawaysService {
           operatorEvent: "giveaway entry count changed",
           giveawayId: giveaway.id,
           entries: count,
-          entrant: event.chatterLogin,
-          entrantUserId: event.chatterUserId,
-          mode: event.mode
+          entrant: event.userLogin,
+          entrantUserId: event.userId,
+          mode: event.source
         },
         "Giveaway entry count changed"
+      );
+    } else {
+      this.logger.debug(
+        {
+          operatorEvent: "giveaway duplicate entry ignored",
+          giveawayId: giveaway.id,
+          entrant: event.userLogin,
+          entrantUserId: event.userId,
+          mode: event.source
+        },
+        "Giveaway duplicate entry ignored"
       );
     }
 
@@ -142,7 +153,7 @@ export class GiveawaysService {
     };
   }
 
-  close(actor: ChatMessageEvent) {
+  close(actor: ChatMessage) {
     const giveaway = this.requireActiveGiveaway();
 
     if (giveaway.status === "closed") {
@@ -164,8 +175,8 @@ export class GiveawaysService {
         operatorEvent: "giveaway closed",
         giveawayId: giveaway.id,
         entries: this.countEntries(giveaway.id),
-        actor: actor.chatterLogin,
-        mode: actor.mode
+        actor: actor.userLogin,
+        mode: actor.source
       },
       "Giveaway closed"
     );
@@ -174,7 +185,7 @@ export class GiveawaysService {
   }
 
   draw(
-    actor: ChatMessageEvent,
+    actor: ChatMessage,
     requestedCount?: number,
     options: { allowOpen?: boolean } = {}
   ): DrawResult {
@@ -199,8 +210,8 @@ export class GiveawaysService {
           requestedCount: count,
           drawnCount: 0,
           eligibleCount: candidates.length,
-          actor: actor.chatterLogin,
-          mode: actor.mode
+          actor: actor.userLogin,
+          mode: actor.source
         },
         "No eligible giveaway winners available"
       );
@@ -226,8 +237,8 @@ export class GiveawaysService {
           login: winner.login,
           twitchUserId: winner.twitch_user_id
         })),
-        actor: actor.chatterLogin,
-        mode: actor.mode
+        actor: actor.userLogin,
+        mode: actor.source
       },
       "Giveaway winners drawn"
     );
@@ -235,16 +246,38 @@ export class GiveawaysService {
     return { giveaway, winners, requestedCount: count, eligibleCount: candidates.length };
   }
 
-  reroll(actor: ChatMessageEvent, username: string) {
+  reroll(actor: ChatMessage, username: string) {
     const giveaway = this.requireActiveGiveaway();
 
     if (giveaway.status === "open") {
+      this.logger.warn(
+        {
+          operatorEvent: "giveaway reroll failed",
+          giveawayId: giveaway.id,
+          username,
+          reason: "giveaway_open",
+          actor: actor.userLogin,
+          mode: actor.source
+        },
+        "Giveaway reroll failed"
+      );
       throw new Error("Close the giveaway before rerolling winners");
     }
 
     const winner = this.findActiveWinner(giveaway.id, username);
 
     if (!winner) {
+      this.logger.warn(
+        {
+          operatorEvent: "giveaway reroll failed",
+          giveawayId: giveaway.id,
+          username,
+          reason: "winner_not_found",
+          actor: actor.userLogin,
+          mode: actor.source
+        },
+        "Giveaway reroll failed"
+      );
       throw new Error(`No active winner found for ${username}`);
     }
 
@@ -277,8 +310,8 @@ export class GiveawaysService {
               twitchUserId: replacement.twitch_user_id
             }
           : undefined,
-        actor: actor.chatterLogin,
-        mode: actor.mode
+        actor: actor.userLogin,
+        mode: actor.source
       },
       "Giveaway reroll"
     );
@@ -286,26 +319,90 @@ export class GiveawaysService {
     return { giveaway, rerolled: winner, replacement };
   }
 
-  end(actor: ChatMessageEvent) {
+  claim(actor: ChatMessage, username: string) {
+    const giveaway = this.requireActiveGiveaway();
+    const winner = this.findActiveWinner(giveaway.id, username);
+
+    if (!winner) {
+      throw new Error(`No active winner found for ${username}`);
+    }
+
+    const now = timestamp();
+    this.db
+      .prepare("UPDATE giveaway_winners SET claimed_at = COALESCE(claimed_at, ?) WHERE id = ?")
+      .run(now, winner.id);
+
+    const updated = this.requireWinnerById(winner.id);
+    this.audit(actor, "giveaway.claim", String(giveaway.id), {
+      winner: updated.login
+    });
+    this.logger.info(
+      {
+        operatorEvent: "giveaway winner claimed",
+        giveawayId: giveaway.id,
+        winner: updated.login,
+        winnerUserId: updated.twitch_user_id,
+        actor: actor.userLogin,
+        mode: actor.source
+      },
+      "Giveaway winner claimed"
+    );
+
+    return { giveaway, winner: updated };
+  }
+
+  deliver(actor: ChatMessage, username: string) {
+    const giveaway = this.requireActiveGiveaway();
+    const winner = this.findActiveWinner(giveaway.id, username);
+
+    if (!winner) {
+      throw new Error(`No active winner found for ${username}`);
+    }
+
+    const now = timestamp();
+    this.db
+      .prepare("UPDATE giveaway_winners SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ?")
+      .run(now, winner.id);
+
+    const updated = this.requireWinnerById(winner.id);
+    this.audit(actor, "giveaway.deliver", String(giveaway.id), {
+      winner: updated.login
+    });
+    this.logger.info(
+      {
+        operatorEvent: "giveaway winner delivered",
+        giveawayId: giveaway.id,
+        winner: updated.login,
+        winnerUserId: updated.twitch_user_id,
+        actor: actor.userLogin,
+        mode: actor.source
+      },
+      "Giveaway winner delivered"
+    );
+
+    return { giveaway, winner: updated };
+  }
+
+  end(actor: ChatMessage) {
     const giveaway = this.requireActiveGiveaway();
     const unresolvedWinners = this.getUnresolvedWinners(giveaway.id);
+    const winners = this.getWinners(giveaway.id);
 
-    if (unresolvedWinners.length > 0) {
-      this.logger.warn(
-        {
-          operatorEvent: "giveaway unresolved winners before end",
-          giveawayId: giveaway.id,
-          unresolvedCount: unresolvedWinners.length,
-          winners: unresolvedWinners.map((winner) => ({
-            login: winner.login,
-            twitchUserId: winner.twitch_user_id,
-            claimed: Boolean(winner.claimed_at),
-            delivered: Boolean(winner.delivered_at)
-          }))
-        },
-        "Giveaway has unclaimed or undelivered winners"
-      );
-    }
+    this.logger.warn(
+      {
+        operatorEvent: "giveaway winner summary before end",
+        giveawayId: giveaway.id,
+        unresolvedCount: unresolvedWinners.length,
+        winners: winners.map((winner) => ({
+          login: winner.login,
+          twitchUserId: winner.twitch_user_id,
+          claimed: Boolean(winner.claimed_at),
+          delivered: Boolean(winner.delivered_at),
+          rerolled: Boolean(winner.rerolled_at)
+        }))
+      },
+      "Giveaway winner summary before end"
+    );
 
     this.db
       .prepare("UPDATE giveaways SET status = 'ended', ended_at = ? WHERE id = ?")
@@ -318,8 +415,8 @@ export class GiveawaysService {
         operatorEvent: "giveaway ended",
         giveawayId: giveaway.id,
         unresolvedCount: unresolvedWinners.length,
-        actor: actor.chatterLogin,
-        mode: actor.mode
+        actor: actor.userLogin,
+        mode: actor.source
       },
       "Giveaway ended"
     );
@@ -349,6 +446,18 @@ export class GiveawaysService {
     }
 
     return giveaway;
+  }
+
+  private requireWinnerById(id: number) {
+    const winner = this.db
+      .prepare("SELECT * FROM giveaway_winners WHERE id = ?")
+      .get(id) as GiveawayWinner | undefined;
+
+    if (!winner) {
+      throw new Error(`Winner #${id} was not found`);
+    }
+
+    return winner;
   }
 
   private requireActiveGiveaway() {
@@ -421,6 +530,19 @@ export class GiveawaysService {
       .all(giveawayId) as GiveawayWinner[];
   }
 
+  private getWinners(giveawayId: number) {
+    return this.db
+      .prepare(
+        `
+          SELECT *
+          FROM giveaway_winners
+          WHERE giveaway_id = ?
+          ORDER BY id ASC
+        `
+      )
+      .all(giveawayId) as GiveawayWinner[];
+  }
+
   private insertWinner(giveawayId: number, entry: GiveawayEntry) {
     const now = timestamp();
     const result = this.db
@@ -463,7 +585,7 @@ export class GiveawaysService {
   }
 
   private audit(
-    actor: ChatMessageEvent,
+    actor: ChatMessage,
     action: string,
     target: string,
     metadata: Record<string, unknown>
@@ -478,11 +600,11 @@ export class GiveawaysService {
         `
       )
       .run({
-        actorTwitchUserId: actor.chatterUserId,
+        actorTwitchUserId: actor.userId,
         action,
         target,
         metadataJson: JSON.stringify({
-          actorLogin: actor.chatterLogin,
+          actorLogin: actor.userLogin,
           ...metadata
         }),
         createdAt: timestamp()

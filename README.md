@@ -29,6 +29,7 @@ npm run check:env
 
 Edit `.env` before live startup:
 
+- `VAEXCORE_MODE`: `live` for Twitch, `local` for non-Twitch env checks.
 - `TWITCH_CLIENT_ID`: Twitch app client ID.
 - `TWITCH_USER_ACCESS_TOKEN`: Bot user access token without the `oauth:` prefix.
 - `TWITCH_BROADCASTER_USER_ID`: Channel owner user ID.
@@ -42,6 +43,16 @@ The Twitch user access token must belong to the bot user and include these scope
 - `user:write:chat`
 
 `npm run check:env` validates that required values are present and catches local formatting mistakes, such as using an `oauth:` prefix. It cannot verify token scopes offline; Twitch confirms those when VaexCore creates the chat subscription and sends a message.
+
+## Git Hygiene
+
+VaexCore does not initialize Git automatically. If this folder is not a Git repo yet, use:
+
+```bash
+git init
+git add .
+git commit -m "Scaffold VaexCore core and giveaway module"
+```
 
 ## Local Command Test
 
@@ -110,56 +121,174 @@ If Twitch rejects startup with `401` or `403`, check:
 - The token has `user:write:chat` for sending chat messages.
 - `TWITCH_BROADCASTER_USER_ID` is the channel owner ID.
 
+## Going Live With VaexCore
+
+1. Fill `.env` with `VAEXCORE_MODE=live`, Twitch client ID, bot token, bot user ID, and broadcaster user ID.
+2. Run `npm run check:env`.
+3. Run `npm run build`.
+4. Start VaexCore with `npm run dev`.
+5. Watch logs for `EventSub connected` and `Chat subscription created`.
+6. Type `!ping` in your channel.
+7. Confirm the bot responds with `pong` and logs `LIVE CHAT CONFIRMED`.
+8. Only then run the giveaway.
+
+Expected startup banner:
+
+```text
+VaexCore LIVE MODE -- waiting for chat confirmation (!ping)
+```
+
+Common live errors:
+
+- `401`: bad, expired, revoked, or wrong-account token. Generate a fresh user access token.
+- `403`: missing scopes. Re-auth the bot token with `user:read:chat` and `user:write:chat`.
+- No chat messages received: check EventSub subscription logs, broadcaster ID, bot user ID, and token ownership.
+
+Enable `VAEXCORE_DEBUG=true` only when debugging. It logs truncated raw EventSub payloads and normalized chat messages.
+
 ## Current Commands
 
 - `!ping`: replies with `pong`
+- `!ghelp`: shows concise giveaway operator commands
+- `!vcstatus`: shows mode, EventSub, subscription, queue, and giveaway status
 - `!enter`: enters the active giveaway when its keyword is `enter`
 - `!gstart codes=6 keyword=enter title="IOI code giveaway"`: starts one active giveaway
 - `!gstatus`: reports active giveaway status
 - `!gclose`: closes entries before drawing
 - `!gdraw` / `!gdraw 6`: draws winners
 - `!greroll username`: rerolls an active winner while preserving history
+- `!gclaim username`: marks a winner as claimed; no code is stored or sent
+- `!gdeliver username`: marks a winner as delivered; no code is stored or sent
 - `!gend`: ends the active giveaway
 
 ## Running An IOI Code Giveaway
 
-Start the giveaway:
+Before stream:
+
+```bash
+npm run check:env
+npm run build
+npm run dev
+```
+
+Confirm in chat:
+
+```text
+!ping
+```
+
+Opening:
 
 ```text
 !gstart codes=6 keyword=enter title="IOI code giveaway"
 ```
 
-View the current count:
+Chat announcement:
+
+```text
+Type !enter once to enter. Codes will be sent manually. Do not post codes in chat.
+```
+
+During:
 
 ```text
 !gstatus
 ```
 
-Close entries before drawing:
+Closing:
 
 ```text
 !gclose
 ```
 
-Draw winners:
+Drawing:
 
 ```text
 !gdraw 6
 ```
 
-Reroll a winner if needed:
+If someone does not respond:
 
 ```text
 !greroll username
 ```
 
-End the giveaway:
+After manual delivery:
+
+```text
+!gclaim username
+!gdeliver username
+```
+
+End:
 
 ```text
 !gend
 ```
 
-Never paste IOI codes in chat. VaexCore does not store or reveal codes; delivery stays manual. Before ending, the console logs any active winners that are still unclaimed or undelivered.
+Never paste codes into public chat. VaexCore does not store or reveal codes. Before ending, the console logs a winner summary with claimed, delivered, and rerolled status.
+
+## Local Test Transcripts
+
+Normal case:
+
+```text
+broadcaster: !gstart codes=6 keyword=enter title="IOI code giveaway"
+alice: !enter
+bob: !enter
+carol: !enter
+dave: !enter
+erin: !enter
+frank: !enter
+alice: !enter
+broadcaster: !gclose
+broadcaster: !gdraw 6
+broadcaster: !gclaim alice
+broadcaster: !gdeliver alice
+broadcaster: !gend
+```
+
+Expected chat shape:
+
+```text
+Giveaway started: IOI code giveaway. Type !enter to enter. Winners: 6.
+Giveaway closed: IOI code giveaway.
+Winners: ...
+alice marked claimed.
+alice marked delivered.
+Giveaway ended: IOI code giveaway.
+```
+
+Edge case, fewer entrants than codes:
+
+```text
+broadcaster: !gstart codes=6 keyword=enter title="IOI code giveaway"
+alice: !enter
+bob: !enter
+carol: !enter
+broadcaster: !gclose
+broadcaster: !gdraw 6
+broadcaster: !greroll alice
+broadcaster: !gend
+```
+
+Expected chat shape:
+
+```text
+Winners (only 3/6 eligible): ...
+alice was rerolled. No eligible replacement remains.
+Giveaway ended: IOI code giveaway.
+```
+
+Permission case:
+
+```text
+alice: !gstart codes=6 keyword=enter
+mod: !ghelp
+broadcaster: !gstart codes=6 keyword=enter title="IOI code giveaway"
+```
+
+Expected behavior: normal users are denied in console and do not run `!g*`; mod/broadcaster commands succeed.
 
 ## Roadmap
 

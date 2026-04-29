@@ -1,18 +1,31 @@
 import { PermissionLevel } from "../../core/permissions";
 import type { CommandRouter } from "../../core/commandRouter";
+import type { RuntimeStatus } from "../../core/runtimeStatus";
 import type { GiveawaysService } from "./giveaways.service";
 
 type RegisterGiveawayCommandsOptions = {
   router: CommandRouter;
   service: GiveawaysService;
+  runtimeStatus?: RuntimeStatus;
 };
 
 export const registerGiveawayCommands = ({
   router,
-  service
+  service,
+  runtimeStatus
 }: RegisterGiveawayCommandsOptions) => {
-  router.register("enter", PermissionLevel.Viewer, ({ event }) => {
-    const result = service.enter(event, "enter");
+  router.register("ghelp", PermissionLevel.Moderator, ({ reply }) => {
+    reply(
+      'Giveaway: !gstart codes=6 keyword=enter title="..." | !gclose | !gdraw 6 | !greroll user | !gclaim user | !gdeliver user | !gend'
+    );
+  });
+
+  router.register("enter", PermissionLevel.Viewer, ({ message }) => {
+    if (!message.userId || !message.userLogin) {
+      return;
+    }
+
+    const result = service.enter(message, "enter");
 
     if (result.status === "entered") {
       return;
@@ -23,7 +36,15 @@ export const registerGiveawayCommands = ({
     }
   });
 
-  router.register("gstart", PermissionLevel.Moderator, ({ event, rawArgs, reply }) => {
+  router.register("gstart", PermissionLevel.Moderator, ({ message, rawArgs, reply }) => {
+    if (
+      runtimeStatus?.mode === "live" &&
+      (!runtimeStatus.eventSubConnected || !runtimeStatus.chatSubscriptionActive)
+    ) {
+      reply("Bot not ready");
+      return;
+    }
+
     const options = parseOptions(rawArgs);
     const winnerCount = parsePositiveInteger(options.codes);
     const keyword = options.keyword?.replace(/^!/, "").toLowerCase();
@@ -34,7 +55,7 @@ export const registerGiveawayCommands = ({
     }
 
     const giveaway = service.start({
-      actor: event,
+      actor: message,
       winnerCount,
       keyword,
       title: options.title ?? "Untitled giveaway"
@@ -58,16 +79,16 @@ export const registerGiveawayCommands = ({
     );
   });
 
-  router.register("gclose", PermissionLevel.Moderator, ({ event, reply }) => {
-    const giveaway = service.close(event);
+  router.register("gclose", PermissionLevel.Moderator, ({ message, reply }) => {
+    const giveaway = service.close(message);
     reply(`Giveaway closed: ${giveaway.title}.`);
   });
 
-  router.register("gdraw", PermissionLevel.Moderator, ({ event, args, reply }) => {
+  router.register("gdraw", PermissionLevel.Moderator, ({ message, args, reply }) => {
     const allowOpen = args.includes("--allow-open");
     const countArg = args.find((arg) => !arg.startsWith("--"));
     const requestedCount = countArg ? parsePositiveInteger(countArg) : undefined;
-    const result = service.draw(event, requestedCount, { allowOpen });
+    const result = service.draw(message, requestedCount, { allowOpen });
 
     if (result.winners.length === 0) {
       reply("No eligible winners available.");
@@ -76,7 +97,7 @@ export const registerGiveawayCommands = ({
 
     const partial =
       result.winners.length < result.requestedCount
-        ? ` (${result.winners.length}/${result.requestedCount} available)`
+        ? ` (only ${result.winners.length}/${result.requestedCount} eligible)`
         : "";
 
     reply(
@@ -86,7 +107,7 @@ export const registerGiveawayCommands = ({
     );
   });
 
-  router.register("greroll", PermissionLevel.Moderator, ({ event, args, reply }) => {
+  router.register("greroll", PermissionLevel.Moderator, ({ message, args, reply }) => {
     const username = args[0];
 
     if (!username) {
@@ -94,7 +115,7 @@ export const registerGiveawayCommands = ({
       return;
     }
 
-    const result = service.reroll(event, username);
+    const result = service.reroll(message, username);
 
     if (!result.replacement) {
       reply(`${result.rerolled.display_name} was rerolled. No eligible replacement remains.`);
@@ -106,8 +127,32 @@ export const registerGiveawayCommands = ({
     );
   });
 
-  router.register("gend", PermissionLevel.Moderator, ({ event, reply }) => {
-    const giveaway = service.end(event);
+  router.register("gclaim", PermissionLevel.Moderator, ({ message, args, reply }) => {
+    const username = args[0];
+
+    if (!username) {
+      reply("Usage: !gclaim username");
+      return;
+    }
+
+    const result = service.claim(message, username);
+    reply(`${result.winner.display_name} marked claimed.`);
+  });
+
+  router.register("gdeliver", PermissionLevel.Moderator, ({ message, args, reply }) => {
+    const username = args[0];
+
+    if (!username) {
+      reply("Usage: !gdeliver username");
+      return;
+    }
+
+    const result = service.deliver(message, username);
+    reply(`${result.winner.display_name} marked delivered.`);
+  });
+
+  router.register("gend", PermissionLevel.Moderator, ({ message, reply }) => {
+    const giveaway = service.end(message);
     reply(`Giveaway ended: ${giveaway.title}.`);
   });
 };
