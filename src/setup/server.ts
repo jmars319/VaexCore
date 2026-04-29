@@ -1,8 +1,10 @@
 import "dotenv/config";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, extname, join } from "node:path";
 import { URL } from "node:url";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogger } from "../core/logger";
 import type { ChatMessage } from "../core/chatMessage";
 import { CommandRouter } from "../core/commandRouter";
@@ -102,7 +104,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
   if (request.method === "GET" && url.pathname === "/") {
-    sendHtml(response, setupHtml);
+    sendHtml(response, setupShellHtml);
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/ui/")) {
+    sendStaticUiAsset(response, url.pathname);
     return;
   }
 
@@ -933,6 +940,43 @@ const sendHtml = (response: ServerResponse, html: string) => {
   response.end(html);
 };
 
+const sendStaticUiAsset = (response: ServerResponse, pathname: string) => {
+  const fileName = pathname.replace(/^\/ui\//, "");
+
+  if (!/^[a-z0-9.-]+$/i.test(fileName)) {
+    sendText(response, 404, "Not found");
+    return;
+  }
+
+  const filePath = join(getSetupUiDir(), fileName);
+
+  if (!existsSync(filePath)) {
+    sendText(response, 404, "Not found");
+    return;
+  }
+
+  const contentType = extname(filePath) === ".css"
+    ? "text/css; charset=utf-8"
+    : extname(filePath) === ".js"
+      ? "text/javascript; charset=utf-8"
+      : "application/octet-stream";
+
+  response.writeHead(200, {
+    ...securityHeaders,
+    "Content-Type": contentType,
+    "Cache-Control": "no-store"
+  });
+  response.end(readFileSync(filePath));
+};
+
+const getSetupUiDir = () => {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const bundledPath = join(currentDir, "setup-ui");
+  const sourcePath = join(currentDir, "ui");
+
+  return existsSync(bundledPath) ? bundledPath : sourcePath;
+};
+
 const sendText = (response: ServerResponse, status: number, text: string) => {
   response.writeHead(status, {
     ...securityHeaders,
@@ -1019,533 +1063,17 @@ const securityHeaders = {
     "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 };
 
-const setupHtml = String.raw`<!doctype html>
+const setupShellHtml = String.raw`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VaexCore Setup</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        --bg: #0d1117;
-        --panel: #151b23;
-        --panel-2: #0f1720;
-        --text: #edf2f7;
-        --muted: #9aa7b2;
-        --line: #2a3441;
-        --accent: #58d68d;
-        --danger: #ff7675;
-        --warn: #ffd166;
-      }
-
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: var(--bg);
-        color: var(--text);
-      }
-      main {
-        max-width: 960px;
-        margin: 0 auto;
-        padding: 32px 20px 48px;
-      }
-      header {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        align-items: flex-end;
-        margin-bottom: 24px;
-      }
-      h1 { margin: 0; font-size: 30px; line-height: 1.1; }
-      h2 { margin: 0 0 14px; font-size: 18px; }
-      p { color: var(--muted); line-height: 1.5; }
-      section {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 18px;
-        margin: 14px 0;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
-      }
-      label {
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 13px;
-      }
-      input, select {
-        width: 100%;
-        border: 1px solid var(--line);
-        background: var(--panel-2);
-        color: var(--text);
-        border-radius: 6px;
-        padding: 10px 12px;
-        font: inherit;
-      }
-      textarea {
-        width: 100%;
-        min-height: 84px;
-        resize: vertical;
-        border: 1px solid var(--line);
-        background: var(--panel-2);
-        color: var(--text);
-        border-radius: 6px;
-        padding: 10px 12px;
-        font: inherit;
-      }
-      button, a.button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: #1f6feb;
-        color: white;
-        padding: 9px 13px;
-        font: inherit;
-        text-decoration: none;
-        cursor: pointer;
-      }
-      button.secondary, a.secondary { background: var(--panel-2); }
-      button:disabled { opacity: .45; cursor: not-allowed; }
-      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-      .status {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 10px;
-      }
-      .pill {
-        border: 1px solid var(--line);
-        background: var(--panel-2);
-        border-radius: 6px;
-        padding: 10px;
-        color: var(--muted);
-        min-height: 58px;
-      }
-      .pill strong { display: block; color: var(--text); margin-bottom: 3px; }
-      .ok { color: var(--accent); }
-      .bad { color: var(--danger); }
-      .warn { color: var(--warn); }
-      ul { margin: 10px 0 0; padding-left: 18px; }
-      li { margin: 6px 0; color: var(--muted); }
-      table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-      th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; color: var(--muted); font-size: 13px; }
-      th { color: var(--text); font-weight: 600; }
-      .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-      .notice { color: var(--warn); }
-      code {
-        background: var(--panel-2);
-        border: 1px solid var(--line);
-        border-radius: 5px;
-        padding: 2px 5px;
-      }
-      @media (max-width: 720px) {
-        header, .grid, .status, .columns { grid-template-columns: 1fr; display: grid; }
-      }
-    </style>
+    <title>VaexCore</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
   </head>
   <body>
-    <main>
-      <header>
-        <div>
-          <h1>VaexCore Setup</h1>
-          <p>Local-only Twitch connection setup for tomorrow's giveaway.</p>
-        </div>
-        <a class="button secondary" href="/auth/twitch/start">Connect Twitch</a>
-      </header>
-
-      <section>
-        <h2>Status</h2>
-        <div class="status" id="status"></div>
-      </section>
-
-      <section>
-        <h2>Configuration</h2>
-        <div class="grid">
-          <label>Mode
-            <select id="mode">
-              <option value="live">live</option>
-              <option value="local">local</option>
-            </select>
-          </label>
-          <label>Redirect URI
-            <input id="redirectUri" value="http://localhost:3434/auth/twitch/callback" />
-          </label>
-          <label>Client ID
-            <input id="clientId" autocomplete="off" />
-          </label>
-          <label>Client Secret
-            <input id="clientSecret" type="password" autocomplete="off" />
-          </label>
-          <label>Broadcaster Login
-            <input id="broadcasterLogin" placeholder="your channel login" />
-          </label>
-          <label>Bot Login
-            <input id="botLogin" placeholder="bot account login" />
-          </label>
-        </div>
-        <div class="actions">
-          <button id="save">Save Config</button>
-          <a class="button" href="/auth/twitch/start">Connect Twitch</a>
-        </div>
-      </section>
-
-      <section>
-        <h2>Validation</h2>
-        <div class="actions">
-          <button id="validate">Validate Setup</button>
-          <button id="test" disabled>Send Test Message</button>
-        </div>
-        <ul id="checks"></ul>
-      </section>
-
-      <section>
-        <h2>Bot Controls</h2>
-        <p>This console does not start or stop the separate bot process. Use a second terminal for live bot runtime.</p>
-        <p><code>npm run dev</code> <code>Ctrl+C to stop</code> <code>npm run dev to restart</code></p>
-        <div class="actions">
-          <button id="ping">Send !ping / test ping</button>
-          <button id="refresh">Refresh</button>
-        </div>
-      </section>
-
-      <section>
-        <h2>Chat Send</h2>
-        <label>Message text
-          <textarea id="chatMessage" placeholder="Message to send to Twitch chat"></textarea>
-        </label>
-        <div class="actions">
-          <button id="sendChat">Send message to chat</button>
-        </div>
-      </section>
-
-      <section>
-        <h2>Giveaway Control</h2>
-        <p class="notice">VaexCore does not store or reveal giveaway codes. Send codes manually.</p>
-        <label>
-          <span><input id="echoToChat" type="checkbox" /> Echo command to chat</span>
-        </label>
-        <div class="status" id="giveawayStatus"></div>
-        <p id="endWarning" class="notice"></p>
-        <div class="grid">
-          <label>Title
-            <input id="giveawayTitle" value="Community Giveaway" />
-          </label>
-          <label>Keyword
-            <input id="giveawayKeyword" value="enter" />
-          </label>
-          <label>Winners / codes
-            <input id="winnerCount" type="number" min="1" value="6" />
-          </label>
-          <label>Draw count
-            <input id="drawCount" type="number" min="1" value="6" />
-          </label>
-          <label>Reroll winner
-            <select id="rerollSelect"></select>
-          </label>
-          <label>Claim winner
-            <select id="claimSelect"></select>
-          </label>
-          <label>Deliver winner
-            <select id="deliverSelect"></select>
-          </label>
-        </div>
-        <div class="actions">
-          <button id="gstart">Start giveaway</button>
-          <button id="gclose" class="secondary">Close</button>
-          <button id="gdraw" class="secondary">Draw</button>
-          <button id="greroll" class="secondary">Reroll</button>
-          <button id="gclaim" class="secondary">Mark claimed</button>
-          <button id="gdeliver" class="secondary">Mark delivered</button>
-          <button id="gend" class="secondary">End</button>
-        </div>
-      </section>
-
-      <section>
-        <h2>Testing Tools</h2>
-        <p class="notice">Testing only. These actions route through the same command and giveaway service logic without requiring Twitch.</p>
-        <div class="grid">
-          <label>Entrant login
-            <input id="simLogin" placeholder="alice" />
-          </label>
-          <label>Entrant display name
-            <input id="simDisplayName" placeholder="Alice" />
-          </label>
-          <label>Actor username
-            <input id="simActor" value="viewer" />
-          </label>
-          <label>Actor role
-            <select id="simRole">
-              <option value="viewer">viewer</option>
-              <option value="mod">mod</option>
-              <option value="broadcaster">broadcaster</option>
-            </select>
-          </label>
-        </div>
-        <label>Command text
-          <input id="simCommand" value="!gstatus" />
-        </label>
-        <div class="actions">
-          <button id="addEntrant" class="secondary">Add entrant</button>
-          <button id="runCommand" class="secondary">Run command</button>
-          <button id="runTestGiveaway" class="secondary">Run test giveaway</button>
-        </div>
-        <ul id="simReplies"></ul>
-      </section>
-
-      <section>
-        <h2>Entrants and Winners</h2>
-        <div class="columns">
-          <div>
-            <h2>Entrants</h2>
-            <table>
-              <thead><tr><th>User</th><th>Entered</th></tr></thead>
-              <tbody id="entrants"></tbody>
-            </table>
-          </div>
-          <div>
-            <h2>Winners</h2>
-            <table>
-              <thead><tr><th>User</th><th>Drawn</th><th>Claimed</th><th>Delivered</th><th>Rerolled</th></tr></thead>
-              <tbody id="winners"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <h2>Audit Logs</h2>
-        <table>
-          <thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Target</th><th>Metadata</th></tr></thead>
-          <tbody id="auditLogs"></tbody>
-        </table>
-      </section>
-
-      <section>
-        <h2>Final Instructions</h2>
-        <p>Run these after validation and test send pass:</p>
-        <p><code>npm run check:env</code> <code>npm run build</code> <code>npm run dev</code></p>
-        <p>Then type <code>!ping</code> in chat and wait for <code>LIVE CHAT CONFIRMED</code>.</p>
-      </section>
-    </main>
-
-    <script>
-      const $ = (id) => document.getElementById(id);
-      let valid = false;
-
-      const loadConfig = async () => {
-        const config = await fetch('/api/config').then((r) => r.json());
-        $('mode').value = config.mode || 'live';
-        $('redirectUri').value = config.redirectUri || 'http://localhost:3434/auth/twitch/callback';
-        $('broadcasterLogin').value = config.broadcasterLogin || '';
-        $('botLogin').value = config.botLogin || '';
-        renderStatus(config);
-      };
-
-      const renderStatus = (config) => {
-        $('status').innerHTML = [
-          ['Client ID', config.hasClientId],
-          ['Client Secret', config.hasClientSecret],
-          ['OAuth Token', config.hasAccessToken],
-          ['Mode', config.mode]
-        ].map(([label, value]) =>
-          '<div class="pill"><strong>' + label + '</strong><span class="' + (value ? 'ok' : 'bad') + '">' + (typeof value === 'boolean' ? (value ? 'present' : 'missing') : value) + '</span></div>'
-        ).join('');
-      };
-
-      $('save').onclick = async () => {
-        const body = {
-          mode: $('mode').value,
-          redirectUri: $('redirectUri').value,
-          clientId: $('clientId').value,
-          clientSecret: $('clientSecret').value,
-          broadcasterLogin: $('broadcasterLogin').value,
-          botLogin: $('botLogin').value
-        };
-        const result = await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        }).then((r) => r.json());
-        renderStatus(result.config);
-      };
-
-      $('validate').onclick = async () => {
-        const result = await fetch('/api/validate', { method: 'POST' }).then((r) => r.json());
-        valid = Boolean(result.ok);
-        $('test').disabled = !valid;
-        $('checks').innerHTML = (result.checks || []).map((check) =>
-          '<li><span class="' + (check.ok ? 'ok' : 'bad') + '">' + (check.ok ? 'PASS' : 'FAIL') + '</span> ' + check.name + ': ' + check.detail + '</li>'
-        ).join('');
-      };
-
-      $('test').onclick = async () => {
-        $('test').disabled = true;
-        const result = await fetch('/api/test-send', { method: 'POST' }).then((r) => r.json());
-        const li = document.createElement('li');
-        li.innerHTML = result.ok
-          ? '<span class="ok">PASS</span> Test message sent.'
-          : '<span class="bad">FAIL</span> ' + (result.error || 'Test send failed.');
-        $('checks').appendChild(li);
-        $('test').disabled = !valid;
-      };
-
-      const post = async (url, body = {}) => fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }).then((r) => r.json());
-
-      const renderPills = (id, rows) => {
-        $(id).innerHTML = rows.map(([label, value, good = true]) =>
-          '<div class="pill"><strong>' + label + '</strong><span class="' + (good ? 'ok' : 'warn') + '">' + value + '</span></div>'
-        ).join('');
-      };
-
-      const refreshStatus = async () => {
-        const status = await fetch('/api/status').then((r) => r.json());
-        renderPills('status', [
-          ['Mode', status.runtime.mode],
-          ['Bot', status.runtime.botLogin || 'missing', Boolean(status.runtime.botLogin)],
-          ['Broadcaster', status.runtime.broadcasterLogin || 'missing', Boolean(status.runtime.broadcasterLogin)],
-          ['Token', status.runtime.tokenValid ? 'valid' : 'not valid', status.runtime.tokenValid],
-          ['Scopes', status.runtime.requiredScopesPresent ? 'present' : 'missing', status.runtime.requiredScopesPresent],
-          ['EventSub', status.runtime.eventSubConnected ? 'yes' : 'bot terminal', status.runtime.eventSubConnected],
-          ['Subscription', status.runtime.chatSubscriptionActive ? 'yes' : 'bot terminal', status.runtime.chatSubscriptionActive],
-          ['Queue', status.runtime.queueReady ? 'ready' : 'not ready', status.runtime.queueReady],
-          ['Live Chat', status.runtime.liveChatConfirmed ? 'confirmed' : 'bot terminal', status.runtime.liveChatConfirmed],
-          ['Giveaway', status.giveaway.status]
-        ]);
-        renderGiveawaySummary(status.giveaway);
-      };
-
-      const renderGiveawaySummary = (summary) => {
-        renderPills('giveawayStatus', [
-          ['Status', summary.status],
-          ['Title', summary.title || 'none'],
-          ['Keyword', summary.keyword || 'enter'],
-          ['Winners', summary.winnersDrawn + '/' + summary.winnerCount],
-          ['Entries', summary.entryCount],
-          ['Enough entrants', summary.enoughEntrantsForFullDraw ? 'yes' : 'no', summary.enoughEntrantsForFullDraw],
-          ['Undelivered', summary.undeliveredWinnersCount || 0, Number(summary.undeliveredWinnersCount || 0) === 0],
-          ['Rerolled', summary.rerolledCount],
-          ['Codes', summary.manualCodeDeliveryRequired ? 'manual delivery required' : 'none', false]
-        ]);
-        $('drawCount').value = summary.winnerCount || 6;
-        $('endWarning').textContent = (summary.endWarnings || []).join(' ');
-      };
-
-      const refreshGiveaway = async () => {
-        const data = await fetch('/api/giveaway').then((r) => r.json());
-        renderGiveawaySummary(data.summary);
-        $('entrants').innerHTML = (data.entries || []).map((entry) =>
-          '<tr><td>' + entry.display_name + ' <span class="warn">@' + entry.login + '</span></td><td>' + entry.entered_at + '</td></tr>'
-        ).join('');
-        $('winners').innerHTML = (data.winners || []).map((winner) =>
-          '<tr><td>' + winner.display_name + ' <span class="warn">@' + winner.login + '</span></td><td>' + winner.drawn_at + '</td><td>' + yesNo(winner.claimed_at) + '</td><td>' + yesNo(winner.delivered_at) + '</td><td>' + yesNo(winner.rerolled_at) + '</td></tr>'
-        ).join('');
-        const activeWinners = (data.winners || []).filter((winner) => !winner.rerolled_at);
-        const options = (items) => items
-          .map((winner) => '<option value="' + winner.login + '">' + winner.display_name + '</option>')
-          .join('');
-        $('rerollSelect').innerHTML = options(activeWinners);
-        $('claimSelect').innerHTML = options(activeWinners.filter((winner) => !winner.claimed_at));
-        $('deliverSelect').innerHTML = options(activeWinners);
-      };
-
-      const echoBody = (body = {}) => ({
-        ...body,
-        echoToChat: $('echoToChat').checked
-      });
-
-      const renderReplies = (result) => {
-        const fallback = result.routerResult === 'denied'
-          ? 'Command denied by permission checks.'
-          : result.routerResult === 'unknown'
-            ? 'Unknown command ignored.'
-            : result.ok ? 'Command ran with no chat reply.' : result.error || 'Command failed.';
-        const replies = result.replies && result.replies.length ? result.replies : [fallback];
-        $('simReplies').innerHTML = replies
-          .map((reply) => '<li>' + reply + '</li>')
-          .join('');
-      };
-
-      const refreshAuditLogs = async () => {
-        const data = await fetch('/api/audit-logs').then((r) => r.json());
-        $('auditLogs').innerHTML = (data.logs || []).map((log) =>
-          '<tr><td>' + log.created_at + '</td><td>' + log.actor_twitch_user_id + '</td><td>' + log.action + '</td><td>' + (log.target || '') + '</td><td>' + summarizeMetadata(log.metadata_json) + '</td></tr>'
-        ).join('');
-      };
-
-      const refreshAll = async () => {
-        await Promise.all([loadConfig(), refreshStatus(), refreshGiveaway(), refreshAuditLogs()]);
-      };
-
-      const runAction = async (url, body = {}) => {
-        const result = await post(url, body);
-        if (!result.ok) alert(result.error || 'Action failed');
-        await Promise.all([refreshStatus(), refreshGiveaway(), refreshAuditLogs()]);
-      };
-
-      $('refresh').onclick = refreshAll;
-      $('ping').onclick = () => runAction('/api/chat/send', { message: '!ping' });
-      $('sendChat').onclick = () => runAction('/api/chat/send', { message: $('chatMessage').value });
-      $('gstart').onclick = () => runAction('/api/giveaway/start', echoBody({
-        title: $('giveawayTitle').value,
-        keyword: $('giveawayKeyword').value || 'enter',
-        winnerCount: Number($('winnerCount').value || 6)
-      }));
-      $('gclose').onclick = () => runAction('/api/giveaway/close', echoBody());
-      $('gdraw').onclick = () => runAction('/api/giveaway/draw', echoBody({ count: Number($('drawCount').value || 6) }));
-      $('greroll').onclick = () => runAction('/api/giveaway/reroll', echoBody({ username: $('rerollSelect').value }));
-      $('gclaim').onclick = () => runAction('/api/giveaway/claim', echoBody({ username: $('claimSelect').value }));
-      $('gdeliver').onclick = () => runAction('/api/giveaway/deliver', echoBody({ username: $('deliverSelect').value }));
-      $('gend').onclick = () => {
-        if ($('endWarning').textContent && !confirm($('endWarning').textContent + ' End giveaway anyway?')) return;
-        runAction('/api/giveaway/end', echoBody());
-      };
-      $('addEntrant').onclick = () => runAction('/api/giveaway/add-entrant', echoBody({
-        login: $('simLogin').value,
-        displayName: $('simDisplayName').value
-      }));
-      $('runCommand').onclick = async () => {
-        const result = await post('/api/command/simulate', echoBody({
-          actor: $('simActor').value,
-          role: $('simRole').value,
-          command: $('simCommand').value
-        }));
-        renderReplies(result);
-        await Promise.all([refreshStatus(), refreshGiveaway(), refreshAuditLogs()]);
-      };
-      $('runTestGiveaway').onclick = () => {
-        if (!confirm('Run a local test giveaway? This writes test giveaway rows to SQLite.')) return;
-        runAction('/api/giveaway/run-test', echoBody({ confirmed: true }));
-      };
-
-      const yesNo = (value) => value ? 'yes' : 'no';
-      const summarizeMetadata = (raw) => {
-        try {
-          const parsed = JSON.parse(raw);
-          return Object.entries(parsed).slice(0, 4).map(([key, value]) => key + '=' + JSON.stringify(value)).join(', ');
-        } catch {
-          return raw || '';
-        }
-      };
-
-      refreshAll();
-      setInterval(() => {
-        refreshStatus();
-        refreshGiveaway();
-        refreshAuditLogs();
-      }, 5000);
-    </script>
+    <div id="app"></div>
+    <script type="module" src="/ui/app.js"></script>
   </body>
 </html>`;
 

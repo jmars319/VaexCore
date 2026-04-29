@@ -173,6 +173,27 @@ The console is organized into durable sections:
 
 Direct UI actions call the local service layer first. Optional chat echo is visibility only; if enabled, VaexCore queues the equivalent chat command after the local action succeeds.
 
+### Operator UI Structure
+
+The setup server API lives in `src/setup/server.ts`. The browser UI is static, componentized plain JavaScript and CSS in:
+
+```text
+src/setup/ui/app.js
+src/setup/ui/styles.css
+```
+
+This keeps the console lightweight and avoids a separate frontend framework build. `npm run setup` serves those source files directly. `npm run build` bundles the setup server and copies the same UI files into `dist-bundle/setup-ui` for the Electron app.
+
+After UI changes, run:
+
+```bash
+npm run typecheck
+npm run build
+npm run setup
+```
+
+Then open `http://localhost:3434` and smoke test tab navigation, giveaway state loading, simulated commands, and the lifecycle test.
+
 ## Configuring Twitch
 
 Create a Twitch Developer app and set the redirect URI exactly:
@@ -335,6 +356,15 @@ CLI fallback remains available:
 ```bash
 npm run setup
 npm run dev
+```
+
+After changing setup UI assets, run `npm run app:build` again so `dist-bundle/setup-ui` is refreshed before packaging. Electron loads the same localhost setup server as `npm run setup`.
+
+VaexCore uses native `better-sqlite3`. If Electron fails to load the packaged app after Node, Electron, or dependency upgrades, reinstall dependencies and rebuild the package so native modules are rebuilt for Electron:
+
+```bash
+npm install
+npm run app:build
 ```
 
 ## Current Commands
