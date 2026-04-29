@@ -1,5 +1,5 @@
 import type { Logger } from "./logger";
-import type { ChatMessageEvent } from "../twitch/types";
+import type { ChatMessage } from "./chatMessage";
 import { hasPermission, PermissionLevel } from "./permissions";
 
 type CommandRouterOptions = {
@@ -9,7 +9,7 @@ type CommandRouterOptions = {
 };
 
 type CommandHandler = (context: {
-  event: ChatMessageEvent;
+  message: ChatMessage;
   args: string[];
   rawArgs: string;
   reply: (message: string) => void;
@@ -37,8 +37,8 @@ export class CommandRouter {
     this.commands.set(name.toLowerCase(), { permission, handler });
   }
 
-  async handle(event: ChatMessageEvent) {
-    const text = event.text.trim();
+  async handle(message: ChatMessage) {
+    const text = message.text.trim();
 
     if (!text.startsWith(this.options.prefix)) {
       return;
@@ -59,12 +59,22 @@ export class CommandRouter {
       return;
     }
 
-    if (!hasPermission(event, command.permission)) {
+    this.options.logger.info(
+      {
+        command: name,
+        userLogin: message.userLogin,
+        source: message.source
+      },
+      "Command received"
+    );
+
+    if (!hasPermission(message, command.permission)) {
       this.options.logger.warn(
         {
           command: name,
-          chatter: event.chatterLogin,
-          requiredPermission: command.permission
+          userLogin: message.userLogin,
+          requiredPermission: command.permission,
+          source: message.source
         },
         "Command denied"
       );
@@ -72,25 +82,29 @@ export class CommandRouter {
     }
 
     this.options.logger.info(
-      { command: name, chatter: event.chatterLogin },
-      "Command received"
+      {
+        command: name,
+        userLogin: message.userLogin,
+        source: message.source
+      },
+      "Command allowed"
     );
 
     const rawArgs = commandText.slice(name.length).trim();
     try {
       await command.handler({
-        event,
+        message,
         args,
         rawArgs,
-        reply: (message) => this.options.enqueueMessage(message)
+        reply: (replyMessage) => this.options.enqueueMessage(replyMessage)
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Command failed";
+      const replyMessage = error instanceof Error ? error.message : "Command failed";
       this.options.logger.error(
-        { error, command: name, chatter: event.chatterLogin },
+        { error, command: name, userLogin: message.userLogin },
         "Command failed"
       );
-      this.options.enqueueMessage(message);
+      this.options.enqueueMessage(replyMessage);
     }
   }
 }

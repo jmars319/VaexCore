@@ -1,4 +1,4 @@
-import type { ChatMessageEvent } from "../twitch/types";
+import type { ChatMessage } from "./chatMessage";
 
 export enum PermissionLevel {
   Viewer = "viewer",
@@ -14,16 +14,12 @@ const permissionRank: Record<PermissionLevel, number> = {
   [PermissionLevel.Admin]: 3
 };
 
-export const getPermissionLevel = (event: ChatMessageEvent): PermissionLevel => {
-  if (event.chatterUserId === event.broadcasterUserId) {
+export const getPermissionLevel = (message: ChatMessage): PermissionLevel => {
+  if (message.isBroadcaster) {
     return PermissionLevel.Admin;
   }
 
-  if (event.badges.some((badge) => badge.set_id === "broadcaster")) {
-    return PermissionLevel.Admin;
-  }
-
-  if (event.badges.some((badge) => badge.set_id === "moderator")) {
+  if (message.isMod) {
     return PermissionLevel.Moderator;
   }
 
@@ -31,6 +27,6 @@ export const getPermissionLevel = (event: ChatMessageEvent): PermissionLevel => 
 };
 
 export const hasPermission = (
-  event: ChatMessageEvent,
+  message: ChatMessage,
   requiredLevel: PermissionLevel
-) => permissionRank[getPermissionLevel(event)] >= permissionRank[requiredLevel];
+) => permissionRank[getPermissionLevel(message)] >= permissionRank[requiredLevel];
