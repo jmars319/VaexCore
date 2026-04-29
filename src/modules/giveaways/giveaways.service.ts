@@ -127,13 +127,14 @@ export class GiveawaysService {
 
     const entered = result.changes === 1;
 
+    const entryCount = this.countEntries(giveaway.id);
+
     if (entered) {
-      const count = this.countEntries(giveaway.id);
       this.logger.info(
         {
           operatorEvent: "giveaway entry count changed",
           giveawayId: giveaway.id,
-          entries: count,
+          entries: entryCount,
           entrant: login,
           entrantUserId: event.userId,
           mode: event.source
@@ -155,7 +156,10 @@ export class GiveawaysService {
 
     return {
       status: entered ? ("entered" as const) : ("duplicate" as const),
-      giveaway
+      giveaway,
+      login,
+      displayName,
+      entryCount
     };
   }
 
@@ -516,6 +520,14 @@ export class GiveawaysService {
       metadata_json: string;
       created_at: string;
     }>;
+  }
+
+  countEntriesForGiveaway(giveawayId: number) {
+    return this.countEntries(giveawayId);
+  }
+
+  getWinnersForGiveaway(giveawayId: number) {
+    return this.getWinners(giveawayId);
   }
 
   private getActiveGiveaway() {

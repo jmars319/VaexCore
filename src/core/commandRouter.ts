@@ -14,10 +14,19 @@ type CommandRouterOptions = {
 
 type CommandHandler = (context: {
   message: ChatMessage;
+  name: string;
   args: string[];
   rawArgs: string;
   reply: (message: string) => void;
 }) => Promise<void> | void;
+
+type FallbackCommandHandler = (context: {
+  message: ChatMessage;
+  name: string;
+  args: string[];
+  rawArgs: string;
+  reply: (message: string) => void;
+}) => Promise<boolean> | boolean;
 
 type RegisteredCommand = {
   permission: PermissionLevel;
@@ -28,6 +37,7 @@ export type CommandResult = "ignored" | "unknown" | "denied" | "handled";
 
 export class CommandRouter {
   private readonly commands = new Map<string, RegisteredCommand>();
+  private readonly fallbackHandlers: FallbackCommandHandler[] = [];
   private readonly lastUserCommandAt = new Map<string, number>();
   private readonly recentCommandTimes: number[] = [];
 
@@ -43,6 +53,10 @@ export class CommandRouter {
     handler: CommandHandler
   ) {
     this.commands.set(name.toLowerCase(), { permission, handler });
+  }
+
+  registerFallback(handler: FallbackCommandHandler) {
+    this.fallbackHandlers.push(handler);
   }
 
   async handle(message: ChatMessage): Promise<CommandResult> {
@@ -74,9 +88,16 @@ export class CommandRouter {
       return "denied";
     }
 
+    const rawArgs = commandText.slice(name.length).trim().slice(0, limits.commandLength);
     const command = this.commands.get(name);
 
     if (!command) {
+      const handled = await this.handleFallback(message, name, args, rawArgs);
+
+      if (handled) {
+        return "handled";
+      }
+
       this.options.logger.debug({ command: name }, "Unknown command ignored");
       return "unknown";
     }
@@ -112,10 +133,10 @@ export class CommandRouter {
       "Command allowed"
     );
 
-    const rawArgs = commandText.slice(name.length).trim().slice(0, limits.commandLength);
     try {
       await command.handler({
         message,
+        name,
         args,
         rawArgs,
         reply: (replyMessage) => this.options.enqueueMessage(replyMessage)
@@ -130,6 +151,47 @@ export class CommandRouter {
     }
 
     return "handled";
+  }
+
+  private async handleFallback(
+    message: ChatMessage,
+    name: string,
+    args: string[],
+    rawArgs: string
+  ) {
+    for (const handler of this.fallbackHandlers) {
+      try {
+        const handled = await handler({
+          message,
+          name,
+          args,
+          rawArgs,
+          reply: (replyMessage) => this.options.enqueueMessage(replyMessage)
+        });
+
+        if (handled) {
+          this.options.logger.info(
+            {
+              command: name,
+              userLogin: message.userLogin,
+              source: message.source
+            },
+            "Fallback command handled"
+          );
+          return true;
+        }
+      } catch (error) {
+        const replyMessage = error instanceof Error ? error.message : "Command failed";
+        this.options.logger.error(
+          { error, command: name, userLogin: message.userLogin },
+          "Fallback command failed"
+        );
+        this.options.enqueueMessage(replyMessage);
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private isRateLimited(message: ChatMessage, command: string) {

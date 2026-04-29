@@ -9,6 +9,15 @@ import {
   sanitizeGiveawayTitle
 } from "../../core/security";
 import type { GiveawaysService } from "./giveaways.service";
+import {
+  giveawayClosedMessage,
+  giveawayDrawMessage,
+  giveawayDuplicateEntryMessage,
+  giveawayEndMessage,
+  giveawayEntryMessage,
+  giveawayRerollMessage,
+  giveawayStartMessage
+} from "./giveaways.messages";
 
 type RegisterGiveawayCommandsOptions = {
   router: CommandRouter;
@@ -23,24 +32,23 @@ export const registerGiveawayCommands = ({
 }: RegisterGiveawayCommandsOptions) => {
   router.register("ghelp", PermissionLevel.Moderator, ({ reply }) => {
     reply(
-      'Giveaway: !gstart codes=6 keyword=enter title="..." | !gclose | !gdraw 6 | !greroll user | !gclaim user | !gdeliver user | !gend'
+      'Giveaway: !gstart codes=6 keyword=enter title="..." | viewers enter with !keyword | !gclose | !gdraw 6 | !greroll user | !gclaim user | !gdeliver user | !gend'
     );
   });
 
-  router.register("enter", PermissionLevel.Viewer, ({ message }) => {
-    if (!message.userId || !message.userLogin) {
-      return;
+  router.register("enter", PermissionLevel.Viewer, ({ message, reply }) => {
+    handleEntryCommand({ message, keyword: "enter", reply, service });
+  });
+
+  router.registerFallback(({ message, name, reply }) => {
+    const status = service.status();
+
+    if (!status || status.giveaway.status !== "open" || name !== status.giveaway.keyword) {
+      return false;
     }
 
-    const result = service.enter(message, "enter");
-
-    if (result.status === "entered") {
-      return;
-    }
-
-    if (result.status === "duplicate") {
-      return;
-    }
+    handleEntryCommand({ message, keyword: name, reply, service });
+    return true;
   });
 
   router.register("gstart", PermissionLevel.Moderator, ({ message, rawArgs, reply }) => {
@@ -68,9 +76,7 @@ export const registerGiveawayCommands = ({
       title: sanitizeGiveawayTitle(options.title, "Untitled giveaway")
     });
 
-    reply(
-      `Giveaway started: ${giveaway.title}. Type !${giveaway.keyword} to enter. Winners: ${giveaway.winner_count}.`
-    );
+    reply(giveawayStartMessage(giveaway));
   });
 
   router.register("gstatus", PermissionLevel.Moderator, ({ reply }) => {
@@ -88,7 +94,7 @@ export const registerGiveawayCommands = ({
 
   router.register("gclose", PermissionLevel.Moderator, ({ message, reply }) => {
     const giveaway = service.close(message);
-    reply(`Giveaway closed: ${giveaway.title}.`);
+    reply(giveawayClosedMessage(giveaway, service.countEntriesForGiveaway(giveaway.id)));
   });
 
   router.register("gdraw", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -97,21 +103,7 @@ export const registerGiveawayCommands = ({
     const requestedCount = countArg ? parsePositiveInteger(countArg) : undefined;
     const result = service.draw(message, requestedCount, { allowOpen });
 
-    if (result.winners.length === 0) {
-      reply("No eligible winners available.");
-      return;
-    }
-
-    const partial =
-      result.winners.length < result.requestedCount
-        ? ` (only ${result.winners.length}/${result.requestedCount} eligible)`
-        : "";
-
-    reply(
-      `Winner${result.winners.length === 1 ? "" : "s"}${partial}: ${result.winners
-        .map((winner) => winner.display_name)
-        .join(", ")}`
-    );
+    reply(giveawayDrawMessage(result));
   });
 
   router.register("greroll", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -124,14 +116,7 @@ export const registerGiveawayCommands = ({
 
     const result = service.reroll(message, username);
 
-    if (!result.replacement) {
-      reply(`${result.rerolled.display_name} was rerolled. No eligible replacement remains.`);
-      return;
-    }
-
-    reply(
-      `${result.rerolled.display_name} was rerolled. Replacement: ${result.replacement.display_name}.`
-    );
+    reply(giveawayRerollMessage(result));
   });
 
   router.register("gclaim", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -160,8 +145,38 @@ export const registerGiveawayCommands = ({
 
   router.register("gend", PermissionLevel.Moderator, ({ message, reply }) => {
     const giveaway = service.end(message);
-    reply(`Giveaway ended: ${giveaway.title}.`);
+    reply(giveawayEndMessage(giveaway, service.getWinnersForGiveaway(giveaway.id)));
   });
+};
+
+const handleEntryCommand = (input: {
+  message: Parameters<GiveawaysService["enter"]>[0];
+  keyword: string;
+  reply: (message: string) => void;
+  service: GiveawaysService;
+}) => {
+  if (!input.message.userId || !input.message.userLogin) {
+    return;
+  }
+
+  const result = input.service.enter(input.message, input.keyword);
+
+  if (result.status === "entered") {
+    input.reply(giveawayEntryMessage({
+      giveaway: result.giveaway,
+      displayName: result.displayName,
+      entryCount: result.entryCount
+    }));
+    return;
+  }
+
+  if (result.status === "duplicate") {
+    input.reply(giveawayDuplicateEntryMessage({
+      giveaway: result.giveaway,
+      displayName: result.displayName,
+      entryCount: result.entryCount
+    }));
+  }
 };
 
 const parsePositiveInteger = (value: string | undefined) => {

@@ -19,8 +19,36 @@ const state = {
   winnerFilter: "all",
   message: { text: "", tone: "muted" },
   testResult: null,
-  validationChecks: []
+  validationChecks: [],
+  testMessageSent: false,
+  settingsDraft: {},
+  giveawayDraft: {},
+  oauthNotice: readOAuthNotice()
 };
+
+const defaultRedirectUri = "http://localhost:3434/auth/twitch/callback";
+const savedCredentialMask = "saved and masked";
+
+function readOAuthNotice() {
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get("error");
+
+  if (error) {
+    if (error === "wrong_bot_account") {
+      const connected = params.get("connected_login") || "the current Twitch account";
+      const expected = params.get("expected_login") || "the configured Bot Login";
+      return { tone: "bad", text: `Twitch authorized ${connected}, but Bot Login is ${expected}. Log into Twitch as ${expected}, then click Connect Twitch again.` };
+    }
+
+    return { tone: "bad", text: `Twitch authorization failed: ${error}` };
+  }
+
+  if (params.get("connected") === "1") {
+    return { tone: "ok", text: "Twitch authorization completed. Run Validate Setup next." };
+  }
+
+  return undefined;
+}
 
 const api = {
   get: (url) => request(url),
@@ -31,9 +59,12 @@ const api = {
   }),
   config: () => api.get("/api/config"),
   saveConfig: (body) => api.post("/api/config", body),
+  disconnectTwitch: () => api.post("/api/auth/twitch/disconnect"),
   validate: () => api.post("/api/validate"),
   testSend: () => api.post("/api/test-send"),
   status: () => api.get("/api/status"),
+  botStart: () => api.post("/api/bot/start"),
+  botStop: () => api.post("/api/bot/stop"),
   giveaway: () => api.get("/api/giveaway"),
   auditLogs: () => api.get("/api/audit-logs"),
   chatSend: (message) => api.post("/api/chat/send", { message }),
@@ -162,6 +193,15 @@ function formRow(label, control) {
   return h("label", {}, [label, control]);
 }
 
+function fieldRef(text, targetId, missing = false) {
+  return h("button", {
+    className: `field-ref${missing ? " needs-attention" : ""}`,
+    type: "button",
+    onClick: () => focusField(targetId),
+    text
+  });
+}
+
 function actionButton(label, options = {}) {
   const classes = [options.className || "", options.variant || ""].filter(Boolean).join(" ");
   return h("button", {
@@ -203,10 +243,23 @@ function renderDashboard() {
   const status = state.status;
   const runtime = status?.runtime || {};
   const readiness = getReadiness();
+  const setupReady = isTwitchSetupReady();
   return [
     sectionHeader("Dashboard", "High-level readiness for local operation and live stream use.",
       actionButton("Refresh", { id: "refresh", onClick: refreshAll, busyKey: "refresh" })
     ),
+    card("Twitch Setup", [
+      callout(setupReady ? "Twitch connection ready" : "Setup incomplete - open Settings -> Setup Guide", setupReady ? "ok" : "warn"),
+      setupReady ? null : actionButton("Open Setup Guide", {
+        variant: "secondary",
+        onClick: () => {
+          state.activeTab = "settings";
+          render();
+          document.getElementById("setupGuide")?.scrollIntoView({ block: "start" });
+        }
+      })
+    ]),
+    renderBotRuntimeCard(runtime),
     card("Readiness", [
       statusGrid([
         ["Summary", readiness.ready ? "ready" : "not ready", readiness.ready],
@@ -215,7 +268,8 @@ function renderDashboard() {
         ["Queue", runtime.queueReady ? "ready" : "not ready", runtime.queueReady],
         ["Bot Login", runtime.botLogin || "missing", Boolean(runtime.botLogin)],
         ["Broadcaster", runtime.broadcasterLogin || "missing", Boolean(runtime.broadcasterLogin)],
-        ["EventSub", runtime.eventSubConnected ? "connected" : "bot terminal", runtime.eventSubConnected],
+        ["Bot Process", runtime.botProcess?.status || "stopped", Boolean(runtime.botProcess?.running)],
+        ["EventSub", runtime.eventSubConnected ? "connected" : "not connected", runtime.eventSubConnected],
         ["Live Chat", runtime.liveChatConfirmed ? "confirmed" : "pending", runtime.liveChatConfirmed]
       ])
     ]),
@@ -223,6 +277,30 @@ function renderDashboard() {
     card("Active Giveaway", [statusGrid(giveawayRows(status?.giveaway))]),
     card("Next Recommended Action", [h("p", { className: "info", text: readiness.nextAction })])
   ];
+}
+
+function renderBotRuntimeCard(runtime) {
+  const process = runtime?.botProcess || {};
+  const running = Boolean(process.running);
+  const canStart = canStartBot(runtime);
+  const recentLogs = process.recentLogs || [];
+
+  return card("Bot Runtime", [
+    statusGrid([
+      ["Process", process.status || "stopped", running],
+      ["PID", process.pid || "none", running],
+      ["EventSub", runtime?.eventSubConnected ? "connected" : "not connected", runtime?.eventSubConnected],
+      ["Chat Subscription", runtime?.chatSubscriptionActive ? "active" : "inactive", runtime?.chatSubscriptionActive],
+      ["Live Chat", runtime?.liveChatConfirmed ? "confirmed" : "pending", runtime?.liveChatConfirmed]
+    ]),
+    h("div", { className: "actions" }, [
+      actionButton("Start Bot", { id: "botStart", variant: "secondary", onClick: startBot }),
+      actionButton("Stop Bot", { id: "botStop", variant: "secondary", onClick: stopBot })
+    ]),
+    canStart || running ? null : callout("Complete setup and validation before starting the bot.", "warn"),
+    process.lastError ? callout(process.lastError, "bad") : null,
+    recentLogs.length ? h("pre", { className: "runtime-log", text: recentLogs.slice(-8).join("\n") }) : h("p", { className: "muted", text: "No bot runtime logs yet." })
+  ]);
 }
 
 function renderGiveaways() {
@@ -238,9 +316,9 @@ function renderGiveaways() {
     card("Readiness Checklist", [list(giveawayChecklist(), "muted")]),
     card("Start Giveaway", [
       h("div", { className: "grid three" }, [
-        formRow("Title", h("input", { id: "giveawayTitle" })),
-        formRow("Keyword", h("input", { id: "giveawayKeyword" })),
-        formRow("Number of winners", h("input", { id: "winnerCount", type: "number", min: "1" }))
+        formRow("Title", h("input", { id: "giveawayTitle", onInput: updateGiveawayDraft })),
+        formRow("Keyword", h("input", { id: "giveawayKeyword", onInput: updateGiveawayDraft })),
+        formRow("Number of winners", h("input", { id: "winnerCount", type: "number", min: "1", onInput: updateGiveawayDraft }))
       ]),
       h("div", { className: "actions" }, [
         actionButton("Start giveaway", { id: "gstart", onClick: startGiveaway }),
@@ -249,10 +327,10 @@ function renderGiveaways() {
     ]),
     card("Winner Operations", [
       h("div", { className: "grid three" }, [
-        formRow("Draw count", h("input", { id: "drawCount", type: "number", min: "1" })),
-        formRow("Reroll winner", h("select", { id: "rerollSelect" })),
-        formRow("Claim winner", h("select", { id: "claimSelect" })),
-        formRow("Deliver winner", h("select", { id: "deliverSelect" }))
+        formRow("Draw count", h("input", { id: "drawCount", type: "number", min: "1", onInput: updateGiveawayDraft })),
+        formRow("Reroll winner", h("select", { id: "rerollSelect", onChange: updateGiveawayDraft })),
+        formRow("Claim winner", h("select", { id: "claimSelect", onChange: updateGiveawayDraft })),
+        formRow("Deliver winner", h("select", { id: "deliverSelect", onChange: updateGiveawayDraft }))
       ]),
       h("div", { className: "actions" }, [
         actionButton("Draw winners", { id: "gdraw", variant: "secondary", onClick: () => runGiveawayAction("draw", { count: Number(field("drawCount").value || 1) }, "Draw winners now?") }),
@@ -330,9 +408,10 @@ function renderSettings() {
     sectionHeader("Settings", "Configure local mode, Twitch OAuth, and safe connection validation.",
       connectButton(config)
     ),
+    renderSetupGuide(),
     card("Setup Completion", [
       statusGrid([
-        ["Completion", required.length === 0 && config.hasAccessToken ? "complete" : "incomplete", required.length === 0 && config.hasAccessToken],
+        ["Completion", isValidationPassed() ? "complete" : "incomplete", isValidationPassed()],
         ["Client ID", config.hasClientId ? "present" : "missing", config.hasClientId],
         ["Client Secret", config.hasClientSecret ? "present" : "missing", config.hasClientSecret],
         ["OAuth Token", config.hasAccessToken ? "present" : "missing", config.hasAccessToken],
@@ -345,16 +424,19 @@ function renderSettings() {
     ]),
     card("Twitch Configuration", [
       h("div", { className: "grid" }, [
-        formRow("Mode", h("select", { id: "mode" }, [option("live", "live"), option("local", "local")])),
-        formRow("Redirect URI", h("input", { id: "redirectUri" })),
-        formRow("Client ID", h("input", { id: "clientId", autocomplete: "off", placeholder: config.hasClientId ? "saved and masked" : "" })),
-        formRow("Client Secret", h("input", { id: "clientSecret", type: "password", autocomplete: "off", placeholder: config.hasClientSecret ? "saved and masked" : "" })),
-        formRow("Broadcaster Login", h("input", { id: "broadcasterLogin", placeholder: "channel login" })),
-        formRow("Bot Login", h("input", { id: "botLogin", placeholder: "bot account login" }))
+        formRow("Mode", h("select", { id: "mode", onChange: updateSettingsDraft }, [option("live", "live"), option("local", "local")])),
+        formRow("Redirect URI", h("input", { id: "redirectUri", className: !config.redirectUri ? "needs-attention" : "", onInput: updateSettingsDraft })),
+        formRow("Client ID", h("input", { id: "clientId", className: !config.hasClientId ? "needs-attention" : "", autocomplete: "off", placeholder: config.hasClientId ? savedCredentialMask : "", onFocus: clearSavedCredentialMask, onBlur: restoreSavedCredentialMask, onInput: updateSettingsDraft })),
+        formRow("Client Secret", h("input", { id: "clientSecret", className: !config.hasClientSecret ? "needs-attention" : "", type: "password", autocomplete: "new-password", placeholder: config.hasClientSecret ? savedCredentialMask : "", onFocus: clearSavedCredentialMask, onBlur: restoreSavedCredentialMask, onInput: updateSettingsDraft })),
+        formRow("Broadcaster Login", h("input", { id: "broadcasterLogin", className: !config.broadcasterLogin ? "needs-attention" : "", placeholder: "channel login", onBlur: normalizeLoginField, onInput: updateSettingsDraft })),
+        formRow("Bot Login", h("input", { id: "botLogin", className: !config.botLogin ? "needs-attention" : "", placeholder: "bot account login", onBlur: normalizeLoginField, onInput: updateSettingsDraft }))
       ]),
+      callout("Saved Client ID and Client Secret are intentionally not shown. Paste them, click Save settings, then the fields return to saved and masked."),
+      botLoginReconnectCallout(config),
       h("div", { className: "actions" }, [
         actionButton("Save settings", { id: "save", onClick: saveSettings }),
         connectButton(config, "secondary"),
+        config.hasAccessToken ? actionButton("Disconnect Twitch", { id: "disconnectTwitch", variant: "secondary", onClick: disconnectTwitch }) : null,
         actionButton("Validate setup", { id: "validate", variant: "secondary", onClick: validateSetup })
       ]),
       h("ul", { id: "checks" }, state.validationChecks.map((check) =>
@@ -362,11 +444,199 @@ function renderSettings() {
       ))
     ]),
     card("Runtime Commands", [
-      h("p", { text: "This console does not start or stop the separate live bot process. Use the packaged app for this console, and use CLI commands when you want terminal runtime control." }),
-      h("p", {}, [h("code", { text: "npm run check:env" }), " ", h("code", { text: "npm run build" }), " ", h("code", { text: "npm run dev" })])
+      h("p", { text: "Use Dashboard controls to start or stop the live bot listener. CLI commands remain available when you want terminal runtime control." }),
+      h("p", {}, [h("code", { text: "npm run check:env" }), " ", h("code", { text: "npm run build" }), " ", h("code", { text: "npm run dev:app-config" })])
     ]),
     message()
   ];
+}
+
+function renderSetupGuide() {
+  const config = state.config || {};
+  const progress = getSetupProgress();
+  const activeStep = progress.steps.find((step) => !step.complete)?.id || "final";
+  const missingCredentialNames = missingCredentialLabels(config);
+  const credentialsMissing = !progress.credentialsEntered;
+  const missingUsernames = !progress.usernamesEntered;
+  const canConnect = progress.credentialsEntered && progress.usernamesEntered;
+  const canValidate = progress.twitchConnected && progress.usernamesEntered;
+  const canTest = progress.validationPassed;
+
+  return card("Setup Guide", [
+    h("div", { id: "setupGuide", className: "setup-guide" }, [
+      h("div", { className: "setup-progress" }, progress.steps.map((step) =>
+        h("div", { className: `setup-check ${step.complete ? "complete" : ""}` }, [
+          h("span", { className: "checkmark", text: step.complete ? "[x]" : "[ ]" }),
+          h("span", { text: step.label })
+        ])
+      )),
+      setupStep({
+        id: "app",
+        number: 1,
+        title: "Create Twitch Developer App",
+        active: activeStep === "app",
+        complete: progress.appCreated,
+        children: [
+          h("p", { text: "You need to create a Twitch application so VaexCore can connect to your account." }),
+          h("a", {
+            className: "button secondary",
+            href: "https://dev.twitch.tv/console/apps",
+            target: "_blank",
+            rel: "noreferrer",
+            text: "Open Twitch Developer Console"
+          }),
+          h("ul", {}, [
+            h("li", { text: "Click Register Your Application." }),
+            h("li", { text: "Name: anything, for example VaexCore." }),
+            h("li", {}, ["OAuth Redirect URL: ", h("code", { text: defaultRedirectUri })]),
+            h("li", { text: "Use one redirect URL only. Do not leave an extra blank redirect URL row." }),
+            h("li", { text: "Category: Application Integration." })
+          ]),
+          callout("The redirect URL must match exactly. If Twitch shows an HTTPS warning, remove any blank extra redirect URL row and keep only the localhost URL above.", "warn")
+        ]
+      }),
+      setupStep({
+        id: "credentials",
+        number: 2,
+        title: "Enter App Credentials",
+        active: activeStep === "credentials",
+        complete: progress.credentialsEntered,
+        children: [
+          h("p", { text: "After creating the app, copy your Client ID and Client Secret here." }),
+          h("div", { className: "field-ref-row" }, [
+            fieldRef("Client ID", "clientId", !config.hasClientId),
+            fieldRef("Client Secret", "clientSecret", !config.hasClientSecret),
+            fieldRef("Redirect URI", "redirectUri", !config.redirectUri)
+          ]),
+          h("p", { className: progress.credentialsEntered ? "ok" : "warn", text: progress.credentialsEntered ? "Credentials complete." : `Missing ${missingCredentialNames.join(", ")}.` })
+        ]
+      }),
+      setupStep({
+        id: "users",
+        number: 3,
+        title: "Enter Twitch Usernames",
+        active: activeStep === "users",
+        complete: progress.usernamesEntered,
+        disabled: credentialsMissing,
+        children: [
+          h("p", { text: "Enter the Twitch account that will run the bot and the channel it will operate in." }),
+          h("p", { text: "These can be the same account, or separate accounts if desired." }),
+          h("p", { text: "Bot Login must be the account that grants OAuth in the next step; Broadcaster Login is the channel." }),
+          h("div", { className: "field-ref-row" }, [
+            fieldRef("Broadcaster login", "broadcasterLogin", !config.broadcasterLogin),
+            fieldRef("Bot login", "botLogin", !config.botLogin)
+          ]),
+          h("p", { className: progress.usernamesEntered ? "ok" : "warn", text: progress.usernamesEntered ? "Usernames filled." : "Broadcaster login or Bot login is empty." })
+        ]
+      }),
+      setupStep({
+        id: "connect",
+        number: 4,
+        title: "Connect Twitch",
+        active: activeStep === "connect",
+        complete: progress.twitchConnected,
+        disabled: !canConnect,
+        children: [
+          h("p", { text: "Click Connect Twitch while logged into the Bot Login account to authorize VaexCore." }),
+          h("div", { className: "actions" }, [
+            connectButton(config, "secondary", !canConnect),
+            config.hasAccessToken ? actionButton("Disconnect Twitch", { id: "guideDisconnectTwitch", variant: "secondary", busyKey: "disconnectTwitch", onClick: disconnectTwitch }) : null
+          ]),
+          statusGrid([
+            ["Connected", config.hasAccessToken ? "yes" : "no", config.hasAccessToken],
+            ["Bot account detected", config.hasBotUserId ? config.botLogin || "yes" : "not yet", config.hasBotUserId],
+            ["user:read:chat", hasScope("user:read:chat") ? "granted" : "missing", hasScope("user:read:chat")],
+            ["user:write:chat", hasScope("user:write:chat") ? "granted" : "missing", hasScope("user:write:chat")]
+          ]),
+          botLoginReconnectCallout(config),
+          state.oauthNotice ? callout(state.oauthNotice.text, state.oauthNotice.tone) : null,
+          canConnect ? null : callout("Enter credentials and usernames before connecting Twitch.", "warn")
+        ]
+      }),
+      setupStep({
+        id: "validate",
+        number: 5,
+        title: "Validate Setup",
+        active: activeStep === "validate",
+        complete: progress.validationPassed,
+        disabled: !canValidate,
+        children: [
+          h("p", { text: "Verify that everything is configured correctly." }),
+          h("div", { className: "actions" }, [
+            actionButton("Validate Setup", { id: "guideValidate", variant: "secondary", onClick: validateSetup })
+          ]),
+          renderValidationSummary(),
+          canValidate ? null : callout("Connect Twitch before running validation.", "warn")
+        ]
+      }),
+      setupStep({
+        id: "test",
+        number: 6,
+        title: "Test Chat",
+        active: activeStep === "test",
+        complete: progress.testMessageSent,
+        disabled: !canTest,
+        children: [
+          h("p", { text: "Send a test message to confirm the bot can speak in chat." }),
+          h("div", { className: "actions" }, [
+            actionButton("Send test message", { id: "guideTest", variant: "secondary", onClick: sendSetupTest })
+          ]),
+          h("p", { className: progress.testMessageSent ? "ok" : "muted", text: progress.testMessageSent ? "Test message sent successfully." : "No test message sent in this session." }),
+          canTest ? null : callout("Validate setup before sending a test message.", "warn")
+        ]
+      }),
+      setupStep({
+        id: "final",
+        number: 7,
+        title: "Final Step",
+        active: activeStep === "final",
+        complete: isTwitchSetupReady(),
+        disabled: !progress.validationPassed,
+        children: [
+          h("p", { text: "Start the live bot listener and confirm it responds in chat." }),
+          h("div", { className: "actions" }, [
+            actionButton("Start Bot", { id: "guideBotStart", variant: "secondary", onClick: startBot }),
+            actionButton("Stop Bot", { id: "guideBotStop", variant: "secondary", onClick: stopBot })
+          ]),
+          h("p", {}, ["CLI after using the macOS app setup: ", h("code", { text: "npm run dev:app-config" })]),
+          h("p", {}, ["CLI after using project-local setup or .env: ", h("code", { text: "npm run dev" })]),
+          h("p", {}, ["Instruction: type ", h("code", { text: "!ping" }), " in your Twitch chat."]),
+          h("p", { className: "ok", text: "Success condition: LIVE CHAT CONFIRMED" })
+        ]
+      })
+    ])
+  ]);
+}
+
+function setupStep({ id, number, title, active, complete, disabled, children }) {
+  return h("div", {
+    className: `setup-step ${active ? "active" : ""} ${complete ? "complete" : ""} ${disabled ? "disabled" : ""}`,
+    "data-step": id
+  }, [
+    h("div", { className: "step-title" }, [
+      h("span", { className: "step-number", text: String(number) }),
+      h("strong", { text: title }),
+      h("span", { className: complete ? "ok" : "warn", text: complete ? "complete" : disabled ? "locked" : active ? "next" : "pending" })
+    ]),
+    h("div", { className: "step-body" }, children)
+  ]);
+}
+
+function renderValidationSummary() {
+  const config = state.config || {};
+
+  if (state.validationChecks.length) {
+    return h("ul", {}, state.validationChecks.map((check) =>
+      h("li", { className: check.ok ? "ok" : "bad", text: `${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.detail}` })
+    ));
+  }
+
+  return statusGrid([
+    ["Token valid", state.status?.runtime?.tokenValid ? "yes" : "not validated", state.status?.runtime?.tokenValid],
+    ["Scopes correct", hasRequiredScopes() ? "yes" : "not validated", hasRequiredScopes()],
+    ["Bot identity resolved", config.hasBotUserId ? "yes" : "not validated", config.hasBotUserId],
+    ["Broadcaster identity resolved", config.hasBroadcasterUserId ? "yes" : "not validated", config.hasBroadcasterUserId]
+  ]);
 }
 
 function renderAuditLog() {
@@ -384,8 +654,8 @@ function renderAuditLog() {
   ];
 }
 
-function connectButton(config, variant = "secondary") {
-  const disabled = missingConfigFields(config).some((item) => ["Client ID", "Client Secret", "Redirect URI"].includes(item));
+function connectButton(config, variant = "secondary", forceDisabled = false) {
+  const disabled = forceDisabled || missingConfigFields(config).some((item) => ["Client ID", "Client Secret", "Redirect URI"].includes(item));
   const link = h("a", { className: `button ${variant}${disabled ? " disabled" : ""}`, href: disabled ? "#" : "/auth/twitch/start", text: "Connect Twitch" });
   if (disabled) {
     link.title = "Save Client ID, Client Secret, and Redirect URI first.";
@@ -476,19 +746,18 @@ function getReadiness() {
   const config = state.config || {};
   const blockers = [];
 
-  if (missingConfigFields(config).length) blockers.push("Connect Twitch in Settings");
+  if (!isTwitchSetupReady()) blockers.push("Open Settings -> Setup Guide");
   if (!runtime.tokenValid || !runtime.requiredScopesPresent) blockers.push("Run Validate Setup");
   if (!runtime.queueReady) blockers.push("Start the setup console again if queue readiness does not recover");
   if (!runtime.eventSubConnected || !runtime.chatSubscriptionActive) blockers.push("Start bot process");
   if (!runtime.liveChatConfirmed) blockers.push("Type !ping in chat");
 
-  const giveawayReady = runtime.tokenValid && runtime.requiredScopesPresent && runtime.queueReady;
   const nextAction = blockers[0] || (state.status?.giveaway?.status === "none"
     ? "Giveaway controls ready"
     : nextGiveawayAction(state.status.giveaway));
 
   return {
-    ready: blockers.length === 0 || giveawayReady,
+    ready: blockers.length === 0,
     blockers,
     nextAction
   };
@@ -499,6 +768,70 @@ function nextGiveawayAction(summary = {}) {
   if (summary.status === "closed" && Number(summary.winnersDrawn || 0) === 0) return "Draw winners";
   if (Number(summary.undeliveredWinnersCount || 0) > 0) return "Complete manual prize delivery";
   return "End the giveaway when operator work is complete";
+}
+
+function getSetupProgress() {
+  const config = state.config || {};
+  const validationPassed = isValidationPassed();
+  const progress = {
+    appCreated: Boolean(config.hasClientId || config.hasClientSecret),
+    credentialsEntered: Boolean(config.hasClientId && config.hasClientSecret && config.redirectUri),
+    usernamesEntered: Boolean(config.broadcasterLogin && config.botLogin),
+    twitchConnected: Boolean(config.hasAccessToken),
+    validationPassed,
+    testMessageSent: Boolean(state.testMessageSent)
+  };
+
+  return {
+    ...progress,
+    steps: [
+      { id: "app", label: "App created", complete: progress.appCreated },
+      { id: "credentials", label: "Credentials entered", complete: progress.credentialsEntered },
+      { id: "users", label: "Usernames entered", complete: progress.usernamesEntered },
+      { id: "connect", label: "Twitch connected", complete: progress.twitchConnected },
+      { id: "validate", label: "Validation passed", complete: progress.validationPassed },
+      { id: "test", label: "Test message sent", complete: progress.testMessageSent }
+    ]
+  };
+}
+
+function isTwitchSetupReady() {
+  return isValidationPassed();
+}
+
+function canStartBot(runtime = state.status?.runtime || {}) {
+  return Boolean(
+    isTwitchSetupReady() &&
+    runtime.tokenValid &&
+    runtime.requiredScopesPresent &&
+    runtime.queueReady
+  );
+}
+
+function isValidationPassed() {
+  const config = state.config || {};
+  const runtime = state.status?.runtime || {};
+  return Boolean(
+    state.validSetup ||
+    (
+      config.hasAccessToken &&
+      config.hasBotUserId &&
+      config.hasBroadcasterUserId &&
+      runtime.tokenValid &&
+      runtime.requiredScopesPresent &&
+      hasRequiredScopes()
+    )
+  );
+}
+
+function hasRequiredScopes() {
+  const config = state.config || {};
+  const required = config.requiredScopes || ["user:read:chat", "user:write:chat"];
+  return required.every((scope) => hasScope(scope));
+}
+
+function hasScope(scope) {
+  return Boolean((state.config?.scopes || []).includes(scope));
 }
 
 function giveawayChecklist() {
@@ -523,6 +856,22 @@ function missingConfigFields(config = {}) {
   if (!config.broadcasterLogin) missing.push("Broadcaster Login");
   if (!config.botLogin) missing.push("Bot Login");
   return missing;
+}
+
+function missingCredentialLabels(config = {}) {
+  const missing = [];
+  if (!config.hasClientId) missing.push("Client ID");
+  if (!config.hasClientSecret) missing.push("Client Secret");
+  if (!config.redirectUri) missing.push("Redirect URI");
+  return missing;
+}
+
+function botLoginReconnectCallout(config = {}) {
+  if (!config.hasAccessToken || !config.botLogin || config.hasBotUserId) {
+    return null;
+  }
+
+  return callout(`Bot Login is ${config.botLogin}, but the connected OAuth token has not validated for that account. Disconnect Twitch if needed, log into ${config.botLogin}, click Connect Twitch, then run Validate Setup.`, "warn");
 }
 
 function filterWinners(winners) {
@@ -552,6 +901,7 @@ async function refreshAll() {
     state.status = status;
     state.giveaway = giveaway;
     state.auditLogs = audit.logs || [];
+    state.validSetup = isValidationPassed();
     return { ok: true };
   }, { quiet: true });
 }
@@ -561,6 +911,7 @@ async function refreshAfterAction() {
   state.status = status;
   state.giveaway = giveaway;
   state.auditLogs = audit.logs || [];
+  state.validSetup = isValidationPassed();
 }
 
 async function refreshAuditLogs() {
@@ -641,18 +992,104 @@ async function runLifecycleTest() {
 }
 
 async function saveSettings() {
+  const payload = readSettingsPayload();
+
   await runAction("save", async () => {
-    const result = await api.saveConfig({
-      mode: field("mode").value,
-      redirectUri: field("redirectUri").value,
-      clientId: field("clientId").value,
-      clientSecret: field("clientSecret").value,
-      broadcasterLogin: field("broadcasterLogin").value,
-      botLogin: field("botLogin").value
-    });
+    const result = await api.saveConfig(payload);
     state.config = result.config;
+    state.settingsDraft = {};
     return result;
   }, { success: "Settings saved." });
+}
+
+async function disconnectTwitch() {
+  if (!confirm("Disconnect the current Twitch OAuth token? Your app Client ID and Client Secret stay saved.")) {
+    return;
+  }
+
+  await runAction("disconnectTwitch", async () => {
+    const result = await api.disconnectTwitch();
+    state.config = result.config;
+    state.validSetup = false;
+    state.validationChecks = [];
+    state.oauthNotice = {
+      tone: "ok",
+      text: "Twitch connection cleared. Log into the Bot Login account, then click Connect Twitch."
+    };
+    return result;
+  }, { skipRefresh: true, success: "Twitch connection cleared." });
+  await refreshAll();
+}
+
+function updateSettingsDraft(event) {
+  state.settingsDraft[event.target.id] = event.target.value;
+}
+
+function updateGiveawayDraft(event) {
+  state.giveawayDraft[event.target.id] = event.target.value;
+}
+
+function normalizeLoginField(event) {
+  const normalized = normalizeLoginInput(event.target.value);
+  if (normalized === event.target.value) {
+    return;
+  }
+
+  event.target.value = normalized;
+  state.settingsDraft[event.target.id] = normalized;
+}
+
+function normalizeLoginInput(value) {
+  const trimmed = value.trim().replace(/^@/, "");
+  const maybeUrl = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : /^(www\.)?twitch\.tv\//i.test(trimmed)
+      ? `https://${trimmed}`
+      : null;
+
+  if (!maybeUrl) {
+    return trimmed.toLowerCase();
+  }
+
+  try {
+    const parsed = new URL(maybeUrl);
+    if (["twitch.tv", "www.twitch.tv"].includes(parsed.hostname.toLowerCase())) {
+      return (parsed.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
+    }
+  } catch {
+    return trimmed.toLowerCase();
+  }
+
+  return trimmed.toLowerCase();
+}
+
+function clearSavedCredentialMask(event) {
+  const id = event.target.id;
+  if (!["clientId", "clientSecret"].includes(id) || event.target.value !== savedCredentialMask) {
+    return;
+  }
+  event.target.value = "";
+  state.settingsDraft[id] = "";
+}
+
+function restoreSavedCredentialMask(event) {
+  const id = event.target.id;
+  if (!hasSavedCredential(id) || event.target.value !== "") {
+    return;
+  }
+  delete state.settingsDraft[id];
+  event.target.value = savedCredentialMask;
+}
+
+function readSettingsPayload() {
+  return {
+    mode: fieldValue("mode", state.config?.mode || "live"),
+    redirectUri: fieldValue("redirectUri", state.config?.redirectUri || defaultRedirectUri),
+    clientId: credentialFieldValue("clientId", state.config?.hasClientId),
+    clientSecret: credentialFieldValue("clientSecret", state.config?.hasClientSecret),
+    broadcasterLogin: fieldValue("broadcasterLogin", state.config?.broadcasterLogin || ""),
+    botLogin: fieldValue("botLogin", state.config?.botLogin || "")
+  };
 }
 
 async function validateSetup() {
@@ -666,7 +1103,19 @@ async function validateSetup() {
 }
 
 async function sendSetupTest() {
-  await runAction("test", () => api.testSend(), { success: "Test message sent." });
+  const result = await runAction("test", () => api.testSend(), { success: "Test message sent." });
+  if (result?.ok) {
+    state.testMessageSent = true;
+    render();
+  }
+}
+
+async function startBot() {
+  await runAction("botStart", () => api.botStart(), { success: "Bot process starting." });
+}
+
+async function stopBot() {
+  await runAction("botStop", () => api.botStop(), { success: "Bot process stopped." });
 }
 
 function renderTestResult() {
@@ -699,14 +1148,17 @@ function fallbackCommandMessage(result) {
 
 function syncFormValues() {
   const config = state.config || {};
-  setValue("mode", config.mode || "live");
-  setValue("redirectUri", config.redirectUri || "http://localhost:3434/auth/twitch/callback");
-  setValue("broadcasterLogin", config.broadcasterLogin || "");
-  setValue("botLogin", config.botLogin || "");
-  setValue("giveawayTitle", field("giveawayTitle")?.value || state.giveaway?.summary?.title || "Community Giveaway");
-  setValue("giveawayKeyword", field("giveawayKeyword")?.value || state.giveaway?.summary?.keyword || "enter");
-  setValue("winnerCount", field("winnerCount")?.value || state.giveaway?.summary?.winnerCount || 3);
-  setValue("drawCount", field("drawCount")?.value || suggestedDrawCount());
+  const summary = state.giveaway?.summary || {};
+  setValue("mode", settingsValue("mode", config.mode || "live"));
+  setValue("redirectUri", settingsValue("redirectUri", config.redirectUri || defaultRedirectUri));
+  setValue("clientId", settingsValue("clientId", config.hasClientId ? savedCredentialMask : ""));
+  setValue("clientSecret", settingsValue("clientSecret", config.hasClientSecret ? savedCredentialMask : ""));
+  setValue("broadcasterLogin", settingsValue("broadcasterLogin", config.broadcasterLogin || ""));
+  setValue("botLogin", settingsValue("botLogin", config.botLogin || ""));
+  setValue("giveawayTitle", giveawayValue("giveawayTitle", summary.title || "Community Giveaway"));
+  setValue("giveawayKeyword", giveawayValue("giveawayKeyword", summary.keyword || "enter"));
+  setValue("winnerCount", giveawayValue("winnerCount", summary.winnerCount || 3));
+  setValue("drawCount", giveawayValue("drawCount", suggestedDrawCount()));
   setValue("simActor", field("simActor")?.value || "viewer");
   setValue("simRole", field("simRole")?.value || "viewer");
   setValue("simCommand", field("simCommand")?.value || "!gstatus");
@@ -715,11 +1167,45 @@ function syncFormValues() {
   syncWinnerSelects();
 }
 
+function settingsValue(id, fallback) {
+  return draftValue(state.settingsDraft, id, fallback);
+}
+
+function giveawayValue(id, fallback) {
+  return draftValue(state.giveawayDraft, id, fallback);
+}
+
+function draftValue(draft, id, fallback) {
+  return Object.prototype.hasOwnProperty.call(draft, id) ? draft[id] : fallback;
+}
+
+function fieldValue(id, fallback) {
+  return field(id)?.value ?? settingsValue(id, fallback);
+}
+
+function credentialFieldValue(id, hasSavedCredential) {
+  const value = fieldValue(id, hasSavedCredential ? savedCredentialMask : "");
+  return hasSavedCredential && value === savedCredentialMask ? "" : value;
+}
+
+function hasSavedCredential(id) {
+  if (id === "clientId") return Boolean(state.config?.hasClientId);
+  if (id === "clientSecret") return Boolean(state.config?.hasClientSecret);
+  return false;
+}
+
 function setValue(id, value) {
   const node = field(id);
   if (node && document.activeElement !== node) {
     node.value = value;
   }
+}
+
+function focusField(id) {
+  const node = field(id);
+  if (!node) return;
+  node.scrollIntoView({ block: "center" });
+  node.focus();
 }
 
 function syncWinnerSelects() {
@@ -733,7 +1219,11 @@ function syncWinnerSelects() {
 function setOptions(id, winners) {
   const node = field(id);
   if (!node) return;
+  const selected = giveawayValue(id, node.value);
   node.replaceChildren(...winners.map((winner) => option(winner.login, winner.display_name)));
+  if (winners.some((winner) => winner.login === selected)) {
+    node.value = selected;
+  }
 }
 
 function suggestedDrawCount() {
@@ -749,8 +1239,13 @@ function updateDisabledState() {
   const activeWinners = winners.filter((winner) => !winner.rerolled_at);
   const undelivered = activeWinners.filter((winner) => !winner.delivered_at);
   const config = state.config || {};
+  const runtime = state.status?.runtime || {};
+  const botProcess = runtime.botProcess || {};
   const connectReady = config.hasClientId && config.hasClientSecret && Boolean(config.redirectUri);
   const validationReady = missingConfigFields(config).length === 0;
+  const guideValidationReady = validationReady && Boolean(config.hasAccessToken);
+  const botRunning = Boolean(botProcess.running);
+  const botStartReady = canStartBot(runtime);
 
   setDisabled("gstart", status !== "none", "Start is disabled because a giveaway already exists.");
   setDisabled("gclose", status !== "open", "Close is disabled unless entries are open.");
@@ -760,9 +1255,17 @@ function updateDisabledState() {
   setDisabled("gclaim", activeWinners.filter((winner) => !winner.claimed_at).length === 0, "Claim is disabled until an unclaimed winner exists.");
   setDisabled("gdeliver", undelivered.length === 0, "Deliver is disabled until an undelivered winner exists.");
   setDisabled("validate", !validationReady, "Save Twitch credentials and connect OAuth before validating.");
+  setDisabled("guideValidate", !guideValidationReady, "Connect Twitch before validating.");
+  setDisabled("disconnectTwitch", !config.hasAccessToken, "No Twitch connection to disconnect.");
+  setDisabled("guideDisconnectTwitch", !config.hasAccessToken, "No Twitch connection to disconnect.");
   setDisabled("test", !state.validSetup, "Validate setup before sending a setup test message.");
+  setDisabled("guideTest", !state.validSetup, "Validate setup before sending a setup test message.");
   setDisabled("sendChat", !state.validSetup, "Validate setup before sending chat.");
   setDisabled("ping", !state.validSetup, "Validate setup before sending chat.");
+  setDisabled("botStart", !botStartReady || botRunning, botRunning ? "Bot is already running." : "Complete setup and validation before starting the bot.");
+  setDisabled("guideBotStart", !botStartReady || botRunning, botRunning ? "Bot is already running." : "Complete setup and validation before starting the bot.");
+  setDisabled("botStop", !botRunning, "Bot is not running.");
+  setDisabled("guideBotStop", !botRunning, "Bot is not running.");
 
   const connectLinks = [...document.querySelectorAll("a.button")].filter((link) => link.textContent === "Connect Twitch");
   for (const link of connectLinks) {
@@ -785,9 +1288,13 @@ function summarizeMetadata(raw) {
   }
 }
 
+function isEditingFormField() {
+  return ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
+}
+
 refreshAll();
 setInterval(() => {
-  if (state.busy.size === 0) {
+  if (state.busy.size === 0 && !isEditingFormField()) {
     void refreshAll();
   }
 }, 5000);

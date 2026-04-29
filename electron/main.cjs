@@ -1,10 +1,15 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell } = require("electron");
+const { get } = require("node:http");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 
 let mainWindow;
 let setupServer;
+let activeSetupUrl;
 let quitting = false;
+const setupPort = 3434;
+const setupUrl = `http://localhost:${setupPort}`;
+const setupProbeUrl = `http://127.0.0.1:${setupPort}/api/config`;
 
 app.setName("VaexCore");
 
@@ -43,17 +48,83 @@ const startApp = async () => {
 
   const moduleUrl = pathToFileURL(join(app.getAppPath(), "dist-bundle/setup-server.js")).href;
   const setup = await import(moduleUrl);
-  setupServer = await setup.startSetupServer({ port: 3434 });
-  await createWindow(setupServer.url);
+  try {
+    setupServer = await setup.startSetupServer({ port: setupPort });
+    activeSetupUrl = setupServer.url;
+  } catch (error) {
+    if (isAddressInUse(error) && await isVaexCoreServerRunning()) {
+      activeSetupUrl = setupUrl;
+    } else {
+      showStartupError(error);
+      app.quit();
+      return;
+    }
+  }
+
+  await createWindow(activeSetupUrl);
+};
+
+const isAddressInUse = (error) => error?.code === "EADDRINUSE";
+
+const isVaexCoreServerRunning = async () => {
+  try {
+    const config = await getJson(setupProbeUrl);
+    return (
+      config &&
+      typeof config === "object" &&
+      config.redirectUri === `${setupUrl}/auth/twitch/callback` &&
+      Array.isArray(config.requiredScopes)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const getJson = (url) => new Promise((resolve, reject) => {
+  const request = get(url, { timeout: 1500 }, (response) => {
+    let raw = "";
+    response.setEncoding("utf8");
+    response.on("data", (chunk) => {
+      raw += chunk;
+    });
+    response.on("end", () => {
+      if (response.statusCode !== 200) {
+        reject(new Error(`Unexpected status ${response.statusCode}`));
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(raw));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+
+  request.on("timeout", () => {
+    request.destroy(new Error("Timed out probing setup server."));
+  });
+  request.on("error", reject);
+});
+
+const showStartupError = (error) => {
+  const message = isAddressInUse(error)
+    ? `Port ${setupPort} is already in use by another process. Quit the other process using localhost:${setupPort}, then open VaexCore again.`
+    : error?.message || "VaexCore could not start.";
+
+  dialog.showErrorBox("VaexCore startup failed", message);
 };
 
 app.whenReady().then(() => {
-  void startApp();
+  void startApp().catch((error) => {
+    showStartupError(error);
+    app.quit();
+  });
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0 && setupServer) {
-    void createWindow(setupServer.url);
+  if (BrowserWindow.getAllWindows().length === 0 && activeSetupUrl) {
+    void createWindow(activeSetupUrl);
   }
 });
 

@@ -1,8 +1,9 @@
 import "dotenv/config";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { URL } from "node:url";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogger } from "../core/logger";
@@ -26,6 +27,14 @@ import {
 import { createDbClient } from "../db/client";
 import { registerGiveawayCommands } from "../modules/giveaways/giveaways.commands";
 import { GiveawaysService } from "../modules/giveaways/giveaways.service";
+import {
+  giveawayClosedMessage,
+  giveawayDrawMessage,
+  giveawayEndMessage,
+  giveawayEntryMessage,
+  giveawayRerollMessage,
+  giveawayStartMessage
+} from "../modules/giveaways/giveaways.messages";
 import {
   defaultRedirectUri,
   getLocalSecretsPath,
@@ -58,6 +67,7 @@ const chatQueue = new MessageQueue({
 });
 chatQueue.start();
 setupRuntimeStatus.messageQueueReady = chatQueue.isReady();
+const botProcess = createBotProcessState();
 
 export const startSetupServer = async (options: { port?: number } = {}) => {
   const port = options.port ?? defaultPort;
@@ -71,8 +81,19 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
     });
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(port, host, resolve);
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
   });
 
   logger.info(
@@ -83,6 +104,7 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
   return {
     url: `http://localhost:${port}`,
     stop: async () => {
+      await stopBotProcess({ force: true });
       chatQueue.stop();
       db.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -130,6 +152,11 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/auth/twitch/disconnect") {
+    sendJson(response, 200, { ok: true, config: disconnectTwitch() });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/auth/twitch/callback") {
     await handleTwitchCallback(url, response);
     return;
@@ -147,6 +174,16 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
 
   if (request.method === "GET" && url.pathname === "/api/status") {
     sendJson(response, 200, await getOperatorStatus());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/bot/start") {
+    sendJson(response, 200, await startBotProcess());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/bot/stop") {
+    sendJson(response, 200, await stopBotProcess());
     return;
   }
 
@@ -186,7 +223,8 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       return { giveaway };
     }, {
       echoToChat: Boolean(body.echoToChat),
-      echoCommand: `!gstart codes=${winnerCount} keyword=${keyword} title="${title.replace(/"/g, "'")}"`
+      echoCommand: `!gstart codes=${winnerCount} keyword=${keyword} title="${title.replace(/"/g, "'")}"`,
+      announcements: ({ giveaway }) => giveawayStartMessage(giveaway)
     }));
     return;
   }
@@ -195,7 +233,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     const body = (await readJson(request)) as { echoToChat?: boolean };
     sendJson(response, 200, runGiveawayAction(() => ({
       giveaway: giveawaysService.close(localUiActor)
-    }), { echoToChat: Boolean(body.echoToChat), echoCommand: "!gclose" }));
+    }), {
+      echoToChat: Boolean(body.echoToChat),
+      echoCommand: "!gclose",
+      announcements: ({ giveaway }) =>
+        giveawayClosedMessage(giveaway, giveawaysService.countEntriesForGiveaway(giveaway.id))
+    }));
     return;
   }
 
@@ -209,7 +252,11 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     });
     sendJson(response, 200, runGiveawayAction(() => ({
       result: giveawaysService.draw(localUiActor, count)
-    }), { echoToChat: Boolean(body.echoToChat), echoCommand: `!gdraw ${count}` }));
+    }), {
+      echoToChat: Boolean(body.echoToChat),
+      echoCommand: `!gdraw ${count}`,
+      announcements: ({ result }) => giveawayDrawMessage(result)
+    }));
     return;
   }
 
@@ -219,7 +266,8 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       result: giveawaysService.reroll(localUiActor, requireUsername(body.username))
     }), {
       echoToChat: Boolean(body.echoToChat),
-      echoCommand: body.username ? `!greroll ${requireUsername(body.username)}` : undefined
+      echoCommand: body.username ? `!greroll ${requireUsername(body.username)}` : undefined,
+      announcements: ({ result }) => giveawayRerollMessage(result)
     }));
     return;
   }
@@ -250,7 +298,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     const body = (await readJson(request)) as { echoToChat?: boolean };
     sendJson(response, 200, runGiveawayAction(() => ({
       giveaway: giveawaysService.end(localUiActor)
-    }), { echoToChat: Boolean(body.echoToChat), echoCommand: "!gend" }));
+    }), {
+      echoToChat: Boolean(body.echoToChat),
+      echoCommand: "!gend",
+      announcements: ({ giveaway }) =>
+        giveawayEndMessage(giveaway, giveawaysService.getWinnersForGiveaway(giveaway.id))
+    }));
     return;
   }
 
@@ -270,7 +323,18 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
           text: "!enter"
         })
       )
-    }), { echoToChat: Boolean(body.echoToChat), echoCommand: "!enter" }));
+    }), {
+      echoToChat: Boolean(body.echoToChat),
+      echoCommand: "!enter",
+      announcements: ({ result }) =>
+        result.status === "entered"
+          ? giveawayEntryMessage({
+              giveaway: result.giveaway,
+              displayName: result.displayName,
+              entryCount: result.entryCount
+            })
+          : undefined
+    }));
     return;
   }
 
@@ -314,10 +378,14 @@ const getSafeConfig = () => {
     hasClientId: Boolean(twitch.clientId),
     hasClientSecret: Boolean(twitch.clientSecret),
     hasAccessToken: Boolean(twitch.accessToken),
+    hasBroadcasterUserId: Boolean(twitch.broadcasterUserId),
+    hasBotUserId: Boolean(twitch.botUserId),
     broadcasterLogin: twitch.broadcasterLogin ?? "",
     botLogin: twitch.botLogin ?? "",
     redirectUri: twitch.redirectUri ?? defaultRedirectUri,
+    requiredScopes: requiredTwitchScopes,
     scopes: twitch.scopes,
+    tokenValidatedAt: twitch.tokenValidatedAt ?? "",
     token: twitch.accessToken ? maskToken(twitch.accessToken) : ""
   };
 };
@@ -326,26 +394,59 @@ const saveConfig = (body: unknown) => {
   const input = body as Record<string, string>;
   const existing = readLocalSecrets();
   const redirectUri = sanitizeRedirectUri(input.redirectUri);
+  const clientId = valueOrExisting(
+    sanitizeOptionalText(input.clientId, "Client ID", 120),
+    existing.twitch.clientId
+  );
+  const clientSecret = valueOrExisting(
+    sanitizeOptionalText(input.clientSecret, "Client secret", 200),
+    existing.twitch.clientSecret
+  );
+  const broadcasterLogin = valueOrExistingLogin(
+    input,
+    "broadcasterLogin",
+    existing.twitch.broadcasterLogin
+  );
+  const botLogin = valueOrExistingLogin(input, "botLogin", existing.twitch.botLogin);
+  const appConfigChanged =
+    clientId !== existing.twitch.clientId ||
+    clientSecret !== existing.twitch.clientSecret ||
+    redirectUri !== (existing.twitch.redirectUri ?? defaultRedirectUri);
+  const broadcasterChanged = broadcasterLogin !== existing.twitch.broadcasterLogin;
+  const botChanged = botLogin !== existing.twitch.botLogin;
+  const twitch: LocalSecrets["twitch"] = {
+    ...existing.twitch,
+    clientId,
+    clientSecret,
+    redirectUri,
+    broadcasterLogin,
+    botLogin
+  };
+
+  if (appConfigChanged || botChanged) {
+    Object.assign(twitch, clearTwitchAuthorization(twitch));
+  }
+
+  if (appConfigChanged || broadcasterChanged) {
+    twitch.broadcasterUserId = undefined;
+    twitch.tokenValidatedAt = undefined;
+  }
+
   const next: LocalSecrets = {
     mode: input.mode === "local" ? "local" : "live",
-    twitch: {
-      ...existing.twitch,
-      clientId: valueOrExisting(
-        sanitizeOptionalText(input.clientId, "Client ID", 120),
-        existing.twitch.clientId
-      ),
-      clientSecret: valueOrExisting(
-        sanitizeOptionalText(input.clientSecret, "Client secret", 200),
-        existing.twitch.clientSecret
-      ),
-      redirectUri,
-      broadcasterLogin:
-        normalizeLogin(input.broadcasterLogin) ?? existing.twitch.broadcasterLogin,
-      botLogin: normalizeLogin(input.botLogin) ?? existing.twitch.botLogin
-    }
+    twitch
   };
 
   writeLocalSecrets(next);
+  return getSafeConfig();
+};
+
+const disconnectTwitch = () => {
+  const secrets = readLocalSecrets();
+  writeLocalSecrets({
+    ...secrets,
+    twitch: clearTwitchAuthorization(secrets.twitch, { clearBroadcasterIdentity: true })
+  });
   return getSafeConfig();
 };
 
@@ -367,6 +468,7 @@ const redirectToTwitch = (response: ServerResponse) => {
   authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("scope", requiredTwitchScopes.join(" "));
   authorizeUrl.searchParams.set("state", state);
+  authorizeUrl.searchParams.set("force_verify", "true");
 
   redirect(response, authorizeUrl.toString());
 };
@@ -403,6 +505,26 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
   });
   const validation = await validateToken(tokens.access_token);
   const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+  const tokenLogin = normalizeTwitchLogin(validation.login);
+  const configuredBotLogin = twitch.botLogin
+    ? normalizeTwitchLogin(twitch.botLogin)
+    : undefined;
+  const tokenMatchesConfiguredBot =
+    !configuredBotLogin || configuredBotLogin === tokenLogin;
+
+  if (!tokenMatchesConfiguredBot) {
+    writeLocalSecrets({
+      ...secrets,
+      twitch: clearTwitchAuthorization(twitch)
+    });
+    const params = new URLSearchParams({
+      error: "wrong_bot_account",
+      connected_login: tokenLogin,
+      expected_login: configuredBotLogin ?? ""
+    });
+    redirect(response, `/?${params.toString()}`);
+    return;
+  }
 
   writeLocalSecrets({
     ...secrets,
@@ -413,8 +535,8 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
       scopes: validation.scopes,
       tokenExpiresAt: expiresAt,
       tokenValidatedAt: new Date().toISOString(),
-      botLogin: twitch.botLogin || validation.login,
-      botUserId: validation.user_id
+      botLogin: configuredBotLogin || tokenLogin,
+      botUserId: tokenMatchesConfiguredBot ? validation.user_id : undefined
     }
   });
 
@@ -482,22 +604,31 @@ const validateSetup = async () => {
     pass("Broadcaster identity", `${broadcasterUser.login} (${broadcasterUser.id})`);
   }
 
-  if (botUser && broadcasterUser) {
-    writeLocalSecrets({
-      ...secrets,
-      twitch: {
-        ...twitch,
-        scopes: token.scopes,
-        botLogin: botUser.login,
-        botUserId: botUser.id,
-        broadcasterLogin: broadcasterUser.login,
-        broadcasterUserId: broadcasterUser.id,
-        tokenValidatedAt: new Date().toISOString()
-      }
-    });
+  const setupOk = checks.every((check) => check.ok);
+  const nextTwitch: LocalSecrets["twitch"] = {
+    ...twitch,
+    scopes: token.scopes,
+    tokenValidatedAt: setupOk ? new Date().toISOString() : undefined,
+    botUserId: undefined,
+    broadcasterUserId: undefined
+  };
+
+  if (botUser && botUser.id === token.user_id) {
+    nextTwitch.botLogin = botUser.login;
+    nextTwitch.botUserId = botUser.id;
   }
 
-  return { ok: checks.every((check) => check.ok), checks };
+  if (broadcasterUser) {
+    nextTwitch.broadcasterLogin = broadcasterUser.login;
+    nextTwitch.broadcasterUserId = broadcasterUser.id;
+  }
+
+  writeLocalSecrets({
+    ...secrets,
+    twitch: nextTwitch
+  });
+
+  return { ok: setupOk, checks };
 };
 
 const sendTestMessage = async () => {
@@ -565,14 +696,302 @@ const getOperatorStatus = async () => {
       broadcasterLogin: config.broadcasterLogin,
       tokenValid,
       requiredScopesPresent,
-      eventSubConnected: false,
-      chatSubscriptionActive: false,
+      botProcess: getBotProcessSnapshot(),
+      eventSubConnected: botProcess.eventSubConnected,
+      chatSubscriptionActive: botProcess.chatSubscriptionActive,
       queueReady: chatQueue.isReady(),
-      liveChatConfirmed: false,
-      note: "The setup console runs separately from npm run dev, so live EventSub status is shown in the bot terminal."
+      liveChatConfirmed: botProcess.liveChatConfirmed,
+      note: botProcess.child
+        ? "Live bot runtime is managed by this setup console."
+        : "Start the live bot runtime from Dashboard or Settings to receive chat commands."
     },
     giveaway: summarizeGiveawayState(giveaway)
   };
+};
+
+type BotProcessState = {
+  child: ChildProcess | undefined;
+  status: "stopped" | "starting" | "running" | "stopping" | "exited" | "failed";
+  pid: number | undefined;
+  startedAt: string;
+  stoppedAt: string;
+  exitCode: number | null | undefined;
+  signal: NodeJS.Signals | string | null | undefined;
+  eventSubConnected: boolean;
+  chatSubscriptionActive: boolean;
+  liveChatConfirmed: boolean;
+  lastError: string;
+  recentLogs: string[];
+  stdoutBuffer: string;
+  stderrBuffer: string;
+};
+
+function createBotProcessState(): BotProcessState {
+  return {
+    child: undefined,
+    status: "stopped",
+    pid: undefined,
+    startedAt: "",
+    stoppedAt: "",
+    exitCode: undefined,
+    signal: undefined,
+    eventSubConnected: false,
+    chatSubscriptionActive: false,
+    liveChatConfirmed: false,
+    lastError: "",
+    recentLogs: [],
+    stdoutBuffer: "",
+    stderrBuffer: ""
+  };
+}
+
+const startBotProcess = async () => {
+  if (botProcess.child && !botProcess.child.killed) {
+    return { ok: true, alreadyRunning: true, botProcess: getBotProcessSnapshot() };
+  }
+
+  const validation = await validateSetup();
+
+  if (!validation.ok) {
+    return {
+      ok: false,
+      error: "Validation must pass before starting the live bot.",
+      checks: validation.checks,
+      botProcess: getBotProcessSnapshot()
+    };
+  }
+
+  const command = getBotRuntimeCommand();
+  resetBotProcessForStart();
+
+  const child = spawn(command.executable, command.args, {
+    cwd: command.cwd,
+    env: getBotRuntimeEnv(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  botProcess.child = child;
+  botProcess.pid = child.pid;
+  botProcess.status = "starting";
+  appendBotLog("system", `Starting live bot process: ${command.display}`);
+
+  child.stdout.on("data", (chunk: Buffer) => handleBotOutput("stdout", chunk));
+  child.stderr.on("data", (chunk: Buffer) => handleBotOutput("stderr", chunk));
+  child.once("spawn", () => {
+    botProcess.status = "running";
+  });
+  child.once("error", (error) => {
+    botProcess.status = "failed";
+    botProcess.lastError = safeErrorMessage(error, "Bot process failed to start.");
+    appendBotLog("error", botProcess.lastError);
+  });
+  child.once("exit", (code, signal) => {
+    flushBotOutput();
+    botProcess.child = undefined;
+    botProcess.pid = undefined;
+    botProcess.stoppedAt = new Date().toISOString();
+    botProcess.exitCode = code;
+    botProcess.signal = signal;
+    botProcess.eventSubConnected = false;
+    botProcess.chatSubscriptionActive = false;
+    botProcess.status = botProcess.status === "stopping" ? "stopped" : code === 0 ? "exited" : "failed";
+    if (code !== 0 && botProcess.status === "failed") {
+      botProcess.lastError = `Bot process exited with code ${code ?? "unknown"}.`;
+    }
+    appendBotLog("system", `Live bot process ${botProcess.status}.`);
+  });
+
+  return { ok: true, started: true, botProcess: getBotProcessSnapshot() };
+};
+
+const stopBotProcess = async (options: { force?: boolean } = {}) => {
+  const child = botProcess.child;
+
+  if (!child) {
+    return { ok: true, alreadyStopped: true, botProcess: getBotProcessSnapshot() };
+  }
+
+  botProcess.status = "stopping";
+  appendBotLog("system", "Stopping live bot process.");
+  child.kill("SIGTERM");
+
+  const stopped = await waitForBotExit(child, options.force ? 1500 : 5000);
+
+  if (!stopped && options.force) {
+    child.kill("SIGKILL");
+    await waitForBotExit(child, 1500);
+  }
+
+  return { ok: true, stopped: true, botProcess: getBotProcessSnapshot() };
+};
+
+const waitForBotExit = (child: ChildProcess, timeoutMs: number) =>
+  new Promise<boolean>((resolve) => {
+    if (!botProcess.child || botProcess.child !== child) {
+      resolve(true);
+      return;
+    }
+
+    const timeout = setTimeout(() => resolve(false), timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve(true);
+    });
+  });
+
+const resetBotProcessForStart = () => {
+  botProcess.status = "starting";
+  botProcess.pid = undefined;
+  botProcess.startedAt = new Date().toISOString();
+  botProcess.stoppedAt = "";
+  botProcess.exitCode = undefined;
+  botProcess.signal = undefined;
+  botProcess.eventSubConnected = false;
+  botProcess.chatSubscriptionActive = false;
+  botProcess.liveChatConfirmed = false;
+  botProcess.lastError = "";
+  botProcess.recentLogs = [];
+  botProcess.stdoutBuffer = "";
+  botProcess.stderrBuffer = "";
+};
+
+const getBotProcessSnapshot = () => ({
+  status: botProcess.status,
+  running: Boolean(botProcess.child),
+  pid: botProcess.pid,
+  startedAt: botProcess.startedAt,
+  stoppedAt: botProcess.stoppedAt,
+  exitCode: botProcess.exitCode,
+  signal: botProcess.signal,
+  eventSubConnected: botProcess.eventSubConnected,
+  chatSubscriptionActive: botProcess.chatSubscriptionActive,
+  liveChatConfirmed: botProcess.liveChatConfirmed,
+  lastError: botProcess.lastError,
+  recentLogs: botProcess.recentLogs.slice(-20)
+});
+
+const getBotRuntimeCommand = () => {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const sourceRoot = resolve(currentDir, "../..");
+  const bundledRoot = resolve(currentDir, "..");
+  const sourceIndex = join(sourceRoot, "src/index.ts");
+  const tsxCli = join(sourceRoot, "node_modules/tsx/dist/cli.mjs");
+  const bundledIndex = join(currentDir, "live-bot.js");
+
+  if (currentDir.endsWith(join("src", "setup")) && existsSync(sourceIndex) && existsSync(tsxCli)) {
+    return {
+      executable: process.execPath,
+      args: [tsxCli, "src/index.ts"],
+      cwd: sourceRoot,
+      display: "tsx src/index.ts"
+    };
+  }
+
+  if (existsSync(bundledIndex)) {
+    return {
+      executable: process.execPath,
+      args: [bundledIndex],
+      cwd: bundledRoot,
+      display: "node dist-bundle/live-bot.js"
+    };
+  }
+
+  if (existsSync(sourceIndex) && existsSync(tsxCli)) {
+    return {
+      executable: process.execPath,
+      args: [tsxCli, "src/index.ts"],
+      cwd: sourceRoot,
+      display: "tsx src/index.ts"
+    };
+  }
+
+  throw new Error("Unable to find VaexCore live bot entrypoint.");
+};
+
+const getBotRuntimeEnv = () => {
+  const configDir = dirname(getLocalSecretsPath());
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    VAEXCORE_MODE: "live",
+    VAEXCORE_CONFIG_DIR: configDir,
+    DATABASE_URL: process.env.DATABASE_URL || `file:${join(configDir, "data/vaexcore.sqlite")}`
+  };
+
+  if (process.versions.electron) {
+    env.ELECTRON_RUN_AS_NODE = "1";
+  } else {
+    delete env.ELECTRON_RUN_AS_NODE;
+  }
+
+  return env;
+};
+
+const handleBotOutput = (stream: "stdout" | "stderr", chunk: Buffer) => {
+  const key = stream === "stdout" ? "stdoutBuffer" : "stderrBuffer";
+  botProcess[key] += chunk.toString("utf8");
+  const parts = botProcess[key].split(/\r?\n/);
+  botProcess[key] = parts.pop() ?? "";
+
+  for (const line of parts) {
+    processBotLog(stream, line);
+  }
+};
+
+const flushBotOutput = () => {
+  if (botProcess.stdoutBuffer) {
+    processBotLog("stdout", botProcess.stdoutBuffer);
+    botProcess.stdoutBuffer = "";
+  }
+  if (botProcess.stderrBuffer) {
+    processBotLog("stderr", botProcess.stderrBuffer);
+    botProcess.stderrBuffer = "";
+  }
+};
+
+const processBotLog = (stream: "stdout" | "stderr" | "system" | "error", rawLine: string) => {
+  const line = rawLine.trim();
+  if (!line) return;
+
+  updateBotStatusFromLog(line);
+  appendBotLog(stream, line);
+};
+
+const appendBotLog = (stream: string, line: string) => {
+  const safeLine = line.replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+  botProcess.recentLogs.push(`${new Date().toISOString()} ${stream}: ${safeLine}`);
+
+  if (botProcess.recentLogs.length > 100) {
+    botProcess.recentLogs.splice(0, botProcess.recentLogs.length - 100);
+  }
+};
+
+const updateBotStatusFromLog = (line: string) => {
+  try {
+    const parsed = JSON.parse(line) as { msg?: string; operatorEvent?: string; code?: number; reason?: string };
+    const msg = parsed.msg ?? "";
+    const operatorEvent = parsed.operatorEvent ?? "";
+
+    if (msg === "EventSub WebSocket opened" || msg === "Startup checklist: EventSub connected") {
+      botProcess.eventSubConnected = true;
+    }
+    if (operatorEvent === "chat subscription created" || msg === "Startup checklist: chat subscription created") {
+      botProcess.chatSubscriptionActive = true;
+    }
+    if (msg === "LIVE CHAT CONFIRMED") {
+      botProcess.liveChatConfirmed = true;
+    }
+    if (msg === "EventSub WebSocket closed") {
+      botProcess.eventSubConnected = false;
+      botProcess.chatSubscriptionActive = false;
+    }
+    if (line.includes("failed") || line.includes("error")) {
+      botProcess.lastError = msg || line;
+    }
+  } catch {
+    if (line.includes("LIVE CHAT CONFIRMED")) {
+      botProcess.liveChatConfirmed = true;
+    }
+  }
 };
 
 const enqueueChatMessage = async (message: string | undefined) => {
@@ -654,18 +1073,26 @@ const summarizeGiveawayState = (
   };
 };
 
-const runGiveawayAction = (
-  action: () => Record<string, unknown>,
-  options: { echoToChat?: boolean; echoCommand?: string } = {}
+const runGiveawayAction = <TResult extends Record<string, unknown>>(
+  action: () => TResult,
+  options: {
+    echoToChat?: boolean;
+    echoCommand?: string;
+    announcements?: (result: TResult) => string | string[] | undefined;
+  } = {}
 ) => {
   try {
     const result = action();
     const echoQueued = maybeEchoCommand(options.echoToChat, options.echoCommand);
+    const announcementsQueued = maybeQueueGiveawayAnnouncements(
+      options.announcements?.(result)
+    );
 
     return {
       ok: true,
       ...result,
       echoQueued,
+      announcementsQueued,
       state: getGiveawayState()
     };
   } catch (error) {
@@ -675,6 +1102,43 @@ const runGiveawayAction = (
       state: getGiveawayState()
     };
   }
+};
+
+const maybeQueueGiveawayAnnouncements = (messages: string | string[] | undefined) => {
+  const list = (Array.isArray(messages) ? messages : [messages]).filter(Boolean);
+
+  if (list.length === 0 || !canSendConfiguredChat()) {
+    return false;
+  }
+
+  let queued = false;
+
+  for (const message of list) {
+    try {
+      const text = sanitizeChatMessage(message);
+      chatQueue.enqueue(text);
+      queued = true;
+    } catch (error) {
+      logger.warn({ error }, "Giveaway chat announcement rejected");
+    }
+  }
+
+  if (queued) {
+    logger.info({ count: list.length }, "Giveaway chat announcement queued");
+  }
+
+  return queued;
+};
+
+const canSendConfiguredChat = () => {
+  const twitch = readLocalSecrets().twitch;
+
+  return Boolean(
+    twitch.clientId &&
+    twitch.accessToken &&
+    twitch.broadcasterUserId &&
+    twitch.botUserId
+  );
 };
 
 const maybeEchoCommand = (echoToChat: boolean | undefined, command: string | undefined) => {
@@ -1005,8 +1469,40 @@ const isAllowedHost = (hostHeader: string | undefined) => {
   return hostName === "localhost" || hostName === "127.0.0.1" || hostName === "::1";
 };
 
-const normalizeLogin = (value: string | undefined) =>
-  value?.trim() ? normalizeTwitchLogin(value) : undefined;
+const normalizeLogin = (value: string | undefined) => {
+  const login = extractLoginInput(value);
+  return login ? normalizeTwitchLogin(login) : undefined;
+};
+
+const extractLoginInput = (value: string | undefined) => {
+  const trimmed = value?.trim().replace(/^@/, "");
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const maybeUrl = trimmed.match(/^https?:\/\//i)
+    ? trimmed
+    : trimmed.match(/^(www\.)?twitch\.tv\//i)
+      ? `https://${trimmed}`
+      : undefined;
+
+  if (!maybeUrl) {
+    return trimmed;
+  }
+
+  try {
+    const parsed = new URL(maybeUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (host === "twitch.tv" || host === "www.twitch.tv") {
+      return parsed.pathname.split("/").filter(Boolean)[0];
+    }
+  } catch {
+    return trimmed;
+  }
+
+  return trimmed;
+};
 
 const sanitizeOptionalText = (
   value: string | undefined,
@@ -1051,6 +1547,29 @@ const valueOrExisting = (value: string | undefined, existing: string | undefined
   const trimmed = value?.trim();
   return trimmed ? trimmed : existing;
 };
+
+const valueOrExistingLogin = (
+  input: Record<string, string>,
+  field: "broadcasterLogin" | "botLogin",
+  existing: string | undefined
+) => (hasSubmittedField(input, field) ? normalizeLogin(input[field]) : existing);
+
+const hasSubmittedField = (input: Record<string, string>, field: string) =>
+  Object.prototype.hasOwnProperty.call(input, field);
+
+const clearTwitchAuthorization = (
+  twitch: LocalSecrets["twitch"],
+  options: { clearBroadcasterIdentity?: boolean } = {}
+): LocalSecrets["twitch"] => ({
+  ...twitch,
+  accessToken: undefined,
+  refreshToken: undefined,
+  scopes: [],
+  tokenExpiresAt: undefined,
+  tokenValidatedAt: undefined,
+  botUserId: undefined,
+  broadcasterUserId: options.clearBroadcasterIdentity ? undefined : twitch.broadcasterUserId
+});
 
 const maskToken = (token: string) =>
   token.length <= 8 ? "********" : `${token.slice(0, 4)}...${token.slice(-4)}`;

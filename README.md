@@ -101,6 +101,12 @@ After `.env` passes:
 npm run dev
 ```
 
+If you configured Twitch in the packaged macOS app instead of `.env`, start the live bot with the app config:
+
+```bash
+npm run dev:app-config
+```
+
 Startup logs should include these checklist entries:
 
 - `bot user ID present`
@@ -112,6 +118,8 @@ Startup logs should include these checklist entries:
 Once running, type `!ping` in your Twitch chat. VaexCore should receive the chat event and send one queued `pong` through Twitch's Send Chat Message API.
 
 Live mode receives real Twitch user IDs, logins, display names, and badges from EventSub. Local mode is the only mode that accepts fake users such as `alice: !enter`.
+
+The operator console can also start and stop the live bot listener from `Dashboard` -> `Bot Runtime`. This uses the same local credentials as the console and keeps recent bot logs visible in the UI. Keep the console open while the managed bot process is running.
 
 If Twitch rejects startup with `401` or `403`, check:
 
@@ -126,7 +134,7 @@ If Twitch rejects startup with `401` or `403`, check:
 1. Fill `.env` with `VAEXCORE_MODE=live`, Twitch client ID, bot token, bot user ID, and broadcaster user ID.
 2. Run `npm run check:env`.
 3. Run `npm run build`.
-4. Start VaexCore with `npm run dev`.
+4. Start VaexCore from `Dashboard` -> `Bot Runtime` -> `Start Bot`. CLI fallback remains `npm run dev`, or `npm run dev:app-config` if setup was completed in the packaged macOS app.
 5. Watch logs for `EventSub connected` and `Chat subscription created`.
 6. Type `!ping` in your channel.
 7. Confirm the bot responds with `pong` and logs `LIVE CHAT CONFIRMED`.
@@ -173,6 +181,26 @@ The console is organized into durable sections:
 
 Direct UI actions call the local service layer first. Optional chat echo is visibility only; if enabled, VaexCore queues the equivalent chat command after the local action succeeds.
 
+## First-Time Setup (No Twitch Experience Required)
+
+Open `Settings`, then use `Setup Guide`.
+
+1. Create a Twitch application.
+   Open `https://dev.twitch.tv/console/apps`, click `Register Your Application`, use any name such as `VaexCore`, set OAuth Redirect URL to `http://localhost:3434/auth/twitch/callback`, and choose `Application Integration`. Use one redirect URL only; do not leave a second blank redirect row. The redirect URL must match exactly.
+2. Enter app credentials.
+   Copy the Twitch app `Client ID` and `Client Secret` into VaexCore. Keep the Redirect URI as `http://localhost:3434/auth/twitch/callback` unless you know why it must change.
+3. Enter Twitch usernames.
+   `Broadcaster Login` is the channel VaexCore operates in. `Bot Login` is the account that sends messages. They can be the same account or separate accounts. If they are separate, the Bot Login must be the account that grants OAuth in the next step.
+4. Connect Twitch.
+   Click `Connect Twitch` while logged into the Bot Login account and approve `user:read:chat` and `user:write:chat`. The Client ID and Client Secret belong to the Twitch Developer App, not to one authorized Twitch user.
+   If Twitch authorizes the wrong account, click `Disconnect Twitch`, switch Twitch accounts in the browser, then connect again.
+5. Validate setup.
+   Click `Validate Setup` and confirm token, scopes, bot identity, and broadcaster identity pass.
+6. Test chat.
+   Click `Send test message` to confirm the bot can speak in chat.
+7. Start the bot.
+   Click `Start Bot` in the Setup Guide or Dashboard. CLI fallback is `npm run dev:app-config` after using the packaged macOS app setup, or `npm run dev` after using project-local setup or `.env`. Type `!ping` in Twitch chat and wait for `LIVE CHAT CONFIRMED`.
+
 ### Operator UI Structure
 
 The setup server API lives in `src/setup/server.ts`. The browser UI is static, componentized plain JavaScript and CSS in:
@@ -208,7 +236,7 @@ In the `Settings` section:
 2. Enter Twitch client ID and client secret.
 3. Enter broadcaster login and bot login.
 4. Save settings.
-5. Connect Twitch and approve `user:read:chat` and `user:write:chat`.
+5. Connect Twitch while logged into the bot login account and approve `user:read:chat` and `user:write:chat`.
 6. Validate setup.
 7. Send a setup test message from `Chat Tools`.
 
@@ -216,6 +244,7 @@ Common setup errors:
 
 - `401`: bad, expired, or revoked token. Connect Twitch again.
 - `403`: missing scopes. Reconnect and approve both chat scopes.
+- Bot identity mismatch: click `Disconnect Twitch`, log into Twitch as the configured bot login, then connect again.
 - Redirect mismatch: the Twitch Developer app redirect URI does not exactly match `http://localhost:3434/auth/twitch/callback`.
 
 The setup UI never displays tokens after OAuth, never logs tokens, and never stores giveaway prizes.
@@ -237,12 +266,14 @@ Recommended operator flow:
 1. Confirm the Dashboard shows Twitch auth, queue readiness, and live chat confirmation.
 2. Open `Giveaways`.
 3. Start a giveaway with a title, keyword, and number of winners.
-4. Announce the entry keyword in chat.
+4. VaexCore announces the entry keyword in chat.
 5. Monitor entry count.
 6. Close entries.
 7. Draw winners.
 8. Reroll, claim, or deliver winners as needed.
 9. End the giveaway after operator work is complete.
+
+Giveaway chat announcements are automatic when chat is configured. VaexCore announces start instructions, thanks each unique entrant, acknowledges duplicate entries, announces closed entries, announces drawn/rerolled winners, and repeats the final winner list when the giveaway ends. Custom keywords work too: `keyword=raffle` means viewers enter with `!raffle`.
 
 Current chat command syntax:
 
@@ -356,6 +387,12 @@ CLI fallback remains available:
 ```bash
 npm run setup
 npm run dev
+```
+
+If the packaged app was used for Twitch setup, the live CLI needs the packaged app's config path:
+
+```bash
+npm run dev:app-config
 ```
 
 After changing setup UI assets, run `npm run app:build` again so `dist-bundle/setup-ui` is refreshed before packaging. Electron loads the same localhost setup server as `npm run setup`.
