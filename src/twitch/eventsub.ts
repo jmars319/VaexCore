@@ -222,6 +222,7 @@ export class TwitchEventSubClient {
     }
 
     await this.options.onChatMessage({
+      mode: "live",
       broadcasterUserId: event.broadcaster_user_id,
       broadcasterLogin: event.broadcaster_user_login,
       broadcasterName: event.broadcaster_user_name,

@@ -71,7 +71,8 @@ const commandRouter = new CommandRouter({
 const db = createDbClient(env.LOCAL_DATABASE_URL);
 registerGiveawaysModule({
   router: commandRouter,
-  db
+  db,
+  logger
 });
 
 messageQueue.start();
@@ -104,6 +105,7 @@ for await (const text of rl) {
 
   const parsed = parseLocalLine(text);
   const event: ChatMessageEvent = {
+    mode: "local",
     broadcasterUserId: "local-broadcaster",
     broadcasterLogin: "local",
     broadcasterName: "Local",

@@ -1,4 +1,5 @@
 import type { DbClient } from "../../db/client";
+import type { Logger } from "../../core/logger";
 import type { ChatMessageEvent } from "../../twitch/types";
 import type { Giveaway, GiveawayEntry, GiveawayWinner } from "./giveaways.types";
 
@@ -13,10 +14,17 @@ type DrawResult = {
   giveaway: Giveaway;
   winners: GiveawayWinner[];
   requestedCount: number;
+  eligibleCount: number;
 };
 
 export class GiveawaysService {
-  constructor(private readonly db: DbClient) {}
+  private readonly db: DbClient;
+  private readonly logger: Logger;
+
+  constructor(options: { db: DbClient; logger: Logger }) {
+    this.db = options.db;
+    this.logger = options.logger;
+  }
 
   start(input: StartGiveawayInput) {
     const active = this.getActiveGiveaway();
@@ -52,6 +60,18 @@ export class GiveawaysService {
       keyword: giveaway.keyword,
       winnerCount: giveaway.winner_count
     });
+    this.logger.info(
+      {
+        operatorEvent: "giveaway opened",
+        giveawayId: giveaway.id,
+        title: giveaway.title,
+        keyword: giveaway.keyword,
+        winnerCount: giveaway.winner_count,
+        actor: input.actor.chatterLogin,
+        mode: input.actor.mode
+      },
+      "Giveaway opened"
+    );
 
     return giveaway;
   }
@@ -84,8 +104,25 @@ export class GiveawaysService {
         enteredAt: timestamp()
       });
 
+    const entered = result.changes === 1;
+
+    if (entered) {
+      const count = this.countEntries(giveaway.id);
+      this.logger.info(
+        {
+          operatorEvent: "giveaway entry count changed",
+          giveawayId: giveaway.id,
+          entries: count,
+          entrant: event.chatterLogin,
+          entrantUserId: event.chatterUserId,
+          mode: event.mode
+        },
+        "Giveaway entry count changed"
+      );
+    }
+
     return {
-      status: result.changes === 1 ? ("entered" as const) : ("duplicate" as const),
+      status: entered ? ("entered" as const) : ("duplicate" as const),
       giveaway
     };
   }
@@ -122,28 +159,55 @@ export class GiveawaysService {
 
     const closed = this.requireGiveawayById(giveaway.id);
     this.audit(actor, "giveaway.close", String(giveaway.id), {});
+    this.logger.info(
+      {
+        operatorEvent: "giveaway closed",
+        giveawayId: giveaway.id,
+        entries: this.countEntries(giveaway.id),
+        actor: actor.chatterLogin,
+        mode: actor.mode
+      },
+      "Giveaway closed"
+    );
 
     return closed;
   }
 
-  draw(actor: ChatMessageEvent, requestedCount?: number): DrawResult {
+  draw(
+    actor: ChatMessageEvent,
+    requestedCount?: number,
+    options: { allowOpen?: boolean } = {}
+  ): DrawResult {
     const giveaway = this.requireActiveGiveaway();
 
-    if (giveaway.status === "open") {
-      throw new Error("Close the giveaway before drawing winners");
+    if (giveaway.status === "open" && !options.allowOpen) {
+      throw new Error("Close the giveaway before drawing winners, or use --allow-open");
     }
 
     const remainingWinnerSlots =
       giveaway.winner_count - this.countActiveWinners(giveaway.id);
     const count = Math.max(1, requestedCount ?? remainingWinnerSlots);
     const drawCount = Math.min(count, Math.max(0, remainingWinnerSlots));
+    const candidates = this.getDrawableEntries(giveaway.id);
+    const finalDrawCount = Math.min(drawCount, candidates.length);
 
-    if (drawCount === 0) {
-      return { giveaway, winners: [], requestedCount: count };
+    if (finalDrawCount === 0) {
+      this.logger.warn(
+        {
+          operatorEvent: "giveaway winners drawn",
+          giveawayId: giveaway.id,
+          requestedCount: count,
+          drawnCount: 0,
+          eligibleCount: candidates.length,
+          actor: actor.chatterLogin,
+          mode: actor.mode
+        },
+        "No eligible giveaway winners available"
+      );
+      return { giveaway, winners: [], requestedCount: count, eligibleCount: candidates.length };
     }
 
-    const candidates = this.getDrawableEntries(giveaway.id);
-    const selected = shuffle(candidates).slice(0, drawCount);
+    const selected = shuffle(candidates).slice(0, finalDrawCount);
     const winners = selected.map((entry) => this.insertWinner(giveaway.id, entry));
 
     this.audit(actor, "giveaway.draw", String(giveaway.id), {
@@ -151,12 +215,33 @@ export class GiveawaysService {
       drawnCount: winners.length,
       winners: winners.map((winner) => winner.login)
     });
+    this.logger.info(
+      {
+        operatorEvent: "giveaway winners drawn",
+        giveawayId: giveaway.id,
+        requestedCount: count,
+        drawnCount: winners.length,
+        eligibleCount: candidates.length,
+        winners: winners.map((winner) => ({
+          login: winner.login,
+          twitchUserId: winner.twitch_user_id
+        })),
+        actor: actor.chatterLogin,
+        mode: actor.mode
+      },
+      "Giveaway winners drawn"
+    );
 
-    return { giveaway, winners, requestedCount: count };
+    return { giveaway, winners, requestedCount: count, eligibleCount: candidates.length };
   }
 
   reroll(actor: ChatMessageEvent, username: string) {
     const giveaway = this.requireActiveGiveaway();
+
+    if (giveaway.status === "open") {
+      throw new Error("Close the giveaway before rerolling winners");
+    }
+
     const winner = this.findActiveWinner(giveaway.id, username);
 
     if (!winner) {
@@ -178,12 +263,49 @@ export class GiveawaysService {
       rerolled: winner.login,
       replacement: replacement?.login
     });
+    this.logger.info(
+      {
+        operatorEvent: "giveaway reroll",
+        giveawayId: giveaway.id,
+        rerolled: {
+          login: winner.login,
+          twitchUserId: winner.twitch_user_id
+        },
+        replacement: replacement
+          ? {
+              login: replacement.login,
+              twitchUserId: replacement.twitch_user_id
+            }
+          : undefined,
+        actor: actor.chatterLogin,
+        mode: actor.mode
+      },
+      "Giveaway reroll"
+    );
 
     return { giveaway, rerolled: winner, replacement };
   }
 
   end(actor: ChatMessageEvent) {
     const giveaway = this.requireActiveGiveaway();
+    const unresolvedWinners = this.getUnresolvedWinners(giveaway.id);
+
+    if (unresolvedWinners.length > 0) {
+      this.logger.warn(
+        {
+          operatorEvent: "giveaway unresolved winners before end",
+          giveawayId: giveaway.id,
+          unresolvedCount: unresolvedWinners.length,
+          winners: unresolvedWinners.map((winner) => ({
+            login: winner.login,
+            twitchUserId: winner.twitch_user_id,
+            claimed: Boolean(winner.claimed_at),
+            delivered: Boolean(winner.delivered_at)
+          }))
+        },
+        "Giveaway has unclaimed or undelivered winners"
+      );
+    }
 
     this.db
       .prepare("UPDATE giveaways SET status = 'ended', ended_at = ? WHERE id = ?")
@@ -191,6 +313,16 @@ export class GiveawaysService {
 
     const ended = this.requireGiveawayById(giveaway.id);
     this.audit(actor, "giveaway.end", String(giveaway.id), {});
+    this.logger.info(
+      {
+        operatorEvent: "giveaway ended",
+        giveawayId: giveaway.id,
+        unresolvedCount: unresolvedWinners.length,
+        actor: actor.chatterLogin,
+        mode: actor.mode
+      },
+      "Giveaway ended"
+    );
 
     return ended;
   }
@@ -273,6 +405,20 @@ export class GiveawaysService {
         `
       )
       .all(giveawayId) as GiveawayEntry[];
+  }
+
+  private getUnresolvedWinners(giveawayId: number) {
+    return this.db
+      .prepare(
+        `
+          SELECT *
+          FROM giveaway_winners
+          WHERE giveaway_id = ?
+            AND rerolled_at IS NULL
+            AND (claimed_at IS NULL OR delivered_at IS NULL)
+        `
+      )
+      .all(giveawayId) as GiveawayWinner[];
   }
 
   private insertWinner(giveawayId: number, entry: GiveawayEntry) {

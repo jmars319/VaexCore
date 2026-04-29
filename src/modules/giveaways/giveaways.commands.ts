@@ -54,7 +54,7 @@ export const registerGiveawayCommands = ({
     }
 
     reply(
-      `Giveaway #${status.giveaway.id} is ${status.giveaway.status}: ${status.entries} entries, ${status.activeWinners}/${status.giveaway.winner_count} winners, ${status.rerolledWinners} rerolled.`
+      `G#${status.giveaway.id} ${status.giveaway.status}: ${status.entries} entries, ${status.activeWinners}/${status.giveaway.winner_count} winners.`
     );
   });
 
@@ -64,16 +64,23 @@ export const registerGiveawayCommands = ({
   });
 
   router.register("gdraw", PermissionLevel.Moderator, ({ event, args, reply }) => {
-    const requestedCount = args[0] ? parsePositiveInteger(args[0]) : undefined;
-    const result = service.draw(event, requestedCount);
+    const allowOpen = args.includes("--allow-open");
+    const countArg = args.find((arg) => !arg.startsWith("--"));
+    const requestedCount = countArg ? parsePositiveInteger(countArg) : undefined;
+    const result = service.draw(event, requestedCount, { allowOpen });
 
     if (result.winners.length === 0) {
       reply("No eligible winners available.");
       return;
     }
 
+    const partial =
+      result.winners.length < result.requestedCount
+        ? ` (${result.winners.length}/${result.requestedCount} available)`
+        : "";
+
     reply(
-      `Winner${result.winners.length === 1 ? "" : "s"}: ${result.winners
+      `Winner${result.winners.length === 1 ? "" : "s"}${partial}: ${result.winners
         .map((winner) => winner.display_name)
         .join(", ")}`
     );

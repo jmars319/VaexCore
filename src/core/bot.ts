@@ -44,7 +44,8 @@ export class VaexCoreBot {
     this.db = createDbClient(options.env.databaseUrl);
     registerGiveawaysModule({
       router: this.commandRouter,
-      db: this.db
+      db: this.db,
+      logger: options.logger
     });
 
     this.eventSubClient = new TwitchEventSubClient({

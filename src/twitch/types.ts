@@ -5,6 +5,7 @@ export type ChatBadge = {
 };
 
 export type ChatMessageEvent = {
+  mode: "live" | "local";
   broadcasterUserId: string;
   broadcasterLogin: string;
   broadcasterName: string;

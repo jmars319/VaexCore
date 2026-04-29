@@ -100,6 +100,8 @@ Startup logs should include these checklist entries:
 
 Once running, type `!ping` in your Twitch chat. VaexCore should receive the chat event and send one queued `pong` through Twitch's Send Chat Message API.
 
+Live mode receives real Twitch user IDs, logins, display names, and badges from EventSub. Local mode is the only mode that accepts fake users such as `alice: !enter`.
+
 If Twitch rejects startup with `401` or `403`, check:
 
 - The token belongs to `TWITCH_BOT_USER_ID`.
@@ -118,6 +120,46 @@ If Twitch rejects startup with `401` or `403`, check:
 - `!gdraw` / `!gdraw 6`: draws winners
 - `!greroll username`: rerolls an active winner while preserving history
 - `!gend`: ends the active giveaway
+
+## Running An IOI Code Giveaway
+
+Start the giveaway:
+
+```text
+!gstart codes=6 keyword=enter title="IOI code giveaway"
+```
+
+View the current count:
+
+```text
+!gstatus
+```
+
+Close entries before drawing:
+
+```text
+!gclose
+```
+
+Draw winners:
+
+```text
+!gdraw 6
+```
+
+Reroll a winner if needed:
+
+```text
+!greroll username
+```
+
+End the giveaway:
+
+```text
+!gend
+```
+
+Never paste IOI codes in chat. VaexCore does not store or reveal codes; delivery stays manual. Before ending, the console logs any active winners that are still unclaimed or undelivered.
 
 ## Roadmap
 
