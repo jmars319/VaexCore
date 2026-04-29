@@ -146,6 +146,136 @@ Common live errors:
 
 Enable `VAEXCORE_DEBUG=true` only when debugging. It logs truncated raw EventSub payloads and normalized chat messages.
 
+## Local Setup UI
+
+The setup UI is local-only and binds to `127.0.0.1:3434`. It stores Twitch app credentials and OAuth tokens in `config/local.secrets.json`, which is ignored by Git.
+
+1. Create a Twitch Developer app.
+2. Set the redirect URI exactly:
+
+```text
+http://localhost:3434/auth/twitch/callback
+```
+
+3. Run:
+
+```bash
+npm run setup
+```
+
+4. Open `http://localhost:3434`.
+5. Enter your Twitch app client ID, client secret, broadcaster login, and bot login.
+6. Click `Save Config`.
+7. Click `Connect Twitch` and approve `user:read:chat` and `user:write:chat`.
+8. Click `Validate Setup`.
+9. Click `Send Test Message`.
+10. Run the bot:
+
+```bash
+npm run check:env
+npm run build
+npm run dev
+```
+
+Common setup errors:
+
+- `401`: bad, expired, or revoked token. Connect Twitch again.
+- `403`: missing scopes. Reconnect and approve both chat scopes.
+- Redirect mismatch: the Twitch Developer app redirect URI does not exactly match `http://localhost:3434/auth/twitch/callback`.
+
+The setup UI never displays tokens after OAuth, never logs tokens, and never stores giveaway codes.
+
+## Security Notes
+
+VaexCore treats Twitch chat and local UI input as untrusted. Commands, giveaway fields, logins, display names, and manual chat messages are normalized and length-limited before use. Unknown commands are ignored, denied commands do not expose internals, and command handling includes lightweight per-user and global burst limits.
+
+The setup/operator console binds only to `127.0.0.1`, rejects non-localhost host headers, sends basic browser security headers, and disables caching for API/UI responses. API routes return safe status only; tokens, refresh tokens, client secrets, OAuth codes, and local secrets are never returned.
+
+See [SECURITY.md](SECURITY.md) for local data paths and reset notes.
+
+## Local Operator Console
+
+`npm run setup` also opens the local operator console. This is not a public dashboard; it is a localhost-only control surface for existing VaexCore functionality.
+
+The console can:
+
+- Show safe config and token status.
+- Show setup-server queue status.
+- Show bot run commands for start/stop/restart. The setup server does not fake process control for the separate `npm run dev` bot.
+- Send a chat message when live validation passes.
+- Start, close, draw, reroll, claim, deliver, and end giveaways using the same SQLite giveaway service as chat commands.
+- Add simulated entrants for local testing through the same `!enter` entry logic.
+- Run simulated chat commands through the real command router with viewer, mod, or broadcaster roles.
+- Show entrants, winners, and the latest 100 audit log rows.
+
+Codes are still manual. VaexCore does not store, reveal, whisper, or post giveaway codes.
+
+### Operator Console Usage
+
+The UI is the primary local control path. Chat commands remain available for manual operation in Twitch chat, but the console does not depend on Twitch chat to start, close, draw, reroll, claim, deliver, or end a giveaway.
+
+All giveaway buttons call the shared giveaway service directly. The simulated command panel routes through the real command router, so permission checks and command parsing match live chat behavior.
+
+`Echo command to chat` is optional and defaults off. When enabled, the UI runs the action first, then queues the equivalent chat command such as `!gdraw 6`. Echo failures do not undo the local operation, and echoed messages still use VaexCore's outbound rate limit.
+
+Use the testing tools before stream:
+
+1. Start the setup console with `npm run setup`.
+2. Use `Run command` as a viewer to confirm protected `!g*` commands are denied.
+3. Use `Run command` as broadcaster or the giveaway buttons to start a test giveaway.
+4. Add simulated entrants.
+5. Close, draw, reroll if needed, mark claimed, mark delivered, and end.
+6. Check the audit log for `local-ui` and `simulated-chat` actions.
+
+Recommended stream flow:
+
+1. Run `npm run setup`.
+2. Validate the Twitch connection.
+3. Send the setup test message.
+4. Run `npm run dev` in another terminal.
+5. Keep `http://localhost:3434` open as the operator console.
+6. Confirm `!ping` in Twitch chat and wait for `LIVE CHAT CONFIRMED`.
+7. Start, close, and draw the giveaway from either the UI or chat commands.
+
+## Using VaexCore As A macOS App
+
+The macOS app wraps the same local setup/operator console. It starts the local server internally and opens a VaexCore window, so you do not need to run `npm run setup` manually.
+
+Build the app:
+
+```bash
+npm run app:build
+```
+
+Create a DMG:
+
+```bash
+npm run app:dist
+```
+
+Outputs are written to:
+
+```text
+release/
+```
+
+The `.app` bundle can be copied into `/Applications`. The DMG, when built, can be opened and installed normally.
+
+App-local data is stored under:
+
+```text
+~/Library/Application Support/VaexCore
+```
+
+That folder contains `local.secrets.json` and `data/vaexcore.sqlite`. To reset the app config, quit VaexCore and remove that folder. Development CLI mode still uses the project-local config path unless `VAEXCORE_CONFIG_DIR` is set.
+
+CLI fallback remains available:
+
+```bash
+npm run setup
+npm run dev
+```
+
 ## Current Commands
 
 - `!ping`: replies with `pong`

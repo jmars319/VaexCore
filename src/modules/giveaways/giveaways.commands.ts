@@ -1,6 +1,13 @@
 import { PermissionLevel } from "../../core/permissions";
 import type { CommandRouter } from "../../core/commandRouter";
 import type { RuntimeStatus } from "../../core/runtimeStatus";
+import {
+  limits,
+  normalizeKeyword,
+  normalizeLogin,
+  parseSafeInteger,
+  sanitizeGiveawayTitle
+} from "../../core/security";
 import type { GiveawaysService } from "./giveaways.service";
 
 type RegisterGiveawayCommandsOptions = {
@@ -47,7 +54,7 @@ export const registerGiveawayCommands = ({
 
     const options = parseOptions(rawArgs);
     const winnerCount = parsePositiveInteger(options.codes);
-    const keyword = options.keyword?.replace(/^!/, "").toLowerCase();
+    const keyword = options.keyword ? normalizeKeyword(options.keyword) : undefined;
 
     if (!winnerCount || !keyword) {
       reply('Usage: !gstart codes=6 keyword=enter title="IOI code giveaway"');
@@ -58,7 +65,7 @@ export const registerGiveawayCommands = ({
       actor: message,
       winnerCount,
       keyword,
-      title: options.title ?? "Untitled giveaway"
+      title: sanitizeGiveawayTitle(options.title, "Untitled giveaway")
     });
 
     reply(
@@ -108,7 +115,7 @@ export const registerGiveawayCommands = ({
   });
 
   router.register("greroll", PermissionLevel.Moderator, ({ message, args, reply }) => {
-    const username = args[0];
+    const username = args[0] ? normalizeLogin(args[0]) : undefined;
 
     if (!username) {
       reply("Usage: !greroll username");
@@ -128,7 +135,7 @@ export const registerGiveawayCommands = ({
   });
 
   router.register("gclaim", PermissionLevel.Moderator, ({ message, args, reply }) => {
-    const username = args[0];
+    const username = args[0] ? normalizeLogin(args[0]) : undefined;
 
     if (!username) {
       reply("Usage: !gclaim username");
@@ -140,7 +147,7 @@ export const registerGiveawayCommands = ({
   });
 
   router.register("gdeliver", PermissionLevel.Moderator, ({ message, args, reply }) => {
-    const username = args[0];
+    const username = args[0] ? normalizeLogin(args[0]) : undefined;
 
     if (!username) {
       reply("Usage: !gdeliver username");
@@ -162,8 +169,11 @@ const parsePositiveInteger = (value: string | undefined) => {
     return undefined;
   }
 
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return parseSafeInteger(value, {
+    field: "Winner count",
+    min: 1,
+    max: limits.winnerCountMax
+  });
 };
 
 const parseOptions = (rawArgs: string) => {

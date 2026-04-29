@@ -10,6 +10,7 @@ import { createDbClient } from "../db/client";
 import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 import { createRuntimeStatus } from "../core/runtimeStatus";
 import { registerStatusCommands } from "../core/statusCommands";
+import { normalizeLogin, sanitizeCommandText, sanitizeDisplayName } from "../core/security";
 
 const localEnvSchema = z.object({
   COMMAND_PREFIX: z.string().min(1).default("!"),
@@ -26,8 +27,8 @@ const runtimeStatus = createRuntimeStatus("local");
 const parseLocalLine = (line: string) => {
   const match = /^(?<speaker>[A-Za-z0-9_]+):\s*(?<message>.*)$/.exec(line);
   const speaker = match?.groups?.speaker ?? "broadcaster";
-  const message = match?.groups?.message ?? line;
-  const normalized = speaker.toLowerCase();
+  const message = sanitizeCommandText(match?.groups?.message ?? line);
+  const normalized = normalizeLogin(speaker);
 
   if (normalized === "mod") {
     return {
@@ -43,7 +44,7 @@ const parseLocalLine = (line: string) => {
     return {
       userId: "local-broadcaster",
       login: "broadcaster",
-      displayName: "Broadcaster",
+    displayName: "Broadcaster",
       message,
       badges: ["broadcaster"]
     };
@@ -52,7 +53,7 @@ const parseLocalLine = (line: string) => {
   return {
     userId: `local-${normalized}`,
     login: normalized,
-    displayName: speaker,
+    displayName: sanitizeDisplayName(speaker, normalized),
     message,
     badges: []
   };

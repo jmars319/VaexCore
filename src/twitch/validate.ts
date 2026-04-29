@@ -2,9 +2,9 @@ import type { Logger } from "../core/logger";
 import { createTwitchHeaders, type TwitchAuthOptions } from "./auth";
 import type { TwitchUser } from "./users";
 
-const requiredScopes = ["user:read:chat", "user:write:chat"] as const;
+export const requiredTwitchScopes = ["user:read:chat", "user:write:chat"] as const;
 
-type TokenValidation = {
+export type TokenValidation = {
   client_id: string;
   login: string;
   scopes: string[];
@@ -27,7 +27,7 @@ export const validateLiveTwitch = async ({
 }: ValidateLiveTwitchOptions) => {
   const token = await validateToken(accessToken);
 
-  const missingScopes = requiredScopes.filter(
+  const missingScopes = requiredTwitchScopes.filter(
     (scope) => !token.scopes.includes(scope)
   );
 
@@ -90,7 +90,7 @@ export const validateLiveTwitch = async ({
   return { token, botUser, broadcasterUser };
 };
 
-const validateToken = async (accessToken: string) => {
+export const validateToken = async (accessToken: string) => {
   const response = await fetch("https://id.twitch.tv/oauth2/validate", {
     headers: {
       Authorization: `Bearer ${accessToken}`
@@ -107,7 +107,7 @@ const validateToken = async (accessToken: string) => {
   return (await response.json()) as TokenValidation;
 };
 
-const getTwitchUserById = async (
+export const getTwitchUserById = async (
   auth: TwitchAuthOptions,
   id: string
 ): Promise<TwitchUser | undefined> => {
@@ -119,6 +119,24 @@ const getTwitchUserById = async (
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Failed to fetch Twitch user ${id}: ${response.status} ${body}`);
+  }
+
+  const body = (await response.json()) as { data: TwitchUser[] };
+  return body.data[0];
+};
+
+export const getTwitchUserByLogin = async (
+  auth: TwitchAuthOptions,
+  login: string
+): Promise<TwitchUser | undefined> => {
+  const params = new URLSearchParams({ login });
+  const response = await fetch(`https://api.twitch.tv/helix/users?${params}`, {
+    headers: createTwitchHeaders(auth)
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Failed to fetch Twitch user ${login}: ${response.status} ${body}`);
   }
 
   const body = (await response.json()) as { data: TwitchUser[] };

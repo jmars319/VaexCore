@@ -1,6 +1,15 @@
 import type { DbClient } from "../../db/client";
 import type { Logger } from "../../core/logger";
 import type { ChatMessage } from "../../core/chatMessage";
+import {
+  limits,
+  normalizeKeyword,
+  normalizeLogin,
+  parseSafeInteger,
+  safeJsonStringify,
+  sanitizeDisplayName,
+  sanitizeGiveawayTitle
+} from "../../core/security";
 import type { Giveaway, GiveawayEntry, GiveawayWinner } from "./giveaways.types";
 
 type StartGiveawayInput = {
@@ -34,6 +43,13 @@ export class GiveawaysService {
     }
 
     const now = timestamp();
+    const title = sanitizeGiveawayTitle(input.title);
+    const keyword = normalizeKeyword(input.keyword);
+    const winnerCount = parseSafeInteger(input.winnerCount, {
+      field: "Winner count",
+      min: 1,
+      max: limits.winnerCountMax
+    });
     const result = this.db
       .prepare(
         `
@@ -42,9 +58,9 @@ export class GiveawaysService {
         `
       )
       .run({
-        title: input.title,
-        keyword: input.keyword.toLowerCase(),
-        winnerCount: input.winnerCount,
+        title,
+        keyword,
+        winnerCount,
         createdAt: now,
         openedAt: now
       });
@@ -83,9 +99,14 @@ export class GiveawaysService {
       return { status: "not_open" as const };
     }
 
-    if (keyword.toLowerCase() !== giveaway.keyword) {
+    const normalizedKeyword = normalizeKeyword(keyword);
+
+    if (normalizedKeyword !== giveaway.keyword) {
       return { status: "ignored" as const };
     }
+
+    const login = normalizeLogin(event.userLogin);
+    const displayName = sanitizeDisplayName(event.userDisplayName, login);
 
     const result = this.db
       .prepare(
@@ -99,8 +120,8 @@ export class GiveawaysService {
       .run({
         giveawayId: giveaway.id,
         twitchUserId: event.userId,
-        login: event.userLogin,
-        displayName: event.userDisplayName,
+        login,
+        displayName,
         enteredAt: timestamp()
       });
 
@@ -113,7 +134,7 @@ export class GiveawaysService {
           operatorEvent: "giveaway entry count changed",
           giveawayId: giveaway.id,
           entries: count,
-          entrant: event.userLogin,
+          entrant: login,
           entrantUserId: event.userId,
           mode: event.source
         },
@@ -124,7 +145,7 @@ export class GiveawaysService {
         {
           operatorEvent: "giveaway duplicate entry ignored",
           giveawayId: giveaway.id,
-          entrant: event.userLogin,
+          entrant: login,
           entrantUserId: event.userId,
           mode: event.source
         },
@@ -136,6 +157,24 @@ export class GiveawaysService {
       status: entered ? ("entered" as const) : ("duplicate" as const),
       giveaway
     };
+  }
+
+  addSimulatedEntrant(actor: ChatMessage, entrant: ChatMessage) {
+    const giveaway = this.getActiveGiveaway();
+
+    if (!giveaway) {
+      throw new Error("No active giveaway");
+    }
+
+    const result = this.enter(entrant, giveaway.keyword);
+
+    this.audit(actor, "giveaway.simulated_entry", String(giveaway.id), {
+      entrantLogin: entrant.userLogin,
+      entrantUserId: entrant.userId,
+      result: result.status
+    });
+
+    return result;
   }
 
   status() {
@@ -197,7 +236,11 @@ export class GiveawaysService {
 
     const remainingWinnerSlots =
       giveaway.winner_count - this.countActiveWinners(giveaway.id);
-    const count = Math.max(1, requestedCount ?? remainingWinnerSlots);
+    const count = parseSafeInteger(requestedCount ?? remainingWinnerSlots, {
+      field: "Winner count",
+      min: 1,
+      max: limits.winnerCountMax
+    });
     const drawCount = Math.min(count, Math.max(0, remainingWinnerSlots));
     const candidates = this.getDrawableEntries(giveaway.id);
     const finalDrawCount = Math.min(drawCount, candidates.length);
@@ -248,13 +291,14 @@ export class GiveawaysService {
 
   reroll(actor: ChatMessage, username: string) {
     const giveaway = this.requireActiveGiveaway();
+    const login = normalizeLogin(username);
 
     if (giveaway.status === "open") {
       this.logger.warn(
         {
           operatorEvent: "giveaway reroll failed",
           giveawayId: giveaway.id,
-          username,
+          username: login,
           reason: "giveaway_open",
           actor: actor.userLogin,
           mode: actor.source
@@ -264,21 +308,21 @@ export class GiveawaysService {
       throw new Error("Close the giveaway before rerolling winners");
     }
 
-    const winner = this.findActiveWinner(giveaway.id, username);
+    const winner = this.findActiveWinner(giveaway.id, login);
 
     if (!winner) {
       this.logger.warn(
         {
           operatorEvent: "giveaway reroll failed",
           giveawayId: giveaway.id,
-          username,
+          username: login,
           reason: "winner_not_found",
           actor: actor.userLogin,
           mode: actor.source
         },
         "Giveaway reroll failed"
       );
-      throw new Error(`No active winner found for ${username}`);
+      throw new Error(`No active winner found for ${login}`);
     }
 
     this.db
@@ -321,10 +365,11 @@ export class GiveawaysService {
 
   claim(actor: ChatMessage, username: string) {
     const giveaway = this.requireActiveGiveaway();
-    const winner = this.findActiveWinner(giveaway.id, username);
+    const login = normalizeLogin(username);
+    const winner = this.findActiveWinner(giveaway.id, login);
 
     if (!winner) {
-      throw new Error(`No active winner found for ${username}`);
+      throw new Error(`No active winner found for ${login}`);
     }
 
     const now = timestamp();
@@ -353,10 +398,11 @@ export class GiveawaysService {
 
   deliver(actor: ChatMessage, username: string) {
     const giveaway = this.requireActiveGiveaway();
-    const winner = this.findActiveWinner(giveaway.id, username);
+    const login = normalizeLogin(username);
+    const winner = this.findActiveWinner(giveaway.id, login);
 
     if (!winner) {
-      throw new Error(`No active winner found for ${username}`);
+      throw new Error(`No active winner found for ${login}`);
     }
 
     const now = timestamp();
@@ -422,6 +468,54 @@ export class GiveawaysService {
     );
 
     return ended;
+  }
+
+  getOperatorState() {
+    const giveaway = this.getActiveGiveaway();
+
+    if (!giveaway) {
+      return {
+        giveaway: undefined,
+        entries: [] as GiveawayEntry[],
+        winners: [] as GiveawayWinner[],
+        counts: {
+          entries: 0,
+          activeWinners: 0,
+          rerolledWinners: 0
+        }
+      };
+    }
+
+    return {
+      giveaway,
+      entries: this.getEntries(giveaway.id),
+      winners: this.getWinners(giveaway.id),
+      counts: {
+        entries: this.countEntries(giveaway.id),
+        activeWinners: this.countActiveWinners(giveaway.id),
+        rerolledWinners: this.countRerolledWinners(giveaway.id)
+      }
+    };
+  }
+
+  getRecentAuditLogs(limit = 100) {
+    return this.db
+      .prepare(
+        `
+          SELECT *
+          FROM audit_logs
+          ORDER BY created_at DESC
+          LIMIT ?
+        `
+      )
+      .all(limit) as Array<{
+      id: number;
+      actor_twitch_user_id: string;
+      action: string;
+      target: string | null;
+      metadata_json: string;
+      created_at: string;
+    }>;
   }
 
   private getActiveGiveaway() {
@@ -516,6 +610,19 @@ export class GiveawaysService {
       .all(giveawayId) as GiveawayEntry[];
   }
 
+  private getEntries(giveawayId: number) {
+    return this.db
+      .prepare(
+        `
+          SELECT *
+          FROM giveaway_entries
+          WHERE giveaway_id = ?
+          ORDER BY entered_at ASC
+        `
+      )
+      .all(giveawayId) as GiveawayEntry[];
+  }
+
   private getUnresolvedWinners(giveawayId: number) {
     return this.db
       .prepare(
@@ -603,7 +710,8 @@ export class GiveawaysService {
         actorTwitchUserId: actor.userId,
         action,
         target,
-        metadataJson: JSON.stringify({
+        metadataJson: safeJsonStringify({
+          actionType: action,
           actorLogin: actor.userLogin,
           ...metadata
         }),

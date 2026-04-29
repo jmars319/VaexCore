@@ -2,6 +2,11 @@ import WebSocket from "ws";
 import type { ChatMessage } from "../core/chatMessage";
 import type { Logger } from "../core/logger";
 import type { RuntimeStatus } from "../core/runtimeStatus";
+import {
+  normalizeLogin,
+  sanitizeChatMessage,
+  sanitizeDisplayName
+} from "../core/security";
 import { createTwitchHeaders } from "./auth";
 import { explainTwitchHttpError } from "./errors";
 import type { ChatBadge, EventSubMessage } from "./types";
@@ -243,15 +248,23 @@ export class TwitchEventSubClient {
       return;
     }
 
-    const normalized = normalizeEventSubChatMessage({
-      id: event.message_id,
-      text: event.message.text,
-      broadcasterUserId: event.broadcaster_user_id,
-      userId: event.chatter_user_id,
-      userLogin: event.chatter_user_login,
-      userDisplayName: event.chatter_user_name,
-      badges: event.badges ?? []
-    });
+    let normalized: ChatMessage;
+
+    try {
+      normalized = normalizeEventSubChatMessage({
+        id: event.message_id,
+        text: event.message.text,
+        broadcasterUserId: event.broadcaster_user_id,
+        userId: event.chatter_user_id,
+        userLogin: event.chatter_user_login,
+        userDisplayName: event.chatter_user_name,
+        badges: event.badges ?? []
+      });
+    } catch (error) {
+      this.options.logger.warn({ error }, "Malformed EventSub chat message ignored");
+      return;
+    }
+
     this.options.logger.debug({ chatMessage: normalized }, "Normalized ChatMessage");
 
     await this.options.onChatMessage(normalized);
@@ -370,15 +383,17 @@ const normalizeEventSubChatMessage = (input: {
   badges: ChatBadge[];
 }): ChatMessage => {
   const badges = input.badges.map((badge) => badge.set_id);
+  const userLogin = normalizeLogin(input.userLogin);
+  const userDisplayName = sanitizeDisplayName(input.userDisplayName, userLogin);
   const isBroadcaster =
     input.userId === input.broadcasterUserId || badges.includes("broadcaster");
 
   return {
     id: input.id,
-    text: input.text,
+    text: sanitizeChatMessage(input.text),
     userId: input.userId,
-    userLogin: input.userLogin,
-    userDisplayName: input.userDisplayName,
+    userLogin,
+    userDisplayName,
     broadcasterUserId: input.broadcasterUserId,
     badges,
     isBroadcaster,

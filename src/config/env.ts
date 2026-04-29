@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z, ZodError } from "zod";
+import { readLocalSecrets } from "./localSecrets";
 
 const modeSchema = z.enum(["local", "live"]).default("live");
 const baseEnvSchema = z.object({
@@ -38,10 +39,14 @@ export type LiveEnv = Extract<Env, { mode: "live" }>;
 
 export const loadEnv = () => {
   const baseEnv = baseEnvSchema.parse(process.env);
+  const secrets = readLocalSecrets();
+  const twitch = secrets.twitch;
 
-  if (baseEnv.VAEXCORE_MODE === "local") {
+  const mode = process.env.VAEXCORE_MODE ?? secrets.mode;
+
+  if (mode === "local") {
     return {
-      mode: baseEnv.VAEXCORE_MODE,
+      mode,
       commandPrefix: baseEnv.COMMAND_PREFIX,
       logLevel: baseEnv.LOG_LEVEL,
       debug: baseEnv.VAEXCORE_DEBUG,
@@ -52,7 +57,13 @@ export const loadEnv = () => {
 
   const env = liveEnvSchema.parse({
     ...process.env,
-    VAEXCORE_MODE: "live"
+    VAEXCORE_MODE: "live",
+    TWITCH_CLIENT_ID: process.env.TWITCH_CLIENT_ID ?? twitch.clientId,
+    TWITCH_USER_ACCESS_TOKEN:
+      process.env.TWITCH_USER_ACCESS_TOKEN ?? twitch.accessToken,
+    TWITCH_BROADCASTER_USER_ID:
+      process.env.TWITCH_BROADCASTER_USER_ID ?? twitch.broadcasterUserId,
+    TWITCH_BOT_USER_ID: process.env.TWITCH_BOT_USER_ID ?? twitch.botUserId
   });
 
   return {
