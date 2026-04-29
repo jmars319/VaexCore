@@ -3,7 +3,8 @@ import type { Logger } from "./logger";
 
 type MessageQueueOptions = {
   logger: Logger;
-  send: (message: string) => Promise<void>;
+  send: (message: string) => Promise<"sent" | "retry">;
+  onSent?: (message: string) => void;
 };
 
 export class MessageQueue {
@@ -59,8 +60,15 @@ export class MessageQueue {
     this.processing = true;
 
     try {
-      await this.options.send(message);
+      const result = await this.options.send(message);
+
+      if (result === "retry") {
+        this.queue.unshift(message);
+        return;
+      }
+
       this.options.logger.info({ message }, "Outbound chat message sent");
+      this.options.onSent?.(message);
     } catch (error) {
       this.options.logger.error({ error, message }, "Outbound chat send failed");
     } finally {

@@ -1,8 +1,10 @@
 import WebSocket from "ws";
+import type { ChatMessage } from "../core/chatMessage";
 import type { Logger } from "../core/logger";
+import type { RuntimeStatus } from "../core/runtimeStatus";
 import { createTwitchHeaders } from "./auth";
 import { explainTwitchHttpError } from "./errors";
-import type { ChatMessageEvent, EventSubMessage } from "./types";
+import type { ChatBadge, EventSubMessage } from "./types";
 
 type EventSubOptions = {
   eventSubUrl: string;
@@ -11,13 +13,18 @@ type EventSubOptions = {
   broadcasterUserId: string;
   botUserId: string;
   logger: Logger;
-  onChatMessage: (event: ChatMessageEvent) => Promise<void> | void;
+  debugPayloads: boolean;
+  runtimeStatus: RuntimeStatus;
+  onChatMessage: (message: ChatMessage) => Promise<void> | void;
 };
 
 export class TwitchEventSubClient {
+  private readonly seenMessageIds = new Set<string>();
+  private readonly seenMessageIdQueue: string[] = [];
   private socket: WebSocket | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private manuallyClosed = false;
+  private reconnectAttempt = 0;
 
   constructor(private readonly options: EventSubOptions) {}
 
@@ -65,6 +72,7 @@ export class TwitchEventSubClient {
       });
 
       nextSocket.on("message", (raw) => {
+        this.logRawPayload(raw.toString());
         void this.handleRawMessage(
           nextSocket,
           raw.toString(),
@@ -91,6 +99,8 @@ export class TwitchEventSubClient {
 
         if (wasActiveSocket) {
           this.socket = undefined;
+          this.options.runtimeStatus.eventSubConnected = false;
+          this.options.runtimeStatus.chatSubscriptionActive = false;
         }
 
         if (!settled) {
@@ -169,9 +179,13 @@ export class TwitchEventSubClient {
       }
 
       this.options.logger.info({ sessionId }, "EventSub session welcomed");
+      this.options.runtimeStatus.eventSubConnected = true;
+      this.options.runtimeStatus.sessionId = sessionId;
+      this.reconnectAttempt = 0;
 
       if (!twitchInitiatedReconnect) {
         await this.subscribeToChatMessages(sessionId);
+        this.options.runtimeStatus.chatSubscriptionActive = true;
       }
 
       if (previousSocket && previousSocket !== socket) {
@@ -204,6 +218,14 @@ export class TwitchEventSubClient {
     }
 
     if (type === "notification") {
+      if (this.isDuplicate(message.metadata.message_id)) {
+        this.options.logger.debug(
+          { messageId: message.metadata.message_id },
+          "Duplicate EventSub notification ignored"
+        );
+        return false;
+      }
+
       await this.handleNotification(message);
     }
 
@@ -221,46 +243,71 @@ export class TwitchEventSubClient {
       return;
     }
 
-    await this.options.onChatMessage({
-      mode: "live",
-      broadcasterUserId: event.broadcaster_user_id,
-      broadcasterLogin: event.broadcaster_user_login,
-      broadcasterName: event.broadcaster_user_name,
-      chatterUserId: event.chatter_user_id,
-      chatterLogin: event.chatter_user_login,
-      chatterName: event.chatter_user_name,
-      messageId: event.message_id,
+    const normalized = normalizeEventSubChatMessage({
+      id: event.message_id,
       text: event.message.text,
+      broadcasterUserId: event.broadcaster_user_id,
+      userId: event.chatter_user_id,
+      userLogin: event.chatter_user_login,
+      userDisplayName: event.chatter_user_name,
       badges: event.badges ?? []
     });
+    this.options.logger.debug({ chatMessage: normalized }, "Normalized ChatMessage");
+
+    await this.options.onChatMessage(normalized);
   }
 
   private async subscribeToChatMessages(sessionId: string) {
-    const response = await fetch("https://api.twitch.tv/helix/eventsub/subscriptions", {
-      method: "POST",
-      headers: createTwitchHeaders({
-        clientId: this.options.clientId,
-        accessToken: this.options.accessToken
-      }),
-      body: JSON.stringify({
-        type: "channel.chat.message",
-        version: "1",
-        condition: {
-          broadcaster_user_id: this.options.broadcasterUserId,
-          user_id: this.options.botUserId
-        },
-        transport: {
-          method: "websocket",
-          session_id: sessionId
-        }
-      })
-    });
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      this.options.logger.info(
+        { attempt, sessionId },
+        "EventSub chat subscription request sent"
+      );
 
-    if (!response.ok) {
-      throw await explainTwitchHttpError(response, "eventsub_chat_subscription");
+      const response = await fetch("https://api.twitch.tv/helix/eventsub/subscriptions", {
+        method: "POST",
+        headers: createTwitchHeaders({
+          clientId: this.options.clientId,
+          accessToken: this.options.accessToken
+        }),
+        body: JSON.stringify({
+          type: "channel.chat.message",
+          version: "1",
+          condition: {
+            broadcaster_user_id: this.options.broadcasterUserId,
+            user_id: this.options.botUserId
+          },
+          transport: {
+            method: "websocket",
+            session_id: sessionId
+          }
+        })
+      });
+
+      if (response.ok) {
+        this.options.logger.info(
+          { operatorEvent: "chat subscription created", subscriptionType: "channel.chat.message" },
+          "Chat subscription created"
+        );
+        return;
+      }
+
+      const error = await explainTwitchHttpError(
+        response,
+        "eventsub_chat_subscription"
+      );
+
+      this.options.logger.error(
+        { error, attempt },
+        "EventSub chat subscription attempt failed"
+      );
+
+      if (attempt === 3) {
+        throw error;
+      }
+
+      await delay(1000 * attempt);
     }
-
-    this.options.logger.info("Subscribed to channel.chat.message");
   }
 
   private scheduleReconnect() {
@@ -268,9 +315,77 @@ export class TwitchEventSubClient {
       return;
     }
 
+    this.reconnectAttempt += 1;
+    const delayMs = Math.min(30000, 1000 * 2 ** (this.reconnectAttempt - 1));
+
+    this.options.logger.warn(
+      { attempt: this.reconnectAttempt, delayMs },
+      "EventSub reconnect scheduled"
+    );
+
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.connect();
-    }, 5000);
+    }, delayMs);
+  }
+
+  private isDuplicate(messageId: string) {
+    if (this.seenMessageIds.has(messageId)) {
+      return true;
+    }
+
+    this.seenMessageIds.add(messageId);
+    this.seenMessageIdQueue.push(messageId);
+
+    while (this.seenMessageIdQueue.length > 1000) {
+      const expired = this.seenMessageIdQueue.shift();
+
+      if (expired) {
+        this.seenMessageIds.delete(expired);
+      }
+    }
+
+    return false;
+  }
+
+  private logRawPayload(raw: string) {
+    if (!this.options.debugPayloads) {
+      return;
+    }
+
+    const truncated = raw.length > 4000 ? `${raw.slice(0, 4000)}...` : raw;
+    this.options.logger.debug({ payload: truncated }, "Raw EventSub payload");
   }
 }
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const normalizeEventSubChatMessage = (input: {
+  id: string;
+  text: string;
+  broadcasterUserId: string;
+  userId: string;
+  userLogin: string;
+  userDisplayName: string;
+  badges: ChatBadge[];
+}): ChatMessage => {
+  const badges = input.badges.map((badge) => badge.set_id);
+  const isBroadcaster =
+    input.userId === input.broadcasterUserId || badges.includes("broadcaster");
+
+  return {
+    id: input.id,
+    text: input.text,
+    userId: input.userId,
+    userLogin: input.userLogin,
+    userDisplayName: input.userDisplayName,
+    broadcasterUserId: input.broadcasterUserId,
+    badges,
+    isBroadcaster,
+    isMod: badges.includes("moderator"),
+    isVip: badges.includes("vip"),
+    isSubscriber: badges.includes("subscriber"),
+    source: "eventsub",
+    receivedAt: new Date()
+  };
+};

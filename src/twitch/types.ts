@@ -4,19 +4,6 @@ export type ChatBadge = {
   info: string;
 };
 
-export type ChatMessageEvent = {
-  mode: "live" | "local";
-  broadcasterUserId: string;
-  broadcasterLogin: string;
-  broadcasterName: string;
-  chatterUserId: string;
-  chatterLogin: string;
-  chatterName: string;
-  messageId: string;
-  text: string;
-  badges: ChatBadge[];
-};
-
 export type EventSubMessage = {
   metadata: {
     message_id: string;
