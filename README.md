@@ -172,8 +172,8 @@ http://localhost:3434
 
 The console is organized into durable sections:
 
-- `Dashboard`: high-level Twitch, queue, chat, active giveaway readiness, and preflight rehearsal.
-- `Live Mode`: compact stream-night state, status-to-chat, panic resend, outbound failure logs, and recap copy.
+- `Dashboard`: high-level Twitch, queue, chat, active giveaway readiness, live runbook, and preflight rehearsal.
+- `Live Mode`: compact stream-night state, live runbook, status-to-chat, panic resend, outbound failure logs, and recap copy.
 - `Giveaways`: start, close, draw, reroll, claim, deliver, end giveaways, manage reminder timing, edit giveaway chat templates, and review the latest recap.
 - `Chat Tools`: send chat messages, send test messages, edit local operator message presets, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
@@ -287,6 +287,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Live Mode` keeps the current operator state explicit: `entries open`, `ready to draw`, `delivery pending`, `safe to end`, or `giveaway ended`. It can send the current giveaway status to chat, panic-resend the latest failed critical giveaway message, show outbound failure logs separately, and copy a post-stream recap for notes.
 - `Queue Health` and `Recovery Checklist` show pending queue age, retry delay, send throttle delay, failure category, latest failed action, resend safety, and concrete recovery steps before an operator retries a critical message. Auth/config failures do not blindly retry; Twitch rate limits and transient network failures retry with queue-owned backoff.
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
+- `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
 
 Current chat command syntax:
 

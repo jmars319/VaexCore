@@ -287,6 +287,7 @@ function renderDashboard() {
       })
     ]),
     renderLiveStateCard({ prefix: "dashboard" }),
+    renderLiveRunbookCard({ prefix: "dashboard" }),
     renderBotRuntimeCard(runtime),
     renderPreflightCard(),
     card("Readiness", [
@@ -320,6 +321,7 @@ function renderLiveMode() {
     readiness.blockers.length
       ? card("Blockers", [list(readiness.blockers, "bad")])
       : card("Ready Summary", [callout("Twitch connection ready", "ok")]),
+    renderLiveRunbookCard({ prefix: "live" }),
     renderQueueHealthCard(),
     renderRecoveryChecklistCard(),
     renderPanicResendCard(),
@@ -358,6 +360,39 @@ function renderLiveStateCard(options = {}) {
       actionButton("Panic resend latest critical", { id: `${prefix}PanicResendCritical`, variant: "danger", busyKey: "resendCriticalGiveaway", onClick: resendCriticalGiveaway }),
       actionButton("Run preflight", { id: `${prefix}RunPreflight`, variant: "secondary", busyKey: "runPreflight", onClick: runPreflight }),
       actionButton("Copy recap", { id: `${prefix}CopyRecap`, variant: "secondary", busyKey: "copyRecap", onClick: copyRecap })
+    ])
+  ]);
+}
+
+function renderLiveRunbookCard(options = {}) {
+  const runbook = liveRunbookSteps();
+  const primary = runbook[0];
+  const blockers = getReadiness().blockers;
+  const prefix = options.prefix || "runbook";
+
+  return card("Live Runbook", [
+    statusGrid([
+      ["Current Priority", primary?.label || "Monitor", !primary || primary.tone !== "bad"],
+      ["Blockers", blockers.length, blockers.length === 0],
+      ["Queue", state.status?.runtime?.queueHealth?.status || "unknown", state.status?.runtime?.queueHealth?.status !== "blocked"],
+      ["Recovery", state.status?.runtime?.outboundRecovery?.needed ? "needed" : "clear", !state.status?.runtime?.outboundRecovery?.needed]
+    ]),
+    primary ? callout(primary.detail, primary.tone) : callout("No live runbook action needed. Keep monitoring chat and queue health.", "ok"),
+    dataTable(["Priority", "State", "Action"], runbook.map((step, index) => [
+      `${index + 1}. ${step.label}`,
+      h("span", { className: step.tone || "muted", text: step.detail }),
+      step.actionLabel
+        ? actionButton(step.actionLabel, {
+            id: `${prefix}-runbook-${step.id}`,
+            variant: step.variant || "secondary",
+            disabled: step.disabled,
+            onClick: step.onClick
+          })
+        : ""
+    ])),
+    h("div", { className: "actions" }, [
+      actionButton("Run preflight", { id: `${prefix}RunbookPreflight`, variant: "secondary", busyKey: "runPreflight", onClick: runPreflight }),
+      actionButton("Copy incident note", { id: `${prefix}CopyIncidentNote`, variant: "secondary", busyKey: "copyIncidentNote", onClick: copyIncidentNote })
     ])
   ]);
 }
@@ -1200,6 +1235,149 @@ function getReadiness() {
   };
 }
 
+function liveRunbookSteps() {
+  const runtime = state.status?.runtime || {};
+  const summary = state.giveaway?.summary || state.status?.giveaway || {};
+  const recovery = runtime.outboundRecovery || {};
+  const health = runtime.queueHealth || {};
+  const process = runtime.botProcess || {};
+  const steps = [];
+
+  if (!isTwitchSetupReady()) {
+    steps.push({
+      id: "setup-guide",
+      label: "Complete setup",
+      detail: "Setup is incomplete. Open Settings -> Setup Guide.",
+      tone: "bad",
+      actionLabel: "Open Setup Guide",
+      onClick: openSetupGuide
+    });
+    return steps;
+  }
+
+  if (!runtime.tokenValid || !runtime.requiredScopesPresent) {
+    steps.push({
+      id: "validate",
+      label: "Validate Twitch",
+      detail: "Run Validate Setup so chat sends and recovery actions are allowed.",
+      tone: "bad",
+      actionLabel: "Validate setup",
+      onClick: validateSetup
+    });
+    return steps;
+  }
+
+  if (!process.running) {
+    steps.push({
+      id: "start-bot",
+      label: "Start bot",
+      detail: "The live bot listener is stopped.",
+      tone: "warn",
+      actionLabel: "Start Bot",
+      onClick: startBot,
+      disabled: !canStartBot(runtime)
+    });
+  } else if (!runtime.eventSubConnected || !runtime.chatSubscriptionActive) {
+    steps.push({
+      id: "wait-eventsub",
+      label: "Wait for chat listener",
+      detail: "Bot is starting. Wait for EventSub and chat subscription to become active.",
+      tone: "warn"
+    });
+  } else if (!runtime.liveChatConfirmed) {
+    steps.push({
+      id: "confirm-chat",
+      label: "Confirm chat",
+      detail: "Type !ping in Twitch chat and wait for LIVE CHAT CONFIRMED.",
+      tone: "warn"
+    });
+  }
+
+  if (recovery.needed && recovery.severity === "critical") {
+    steps.push({
+      id: "critical-recovery",
+      label: "Recover critical chat",
+      detail: recovery.nextAction || "Resolve the failed critical outbound message.",
+      tone: "bad",
+      actionLabel: "Panic resend",
+      variant: "danger",
+      disabled: !state.validSetup,
+      onClick: resendCriticalGiveaway
+    });
+  } else if (recovery.needed) {
+    steps.push({
+      id: "outbound-recovery",
+      label: "Review outbound failure",
+      detail: recovery.nextAction || "Review the failed outbound message.",
+      tone: "warn"
+    });
+  }
+
+  if (health.status === "blocked" || health.status === "watch") {
+    steps.push({
+      id: "queue-health",
+      label: "Watch queue",
+      detail: health.nextAction || "Watch Queue Health until pending messages clear.",
+      tone: health.status === "blocked" ? "bad" : "warn"
+    });
+  }
+
+  if (summary.status === "open") {
+    steps.push({
+      id: "close-giveaway",
+      label: "Close before draw",
+      detail: "Giveaway entries are open. Close entries before drawing winners.",
+      tone: "ok",
+      actionLabel: "Close entries",
+      onClick: () => runGiveawayAction("close")
+    });
+  } else if (summary.status === "closed" && Number(summary.winnersDrawn || 0) === 0) {
+    steps.push({
+      id: "draw-winners",
+      label: "Draw winners",
+      detail: "Entries are closed and no winners are drawn yet.",
+      tone: "ok",
+      actionLabel: "Draw winners",
+      onClick: () => runGiveawayAction("draw", { count: Number(field("drawCount")?.value || suggestedDrawCount()) }, "Draw winners now?")
+    });
+  } else if (Number(summary.undeliveredWinnersCount || 0) > 0) {
+    steps.push({
+      id: "deliver-prizes",
+      label: "Finish delivery",
+      detail: `${summary.undeliveredWinnersCount} winner(s) still need manual delivery.`,
+      tone: "warn",
+      actionLabel: "Open Giveaways",
+      onClick: openGiveaways
+    });
+  } else if (summary.safeToEnd) {
+    steps.push({
+      id: "end-giveaway",
+      label: "End giveaway",
+      detail: "Active winners are marked delivered. The giveaway can be ended.",
+      tone: "ok",
+      actionLabel: "End giveaway",
+      variant: "danger",
+      onClick: endGiveaway
+    });
+  } else if (summary.status === "none") {
+    steps.push({
+      id: "ready",
+      label: "Ready",
+      detail: "Giveaway controls are ready when stream operations need them.",
+      tone: "ok",
+      actionLabel: "Open Giveaways",
+      onClick: openGiveaways
+    });
+  }
+
+  return steps.length ? steps : [{
+    id: "monitor",
+    label: "Monitor",
+    detail: "No immediate live action needed. Keep watching chat and queue health.",
+    tone: "ok"
+  }];
+}
+
 function liveDisplayState(summary = {}, recap = {}) {
   if ((summary.status || "none") === "none" && recap.available && recap.status === "ended") {
     const pending = Number(recap.pendingDeliveryCount || 0);
@@ -1762,6 +1940,17 @@ async function runPreflight() {
   }, { success: "Preflight completed." });
 }
 
+function openSetupGuide() {
+  state.activeTab = "settings";
+  render();
+  document.getElementById("setupGuide")?.scrollIntoView({ block: "start" });
+}
+
+function openGiveaways() {
+  state.activeTab = "giveaways";
+  render();
+}
+
 async function saveTemplates() {
   await runAction("saveTemplates", async () => {
     const result = await api.saveTemplates(readTemplatePayload());
@@ -1851,6 +2040,36 @@ async function copyWinnerList() {
 
 async function copyRecap() {
   await copyText(postStreamRecapText(), "Post-stream recap copied.");
+}
+
+async function copyIncidentNote() {
+  await copyText(incidentNoteText(), "Incident note copied.");
+}
+
+function incidentNoteText() {
+  const runtime = state.status?.runtime || {};
+  const process = runtime.botProcess || {};
+  const summary = state.giveaway?.summary || state.status?.giveaway || {};
+  const recovery = runtime.outboundRecovery || {};
+  const health = runtime.queueHealth || {};
+  const runbook = liveRunbookSteps();
+
+  return [
+    `VaexCore incident note - ${new Date().toISOString()}`,
+    `Mode: ${runtime.mode || "unknown"}`,
+    `Bot: ${process.status || "unknown"}${process.pid ? ` pid=${process.pid}` : ""}`,
+    `EventSub: ${runtime.eventSubConnected ? "connected" : "not connected"}`,
+    `Chat subscription: ${runtime.chatSubscriptionActive ? "active" : "inactive"}`,
+    `Live chat: ${runtime.liveChatConfirmed ? "confirmed" : "pending"}`,
+    `Queue: ${health.status || "unknown"} - ${health.nextAction || "none"}`,
+    `Recovery: ${recovery.needed ? `${recovery.severity || "needed"} ${recovery.action || ""} ${recovery.failureCategory || ""}`.trim() : "clear"}`,
+    recovery.reason ? `Recovery reason: ${recovery.reason}` : "",
+    `Giveaway: ${summary.status || "none"} ${summary.title || ""}`.trim(),
+    `Entries: ${summary.entryCount || 0}`,
+    `Winners: ${summary.winnersDrawn || 0}/${summary.winnerCount || 0}`,
+    `Undelivered: ${summary.undeliveredWinnersCount || 0}`,
+    `Next runbook action: ${runbook[0]?.label || "Monitor"} - ${runbook[0]?.detail || "No action."}`
+  ].filter(Boolean).join("\n");
 }
 
 async function copyText(text, success) {

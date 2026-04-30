@@ -68,6 +68,9 @@ async function runSmoke() {
   assert(appJs.includes("phase-resend"), "giveaway tab exposes phase-level resend controls");
   assert(appJs.includes("shouldWarnBeforeGiveawayAction"), "giveaway actions warn before continuing after critical chat gaps");
   assert(appJs.includes("Live Mode"), "setup UI exposes compact live mode tab");
+  assert(appJs.includes("Live Runbook"), "dashboard and live mode expose runbook guidance");
+  assert(appJs.includes("Copy incident note"), "runbook can copy incident note");
+  assert(appJs.includes("liveRunbookSteps"), "runbook derives next actions from current state");
   assert(appJs.includes("Send status to chat"), "live mode can send current giveaway status");
   assert(appJs.includes("Panic Resend"), "live mode exposes panic resend area");
   assert(appJs.includes("Post-Stream Recap"), "live mode exposes post-stream recap copy area");
