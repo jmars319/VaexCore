@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogger } from "../core/logger";
 import type { ChatMessage } from "../core/chatMessage";
 import { CommandRouter } from "../core/commandRouter";
-import { MessageQueue } from "../core/messageQueue";
+import { MessageQueue, type MessageQueueEventStatus } from "../core/messageQueue";
 import { createRuntimeStatus } from "../core/runtimeStatus";
 import {
   limits,
@@ -32,6 +32,7 @@ import {
   giveawayDrawMessage,
   giveawayEndMessage,
   giveawayEntryMessage,
+  giveawayLastCallMessage,
   giveawayRerollMessage,
   giveawayStartMessage
 } from "../modules/giveaways/giveaways.messages";
@@ -61,9 +62,14 @@ const oauthStates = new Map<string, number>();
 const db = createDbClient(process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite");
 const giveawaysService = new GiveawaysService({ db, logger });
 const setupRuntimeStatus = createRuntimeStatus("local");
+const outboundHistory = createOutboundHistory();
 const chatQueue = new MessageQueue({
   logger,
-  send: async (message) => sendConfiguredChatMessage(message)
+  send: async (message) => sendConfiguredChatMessage(message),
+  onEvent: (event) => outboundHistory.record({
+    ...event,
+    source: "setup"
+  })
 });
 chatQueue.start();
 setupRuntimeStatus.messageQueueReady = chatQueue.isReady();
@@ -105,6 +111,7 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
     url: `http://localhost:${port}`,
     stop: async () => {
       await stopBotProcess({ force: true });
+      await chatQueue.drain(3000);
       chatQueue.stop();
       db.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -193,6 +200,17 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/outbound-messages") {
+    sendJson(response, 200, getOutboundMessages());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/outbound-messages/resend") {
+    const body = (await readJson(request)) as { id?: string };
+    sendJson(response, 200, await resendOutboundMessage(body.id));
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/giveaway") {
     sendJson(response, 200, getGiveawayState());
     return;
@@ -238,6 +256,25 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoCommand: "!gclose",
       announcements: ({ giveaway }) =>
         giveawayClosedMessage(giveaway, giveawaysService.countEntriesForGiveaway(giveaway.id))
+    }));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/last-call") {
+    sendJson(response, 200, runGiveawayAction(() => {
+      const status = giveawaysService.status();
+
+      if (!status || status.giveaway.status !== "open") {
+        throw new Error("Last call is only available while entries are open.");
+      }
+
+      return {
+        giveaway: status.giveaway,
+        entryCount: status.entries
+      };
+    }, {
+      announcements: ({ giveaway, entryCount }) =>
+        giveawayLastCallMessage(giveaway, entryCount)
     }));
     return;
   }
@@ -700,6 +737,7 @@ const getOperatorStatus = async () => {
       eventSubConnected: botProcess.eventSubConnected,
       chatSubscriptionActive: botProcess.chatSubscriptionActive,
       queueReady: chatQueue.isReady(),
+      outboundChat: outboundHistory.summary(),
       liveChatConfirmed: botProcess.liveChatConfirmed,
       note: botProcess.child
         ? "Live bot runtime is managed by this setup console."
@@ -815,7 +853,7 @@ const stopBotProcess = async (options: { force?: boolean } = {}) => {
   appendBotLog("system", "Stopping live bot process.");
   child.kill("SIGTERM");
 
-  const stopped = await waitForBotExit(child, options.force ? 1500 : 5000);
+  const stopped = await waitForBotExit(child, options.force ? 1500 : 10000);
 
   if (!stopped && options.force) {
     child.kill("SIGKILL");
@@ -869,6 +907,106 @@ const getBotProcessSnapshot = () => ({
   lastError: botProcess.lastError,
   recentLogs: botProcess.recentLogs.slice(-20)
 });
+
+type OutboundMessageSource = "setup" | "bot";
+type OutboundMessageStatus = MessageQueueEventStatus | "resent";
+
+type OutboundMessageRecord = {
+  id: string;
+  source: OutboundMessageSource;
+  status: OutboundMessageStatus;
+  message: string;
+  attempts: number;
+  queuedAt: string;
+  updatedAt: string;
+  reason: string;
+  queueDepth?: number;
+};
+
+type OutboundHistoryEvent = {
+  id: string;
+  source: OutboundMessageSource;
+  status: MessageQueueEventStatus;
+  message?: string;
+  attempts?: number;
+  queuedAt?: string;
+  updatedAt?: string;
+  reason?: string;
+  queueDepth?: number;
+};
+
+function createOutboundHistory() {
+  const records = new Map<string, OutboundMessageRecord>();
+  const list = () =>
+    [...records.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  return {
+    record(event: OutboundHistoryEvent) {
+      const now = new Date().toISOString();
+      const existing = records.get(event.id);
+      const next: OutboundMessageRecord = {
+        id: event.id,
+        source: event.source,
+        status: event.status,
+        message: event.message ?? existing?.message ?? "",
+        attempts: event.attempts ?? existing?.attempts ?? 0,
+        queuedAt: event.queuedAt ?? existing?.queuedAt ?? now,
+        updatedAt: event.updatedAt ?? now,
+        reason: event.reason ?? existing?.reason ?? "",
+        queueDepth: event.queueDepth ?? existing?.queueDepth
+      };
+      records.set(event.id, next);
+      trimOutboundHistory(records);
+      return next;
+    },
+    list() {
+      return list();
+    },
+    find(id: string | undefined) {
+      if (!id) return undefined;
+      return records.get(id);
+    },
+    latestFailed() {
+      return list().find((record) => record.status === "failed");
+    },
+    markResent(id: string, resentMessageId: string) {
+      const existing = records.get(id);
+
+      if (!existing) {
+        return;
+      }
+
+      records.set(id, {
+        ...existing,
+        status: "resent",
+        updatedAt: new Date().toISOString(),
+        reason: `Resent as ${resentMessageId}`
+      });
+    },
+    summary() {
+      const current = list();
+      return {
+        total: current.length,
+        queued: current.filter((record) => record.status === "queued" || record.status === "retrying" || record.status === "sending").length,
+        failed: current.filter((record) => record.status === "failed").length,
+        sent: current.filter((record) => record.status === "sent").length
+      };
+    }
+  };
+}
+
+const trimOutboundHistory = (records: Map<string, OutboundMessageRecord>) => {
+  const max = 100;
+
+  if (records.size <= max) {
+    return;
+  }
+
+  const byUpdatedAt = [...records.values()].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+  for (const record of byUpdatedAt.slice(0, records.size - max)) {
+    records.delete(record.id);
+  }
+};
 
 const getBotRuntimeCommand = () => {
   const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -967,9 +1105,39 @@ const appendBotLog = (stream: string, line: string) => {
 
 const updateBotStatusFromLog = (line: string) => {
   try {
-    const parsed = JSON.parse(line) as { msg?: string; operatorEvent?: string; code?: number; reason?: string };
+    const parsed = JSON.parse(line) as {
+      msg?: string;
+      operatorEvent?: string;
+      code?: number;
+      reason?: unknown;
+      message?: unknown;
+      outboundMessageId?: unknown;
+      outboundStatus?: unknown;
+      attempts?: unknown;
+      attempt?: unknown;
+      queued?: unknown;
+    };
     const msg = parsed.msg ?? "";
     const operatorEvent = parsed.operatorEvent ?? "";
+
+    const outboundMessageId =
+      typeof parsed.outboundMessageId === "string" ? parsed.outboundMessageId : "";
+    const outboundStatus =
+      typeof parsed.outboundStatus === "string" && isOutboundStatus(parsed.outboundStatus)
+        ? parsed.outboundStatus
+        : undefined;
+
+    if (outboundMessageId && outboundStatus) {
+      outboundHistory.record({
+        id: outboundMessageId,
+        source: "bot",
+        status: outboundStatus,
+        message: typeof parsed.message === "string" ? parsed.message : undefined,
+        attempts: parseOptionalNumber(parsed.attempts ?? parsed.attempt),
+        reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
+        queueDepth: parseOptionalNumber(parsed.queued)
+      });
+    }
 
     if (msg === "EventSub WebSocket opened" || msg === "Startup checklist: EventSub connected") {
       botProcess.eventSubConnected = true;
@@ -994,6 +1162,12 @@ const updateBotStatusFromLog = (line: string) => {
   }
 };
 
+const isOutboundStatus = (value: string): value is MessageQueueEventStatus =>
+  ["queued", "sending", "retrying", "sent", "failed"].includes(value);
+
+const parseOptionalNumber = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
 const enqueueChatMessage = async (message: string | undefined) => {
   const text = sanitizeChatMessage(message);
 
@@ -1007,8 +1181,41 @@ const enqueueChatMessage = async (message: string | undefined) => {
     };
   }
 
-  chatQueue.enqueue(text);
-  return { ok: true, queued: true };
+  const outboundMessageId = chatQueue.enqueue(text);
+  return { ok: true, queued: true, outboundMessageId };
+};
+
+const getOutboundMessages = () => ({
+  ok: true,
+  summary: outboundHistory.summary(),
+  messages: outboundHistory.list()
+});
+
+const resendOutboundMessage = async (id: string | undefined) => {
+  const record = outboundHistory.find(id) ?? outboundHistory.latestFailed();
+
+  if (!record) {
+    const outbound = getOutboundMessages();
+    return {
+      ...outbound,
+      ok: false,
+      error: "No failed outbound message is available to resend."
+    };
+  }
+
+  const result = await enqueueChatMessage(record.message);
+
+  if (result.ok && typeof result.outboundMessageId === "string") {
+    outboundHistory.markResent(record.id, result.outboundMessageId);
+  }
+
+  const outbound = getOutboundMessages();
+
+  return {
+    ...outbound,
+    ...result,
+    resentFrom: record.id
+  };
 };
 
 const sendConfiguredChatMessage = async (message: string) => {

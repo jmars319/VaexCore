@@ -92,6 +92,7 @@ messageQueue.start();
 const rl = createInterface({ input, output });
 
 const shutdown = async () => {
+  await messageQueue.drain(2000);
   messageQueue.stop();
   db.close();
   rl.close();

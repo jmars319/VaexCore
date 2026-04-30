@@ -49,6 +49,9 @@ async function runSmoke() {
   assert(appJs.includes("Saved Client ID and Client Secret are intentionally not shown"), "settings UI explains masked credentials");
   assert(appJs.includes("giveawayDraft"), "giveaway form uses draft state across refreshes");
   assert(appJs.includes("updateGiveawayDraft"), "giveaway inputs preserve operator edits during polling");
+  assert(appJs.includes("Outbound Chat History"), "setup UI exposes outbound chat history");
+  assert(appJs.includes("Resend last failed"), "setup UI exposes failed outbound resend");
+  assert(appJs.includes("Send last call"), "setup UI exposes giveaway last-call operator action");
   assert(styles.includes(".tab-panel"), "styles asset loaded");
   assert(styles.includes(".setup-step"), "setup guide styles loaded");
   assert(styles.includes(".runtime-log"), "bot runtime log styles loaded");
@@ -172,6 +175,12 @@ async function runSmoke() {
   });
   assert(chatSend.ok === false, "chat send route rejects until validation passes");
 
+  const outboundInitial = await json("/api/outbound-messages");
+  assert(outboundInitial.ok === true, "outbound message history route exists");
+  assert(Array.isArray(outboundInitial.messages), "outbound message history returns messages");
+  const outboundResendEmpty = await json("/api/outbound-messages/resend", { method: "POST" });
+  assert(outboundResendEmpty.ok === false, "outbound resend reports no failed message clearly");
+
   const viewerDenied = await json("/api/command/simulate", {
     method: "POST",
     body: {
@@ -237,6 +246,7 @@ async function runSmoke() {
     keyword: "enter",
     winnerCount: 2
   });
+  await expectOk("/api/giveaway/last-call");
   await expectOk("/api/giveaway/add-entrant", { login: "alice", displayName: "Alice" });
   await expectOk("/api/giveaway/add-entrant", { login: "bob", displayName: "Bob" });
   await expectOk("/api/giveaway/close");

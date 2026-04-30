@@ -14,41 +14,68 @@ type SendMessageOptions = {
 export class TwitchChatSender {
   constructor(private readonly options: SendMessageOptions) {}
 
-  async send(message: string): Promise<"sent" | "retry"> {
+  async send(message: string): Promise<"sent" | "retry" | "failed"> {
     this.options.logger.info({ length: message.length }, "Twitch chat send attempt");
 
-    const response = await fetch("https://api.twitch.tv/helix/chat/messages", {
-      method: "POST",
-      headers: createTwitchHeaders({
-        clientId: this.options.clientId,
-        accessToken: this.options.accessToken
-      }),
-      body: JSON.stringify({
-        broadcaster_id: this.options.broadcasterId,
-        sender_id: this.options.senderId,
-        message
-      })
-    });
+    let response: Response;
+
+    try {
+      response = await fetch("https://api.twitch.tv/helix/chat/messages", {
+        method: "POST",
+        headers: createTwitchHeaders({
+          clientId: this.options.clientId,
+          accessToken: this.options.accessToken
+        }),
+        body: JSON.stringify({
+          broadcaster_id: this.options.broadcasterId,
+          sender_id: this.options.senderId,
+          message
+        })
+      });
+    } catch (error) {
+      this.options.onHealthyChange?.(false);
+      this.options.logger.warn(
+        { error, retryAfterMs: 3000 },
+        "Twitch chat send request failed; message will be retried"
+      );
+      await delay(3000);
+      return "retry";
+    }
 
     if (!response.ok) {
       this.options.onHealthyChange?.(false);
 
-      if (response.status === 429) {
+      if (response.status === 429 || response.status >= 500) {
         const body = await response.text();
         const retryAfterMs = getRetryAfterMs(response) ?? 5000;
         this.options.logger.warn(
           { status: response.status, body, retryAfterMs },
-          "Twitch chat send rate-limited; message will be retried"
+          "Twitch chat send failed with retryable status; message will be retried"
         );
         await delay(retryAfterMs);
         return "retry";
       }
 
-      throw await explainTwitchHttpError(response, "send_chat_message");
+      const error = await explainTwitchHttpError(response, "send_chat_message");
+      this.options.logger.error(
+        { error },
+        "Twitch chat send failed with non-retryable status"
+      );
+      return "failed";
     }
 
     const body = await response.json().catch(() => null);
     const messageId = getMessageId(body);
+    const dropReason = getDropReason(body);
+
+    if (dropReason) {
+      this.options.onHealthyChange?.(false);
+      this.options.logger.error(
+        { messageId, dropReason, response: body },
+        "Twitch accepted chat request but did not send message"
+      );
+      return "failed";
+    }
 
     this.options.onHealthyChange?.(true);
     this.options.logger.info(
@@ -69,6 +96,25 @@ const getMessageId = (body: unknown) => {
   ) {
     const first = body.data[0] as { message_id?: unknown } | undefined;
     return typeof first?.message_id === "string" ? first.message_id : undefined;
+  }
+
+  return undefined;
+};
+
+const getDropReason = (body: unknown) => {
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "data" in body &&
+    Array.isArray(body.data)
+  ) {
+    const first = body.data[0] as
+      | { is_sent?: unknown; drop_reason?: unknown }
+      | undefined;
+
+    if (first?.is_sent === false) {
+      return first.drop_reason ?? "unknown";
+    }
   }
 
   return undefined;

@@ -124,6 +124,7 @@ export class VaexCoreBot {
   }
 
   async stop() {
+    await this.messageQueue.drain(8000);
     this.messageQueue.stop();
     await this.eventSubClient.close();
     this.db.close();

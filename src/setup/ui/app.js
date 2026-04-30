@@ -13,6 +13,8 @@ const state = {
   status: null,
   giveaway: null,
   auditLogs: [],
+  outboundMessages: [],
+  outboundSummary: { total: 0, queued: 0, failed: 0, sent: 0 },
   validSetup: false,
   busy: new Set(),
   entrantFilter: "",
@@ -67,6 +69,8 @@ const api = {
   botStop: () => api.post("/api/bot/stop"),
   giveaway: () => api.get("/api/giveaway"),
   auditLogs: () => api.get("/api/audit-logs"),
+  outboundMessages: () => api.get("/api/outbound-messages"),
+  resendOutboundMessage: (id) => api.post("/api/outbound-messages/resend", id ? { id } : {}),
   chatSend: (message) => api.post("/api/chat/send", { message }),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
@@ -270,7 +274,8 @@ function renderDashboard() {
         ["Broadcaster", runtime.broadcasterLogin || "missing", Boolean(runtime.broadcasterLogin)],
         ["Bot Process", runtime.botProcess?.status || "stopped", Boolean(runtime.botProcess?.running)],
         ["EventSub", runtime.eventSubConnected ? "connected" : "not connected", runtime.eventSubConnected],
-        ["Live Chat", runtime.liveChatConfirmed ? "confirmed" : "pending", runtime.liveChatConfirmed]
+        ["Live Chat", runtime.liveChatConfirmed ? "confirmed" : "pending", runtime.liveChatConfirmed],
+        ["Outbound Failures", runtime.outboundChat?.failed || 0, Number(runtime.outboundChat?.failed || 0) === 0]
       ])
     ]),
     card("Blockers", [readiness.blockers.length ? list(readiness.blockers, "bad") : callout("No local console blockers detected.", "ok")]),
@@ -303,6 +308,47 @@ function renderBotRuntimeCard(runtime) {
   ]);
 }
 
+function renderOutboundHistoryCard() {
+  const messages = state.outboundMessages || [];
+  const summary = state.outboundSummary || {};
+  const failed = messages.filter((item) => item.status === "failed");
+  const recent = messages.slice(0, 12);
+
+  return card("Outbound Chat History", [
+    statusGrid([
+      ["Tracked", summary.total || 0],
+      ["Sent", summary.sent || 0, Number(summary.failed || 0) === 0],
+      ["Queued/Retrying", summary.queued || 0, true],
+      ["Failed", summary.failed || 0, Number(summary.failed || 0) === 0]
+    ]),
+    h("div", { className: "actions" }, [
+      actionButton("Resend last failed", {
+        id: "resendLastFailed",
+        variant: "secondary",
+        disabled: failed.length === 0,
+        onClick: () => resendOutboundMessage()
+      }),
+      actionButton("Refresh history", { id: "refreshOutbound", variant: "secondary", onClick: refreshOutboundMessages })
+    ]),
+    failed.length ? callout("One or more outbound messages failed. Use resend after checking that the text is still appropriate.", "warn") : null,
+    dataTable(["Updated", "Source", "Status", "Attempts", "Message", "Action"], recent.map((item) => [
+      item.updatedAt || "",
+      item.source || "",
+      statusChip(item.status),
+      item.attempts || 0,
+      formatMessagePreview(item.message),
+      item.status === "failed"
+        ? actionButton("Resend", {
+            id: `resend-${item.id}`,
+            variant: "secondary",
+            busyKey: "resendOutbound",
+            onClick: () => resendOutboundMessage(item.id)
+          })
+        : ""
+    ]))
+  ]);
+}
+
 function renderGiveaways() {
   const giveaway = state.giveaway;
   const summary = giveaway?.summary || state.status?.giveaway || {};
@@ -322,6 +368,7 @@ function renderGiveaways() {
       ]),
       h("div", { className: "actions" }, [
         actionButton("Start giveaway", { id: "gstart", onClick: startGiveaway }),
+        actionButton("Send last call", { id: "glastcall", busyKey: "glast-call", variant: "secondary", onClick: () => runGiveawayAction("last-call") }),
         actionButton("Close entries", { id: "gclose", variant: "secondary", onClick: () => runGiveawayAction("close") })
       ])
     ]),
@@ -365,6 +412,7 @@ function renderChatTools() {
       h("p", { text: "Direct UI actions do not need chat echo. Echo is optional visibility only and is queued through the normal outbound rate limit." }),
       h("label", { className: "inline-check" }, [h("input", { id: "echoToChat", type: "checkbox" }), "Echo equivalent operator commands to chat"])
     ]),
+    renderOutboundHistoryCard(),
     message()
   ];
 }
@@ -844,6 +892,7 @@ function giveawayChecklist() {
     status === "open" ? "Close is available while entries are open." : "Close is disabled unless entries are open.",
     status === "closed" ? "Draw is available because entries are closed." : "Draw is disabled until the giveaway is closed.",
     status !== "none" ? "End is available after confirmation." : "End is disabled because no giveaway exists.",
+    status === "open" ? "Last call is available while entries are open." : "Last call is disabled unless entries are open.",
     activeWinners.length ? "Claim, deliver, and reroll controls have eligible winners." : "Claim, deliver, and reroll are disabled until winners exist."
   ];
 }
@@ -889,29 +938,52 @@ function winnerStatus(winner) {
   return h("span", {}, chips.map((chip) => h("span", { className: `chip ${chip === "rerolled" ? "warn" : "ok"}`, text: chip })));
 }
 
+function statusChip(status) {
+  const tone = ["sent", "resent"].includes(status) ? "ok" : status === "failed" ? "bad" : "warn";
+  return h("span", { className: `chip ${tone}`, text: status || "unknown" });
+}
+
+function formatMessagePreview(message = "") {
+  return message.length > 120 ? `${message.slice(0, 117)}...` : message;
+}
+
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, audit] = await Promise.all([
+    const [config, status, giveaway, audit, outbound] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
-      api.auditLogs()
+      api.auditLogs(),
+      api.outboundMessages()
     ]);
     state.config = config;
     state.status = status;
     state.giveaway = giveaway;
     state.auditLogs = audit.logs || [];
+    state.outboundMessages = outbound.messages || [];
+    state.outboundSummary = outbound.summary || {};
     state.validSetup = isValidationPassed();
     return { ok: true };
   }, { quiet: true });
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, audit] = await Promise.all([api.status(), api.giveaway(), api.auditLogs()]);
+  const [status, giveaway, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.auditLogs(), api.outboundMessages()]);
   state.status = status;
   state.giveaway = giveaway;
   state.auditLogs = audit.logs || [];
+  state.outboundMessages = outbound.messages || [];
+  state.outboundSummary = outbound.summary || {};
   state.validSetup = isValidationPassed();
+}
+
+async function refreshOutboundMessages() {
+  await runAction("refreshOutbound", async () => {
+    const outbound = await api.outboundMessages();
+    state.outboundMessages = outbound.messages || [];
+    state.outboundSummary = outbound.summary || {};
+    return { ok: true };
+  }, { quiet: true });
 }
 
 async function refreshAuditLogs() {
@@ -1118,6 +1190,15 @@ async function stopBot() {
   await runAction("botStop", () => api.botStop(), { success: "Bot process stopped." });
 }
 
+async function resendOutboundMessage(id) {
+  await runAction("resendOutbound", async () => {
+    const result = await api.resendOutboundMessage(id);
+    state.outboundMessages = result.messages || [];
+    state.outboundSummary = result.summary || {};
+    return result;
+  }, { skipRefresh: true, success: "Outbound message requeued." });
+}
+
 function renderTestResult() {
   if (!state.testResult) {
     return h("div", { className: "message", text: "No simulated command has run yet." });
@@ -1248,6 +1329,7 @@ function updateDisabledState() {
   const botStartReady = canStartBot(runtime);
 
   setDisabled("gstart", status !== "none", "Start is disabled because a giveaway already exists.");
+  setDisabled("glastcall", status !== "open", "Last call is disabled unless entries are open.");
   setDisabled("gclose", status !== "open", "Close is disabled unless entries are open.");
   setDisabled("gdraw", status !== "closed", "Draw is disabled until entries are closed.");
   setDisabled("gend", status === "none", "End is disabled because no giveaway exists.");

@@ -22,6 +22,9 @@ export const giveawayDuplicateEntryMessage = (input: {
 export const giveawayClosedMessage = (giveaway: Giveaway, entryCount: number) =>
   `Entries closed for ${giveaway.title}. ${entryCount} ${entryCount === 1 ? "entry" : "entries"}. Drawing soon.`;
 
+export const giveawayLastCallMessage = (giveaway: Giveaway, entryCount: number) =>
+  `Last call for ${giveaway.title}: type !${giveaway.keyword} to enter. Current entries: ${entryCount}.`;
+
 export const giveawayDrawMessage = (input: {
   winners: GiveawayWinner[];
   requestedCount: number;
