@@ -1110,9 +1110,10 @@ function renderValidationSummary() {
 
 function renderAuditLog() {
   return [
-    sectionHeader("Audit Log", "Latest 100 local audit entries.",
+    sectionHeader("Audit Log", "Post-stream review and latest 100 local audit entries.",
       actionButton("Refresh audit log", { id: "refreshAudit", onClick: refreshAuditLogs })
     ),
+    renderPostStreamReviewCard(),
     card("", [dataTable(["Timestamp", "Actor", "Action", "Target", "Metadata"], state.auditLogs.map((log) => [
       log.created_at,
       log.actor_twitch_user_id,
@@ -1121,6 +1122,45 @@ function renderAuditLog() {
       summarizeMetadata(log.metadata_json)
     ]))])
   ];
+}
+
+function renderPostStreamReviewCard() {
+  const review = postStreamReviewData();
+  const failures = review.outbound.failures.slice(0, 8);
+
+  return card("Post-Stream Review", [
+    statusGrid([
+      ["Giveaway", review.giveaway.available ? `#${review.giveaway.id}` : "none", review.giveaway.available],
+      ["Entries", review.giveaway.entries, true],
+      ["Winners", review.giveaway.winners.length, true],
+      ["Pending Delivery", review.giveaway.pendingDelivery, review.giveaway.pendingDelivery === 0],
+      ["Critical Failed", review.outbound.criticalFailed, review.outbound.criticalFailed === 0],
+      ["Outbound Failed", review.outbound.failed, review.outbound.failed === 0],
+      ["Retries", review.outbound.retries, true],
+      ["Bot Errors", review.runtime.errorCount, review.runtime.errorCount === 0]
+    ]),
+    callout(review.nextAction, review.tone),
+    review.giveaway.winners.length
+      ? dataTable(["Winner", "Login", "Delivered"], review.giveaway.winners.map((winner) => [
+          winner.displayName,
+          winner.login,
+          winner.delivered ? "yes" : "pending"
+        ]))
+      : callout("No winner rows available for the latest giveaway.", "muted"),
+    failures.length
+      ? dataTable(["Updated", "Action", "Category", "Attempts", "Message"], failures.map((item) => [
+          item.updatedAt || "",
+          item.action || "message",
+          failureCategoryChip(item.failureCategory),
+          item.attempts || 0,
+          formatMessagePreview(item.message)
+        ]))
+      : callout("No outbound failures are currently tracked.", "ok"),
+    h("div", { className: "actions" }, [
+      actionButton("Copy review", { id: "copyPostStreamReview", variant: "secondary", busyKey: "copyPostStreamReview", onClick: copyPostStreamReview }),
+      actionButton("Export review JSON", { id: "exportPostStreamReview", variant: "secondary", busyKey: "exportPostStreamReview", onClick: exportPostStreamReviewJson })
+    ])
+  ]);
 }
 
 function connectButton(config, variant = "secondary", forceDisabled = false) {
@@ -1620,6 +1660,125 @@ function postStreamRecapText() {
   ].join("\n");
 }
 
+function postStreamReviewData() {
+  const recap = state.giveaway?.recap || {};
+  const summary = state.giveaway?.summary || state.status?.giveaway || {};
+  const runtime = state.status?.runtime || {};
+  const botProcess = runtime.botProcess || {};
+  const outboundMessages = state.outboundMessages || [];
+  const outboundFailures = outboundMessages.filter((message) => message.status === "failed");
+  const giveawayMessages = outboundMessages.filter((message) => message.category === "giveaway");
+  const botErrors = (botProcess.recentLogs || []).filter((line) => /failed|error/i.test(line));
+  const audit = (state.auditLogs || []).slice(0, 20).map((log) => ({
+    createdAt: log.created_at,
+    actor: log.actor_twitch_user_id,
+    action: log.action,
+    target: log.target || "",
+    metadata: summarizeMetadata(log.metadata_json)
+  }));
+  const pendingDelivery = Number(recap.pendingDeliveryCount ?? summary.undeliveredWinnersCount ?? 0);
+  const criticalFailed = Number(recap.criticalFailedCount ?? state.outboundSummary?.criticalFailed ?? 0);
+  const failed = Number(state.outboundSummary?.failed ?? outboundFailures.length);
+  const tone = criticalFailed > 0 || botErrors.length > 0
+    ? "bad"
+    : pendingDelivery > 0 || failed > 0
+      ? "warn"
+      : "ok";
+  const nextAction = criticalFailed > 0
+    ? "Review and recover failed critical giveaway chat before the next live run."
+    : pendingDelivery > 0
+      ? "Confirm manual prize delivery notes before closing the night."
+      : failed > 0
+        ? "Review outbound failures and decide whether any follow-up is needed."
+        : "Post-stream review is clear.";
+
+  return {
+    generatedAt: new Date().toISOString(),
+    tone,
+    nextAction,
+    runtime: {
+      mode: runtime.mode || "",
+      botStatus: botProcess.status || "",
+      eventSubConnected: Boolean(runtime.eventSubConnected),
+      chatSubscriptionActive: Boolean(runtime.chatSubscriptionActive),
+      liveChatConfirmed: Boolean(runtime.liveChatConfirmed),
+      errorCount: botErrors.length,
+      recentErrors: botErrors.slice(-8)
+    },
+    giveaway: {
+      available: Boolean(recap.available),
+      id: recap.id || state.giveaway?.giveaway?.id || "",
+      title: recap.title || summary.title || "",
+      status: recap.status || summary.status || "none",
+      entries: Number(recap.entryCount ?? summary.entryCount ?? 0),
+      activeWinnerCount: Number(recap.activeWinnerCount ?? summary.winnersDrawn ?? 0),
+      pendingDelivery,
+      deliveredWinnerCount: Number(recap.deliveredWinnerCount ?? 0),
+      winners: (recap.winners || []).map((winner) => ({
+        displayName: winner.displayName,
+        login: winner.login,
+        delivered: Boolean(winner.delivered)
+      }))
+    },
+    outbound: {
+      total: Number(state.outboundSummary?.total ?? outboundMessages.length),
+      sent: Number(state.outboundSummary?.sent ?? 0),
+      resent: Number(state.outboundSummary?.resent ?? 0),
+      pending: Number(state.outboundSummary?.pending ?? 0),
+      failed,
+      criticalFailed,
+      retries: outboundMessages.filter((message) => Number(message.attempts || 0) > 1).length,
+      giveawayTracked: giveawayMessages.length,
+      failures: outboundFailures.map((message) => ({
+        id: message.id,
+        source: message.source,
+        action: message.action || "",
+        failureCategory: message.failureCategory || "none",
+        status: message.status,
+        attempts: message.attempts || 0,
+        updatedAt: message.updatedAt || "",
+        reason: message.reason || "",
+        message: message.message || ""
+      }))
+    },
+    audit,
+    incident: incidentNoteText()
+  };
+}
+
+function postStreamReviewText() {
+  const review = postStreamReviewData();
+  const winners = review.giveaway.winners.length
+    ? review.giveaway.winners.map((winner) =>
+        `- ${winner.displayName} (@${winner.login}) - ${winner.delivered ? "delivered" : "pending delivery"}`
+      )
+    : ["- No winner rows available."];
+  const failures = review.outbound.failures.length
+    ? review.outbound.failures.slice(0, 8).map((failure) =>
+        `- ${failure.updatedAt} ${failure.action || "message"} ${failure.failureCategory}: ${failure.reason || formatMessagePreview(failure.message)}`
+      )
+    : ["- No outbound failures tracked."];
+
+  return [
+    `Post-stream review - ${review.generatedAt}`,
+    `Next action: ${review.nextAction}`,
+    `Bot: ${review.runtime.botStatus}`,
+    `EventSub: ${review.runtime.eventSubConnected ? "connected" : "not connected"}`,
+    `Live chat: ${review.runtime.liveChatConfirmed ? "confirmed" : "pending"}`,
+    `Giveaway: ${review.giveaway.status} ${review.giveaway.title}`.trim(),
+    `Entries: ${review.giveaway.entries}`,
+    `Winners: ${review.giveaway.activeWinnerCount}`,
+    `Pending delivery: ${review.giveaway.pendingDelivery}`,
+    `Outbound failed: ${review.outbound.failed}`,
+    `Critical failed: ${review.outbound.criticalFailed}`,
+    `Retries: ${review.outbound.retries}`,
+    "Winners:",
+    ...winners,
+    "Outbound failures:",
+    ...failures
+  ].join("\n");
+}
+
 function formatMessagePreview(message = "") {
   return message.length > 120 ? `${message.slice(0, 117)}...` : message;
 }
@@ -2042,6 +2201,20 @@ async function copyRecap() {
   await copyText(postStreamRecapText(), "Post-stream recap copied.");
 }
 
+async function copyPostStreamReview() {
+  await copyText(postStreamReviewText(), "Post-stream review copied.");
+}
+
+function exportPostStreamReviewJson() {
+  downloadTextFile(
+    `vaexcore-post-stream-review-${new Date().toISOString().slice(0, 10)}.json`,
+    `${JSON.stringify(postStreamReviewData(), null, 2)}\n`,
+    "application/json"
+  );
+  state.message = { text: "Post-stream review JSON exported.", tone: "ok" };
+  render();
+}
+
 async function copyIncidentNote() {
   await copyText(incidentNoteText(), "Incident note copied.");
 }
@@ -2081,6 +2254,16 @@ async function copyText(text, success) {
   }
 
   render();
+}
+
+function downloadTextFile(filename, text, type = "text/plain") {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = h("a", { href: url, download: filename });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function sendGiveawayStatus() {

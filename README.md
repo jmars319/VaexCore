@@ -178,7 +178,7 @@ The console is organized into durable sections:
 - `Chat Tools`: send chat messages, send test messages, edit local operator message presets, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
 - `Settings`: configure mode, Twitch OAuth, bot identity, and broadcaster identity.
-- `Audit Log`: review the latest 100 local audit entries.
+- `Audit Log`: review post-stream summaries and the latest 100 local audit entries.
 
 Direct UI actions call the local service layer first. Optional chat echo is visibility only; if enabled, VaexCore queues the equivalent chat command after the local action succeeds.
 
@@ -288,6 +288,8 @@ The `Giveaways` tab also includes stream-night controls:
 - `Queue Health` and `Recovery Checklist` show pending queue age, retry delay, send throttle delay, failure category, latest failed action, resend safety, and concrete recovery steps before an operator retries a critical message. Auth/config failures do not blindly retry; Twitch rate limits and transient network failures retry with queue-owned backoff.
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
+- `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.
+- `npm run smoke:giveaway` runs a temp-database giveaway readiness check covering command permissions, entry, close, draw, reroll, delivery, audit logs, recap, outbound history, and the local lifecycle test.
 
 Current chat command syntax:
 

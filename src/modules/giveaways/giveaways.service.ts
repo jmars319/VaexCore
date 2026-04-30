@@ -474,21 +474,24 @@ export class GiveawaysService {
     const unresolvedWinners = this.getUnresolvedWinners(giveaway.id);
     const winners = this.getWinners(giveaway.id);
 
-    this.logger.warn(
-      {
-        operatorEvent: "giveaway winner summary before end",
-        giveawayId: giveaway.id,
-        unresolvedCount: unresolvedWinners.length,
-        winners: winners.map((winner) => ({
-          login: winner.login,
-          twitchUserId: winner.twitch_user_id,
-          claimed: Boolean(winner.claimed_at),
-          delivered: Boolean(winner.delivered_at),
-          rerolled: Boolean(winner.rerolled_at)
-        }))
-      },
-      "Giveaway winner summary before end"
-    );
+    const winnerSummary = {
+      operatorEvent: "giveaway winner summary before end",
+      giveawayId: giveaway.id,
+      unresolvedCount: unresolvedWinners.length,
+      winners: winners.map((winner) => ({
+        login: winner.login,
+        twitchUserId: winner.twitch_user_id,
+        claimed: Boolean(winner.claimed_at),
+        delivered: Boolean(winner.delivered_at),
+        rerolled: Boolean(winner.rerolled_at)
+      }))
+    };
+
+    if (unresolvedWinners.length > 0) {
+      this.logger.warn(winnerSummary, "Giveaway winner summary before end");
+    } else {
+      this.logger.info(winnerSummary, "Giveaway winner summary before end");
+    }
 
     this.db
       .prepare("UPDATE giveaways SET status = 'ended', ended_at = ? WHERE id = ?")
@@ -713,7 +716,7 @@ export class GiveawaysService {
           FROM giveaway_winners
           WHERE giveaway_id = ?
             AND rerolled_at IS NULL
-            AND (claimed_at IS NULL OR delivered_at IS NULL)
+            AND delivered_at IS NULL
         `
       )
       .all(giveawayId) as GiveawayWinner[];

@@ -71,6 +71,9 @@ async function runSmoke() {
   assert(appJs.includes("Live Runbook"), "dashboard and live mode expose runbook guidance");
   assert(appJs.includes("Copy incident note"), "runbook can copy incident note");
   assert(appJs.includes("liveRunbookSteps"), "runbook derives next actions from current state");
+  assert(appJs.includes("Post-Stream Review"), "audit log exposes post-stream review");
+  assert(appJs.includes("Export review JSON"), "post-stream review can export JSON");
+  assert(appJs.includes("postStreamReviewData"), "post-stream review derives from local runtime data");
   assert(appJs.includes("Send status to chat"), "live mode can send current giveaway status");
   assert(appJs.includes("Panic Resend"), "live mode exposes panic resend area");
   assert(appJs.includes("Post-Stream Recap"), "live mode exposes post-stream recap copy area");
