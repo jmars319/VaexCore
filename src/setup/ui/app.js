@@ -314,6 +314,8 @@ function renderLiveMode() {
     readiness.blockers.length
       ? card("Blockers", [list(readiness.blockers, "bad")])
       : card("Ready Summary", [callout("Twitch connection ready", "ok")]),
+    renderQueueHealthCard(),
+    renderRecoveryChecklistCard(),
     renderPanicResendCard(),
     renderPostStreamRecapCard({ compact: true }),
     renderFailureLogCard()
@@ -380,6 +382,43 @@ function renderBotRuntimeCard(runtime) {
       h("pre", { className: "runtime-log failure-log", text: failureLogs.slice(-5).join("\n") })
     ]) : null,
     recentLogs.length ? h("pre", { className: "runtime-log", text: recentLogs.slice(-8).join("\n") }) : h("p", { className: "muted", text: "No bot runtime logs yet." })
+  ]);
+}
+
+function renderQueueHealthCard() {
+  const health = state.status?.runtime?.queueHealth || {};
+  const tone = queueTone(health.status);
+
+  return card("Queue Health", [
+    statusGrid([
+      ["Status", health.status || "unknown", tone === "ok"],
+      ["Pending", health.pending || 0, Number(health.pending || 0) === 0],
+      ["Oldest Age", health.oldestAge || "0s", !health.stale],
+      ["Processing", health.processing ? "yes" : "no", true],
+      ["Oldest Action", health.oldestAction || "none", true],
+      ["Oldest Importance", health.oldestImportance || "normal", health.oldestImportance !== "critical"],
+      ["Max Attempts", health.maxAttempts || 4, true],
+      ["Stale", health.stale ? "yes" : "no", !health.stale]
+    ]),
+    callout(health.nextAction || "Queue health unavailable.", tone),
+    health.blockers?.length ? list(health.blockers, tone === "bad" ? "bad" : "warn") : null
+  ]);
+}
+
+function renderRecoveryChecklistCard() {
+  const recovery = state.status?.runtime?.outboundRecovery || {};
+  const tone = recovery.needed ? recovery.severity === "critical" ? "bad" : "warn" : "ok";
+
+  return card("Recovery Checklist", [
+    statusGrid([
+      ["Needed", recovery.needed ? "yes" : "no", !recovery.needed],
+      ["Safe To Resend", recovery.safeToResend ? "yes" : "no", recovery.needed ? recovery.safeToResend : true],
+      ["Action", recovery.action || "none", !recovery.needed],
+      ["Attempts", recovery.attempts || 0, !recovery.needed || Number(recovery.attempts || 0) < 4]
+    ]),
+    callout(recovery.nextAction || "No outbound recovery needed.", tone),
+    recovery.reason ? callout(`Last failure: ${recovery.reason}`, tone) : null,
+    recovery.steps?.length ? list(recovery.steps, recovery.needed ? "warn" : "muted") : null
   ]);
 }
 
@@ -480,12 +519,13 @@ function renderGiveawayOutboundCard() {
       : failed.length
         ? callout("A critical giveaway chat message failed. Resend it before continuing live operations.", "bad")
         : callout(messages.length ? "Giveaway chat messages are tracked from durable outbound history." : "No giveaway chat messages tracked yet.", messages.length ? "ok" : "muted"),
-    phaseRows.length ? dataTable(["Phase", "Required", "Status", "Attempts", "Reason", "Action"], phaseRows.map((phase) => [
+    phaseRows.length ? dataTable(["Phase", "Required", "Status", "Age", "Reason", "Recovery", "Action"], phaseRows.map((phase) => [
       phase.label,
       phase.required ? "yes" : "tracked",
       statusChip(phase.status),
-      phase.attempts || 0,
+      phase.age || "",
       phase.reason || "",
+      phase.recovery || "",
       phase.canSend
         ? actionButton(phase.status === "missing" ? "Send" : "Resend", {
             id: `phase-resend-${phase.id}`,
@@ -1271,6 +1311,12 @@ function statusChip(status) {
 function importanceChip(importance = "normal") {
   const tone = importance === "critical" ? "bad" : importance === "important" ? "warn" : "ok";
   return h("span", { className: `chip ${tone}`, text: importance });
+}
+
+function queueTone(status) {
+  if (status === "blocked") return "bad";
+  if (status === "watch") return "warn";
+  return "ok";
 }
 
 function giveawayOutboundMessages() {

@@ -62,6 +62,7 @@ export type SetupServerHandle = {
 
 const host = "127.0.0.1";
 const defaultPort = 3434;
+const queueStaleWarningMs = 30_000;
 const logger = createLogger("info");
 const oauthStates = new Map<string, number>();
 const db = createDbClient(process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite");
@@ -816,6 +817,8 @@ const getOperatorStatus = async () => {
   }
 
   const giveaway = giveawaysService.getOperatorState();
+  const queue = chatQueue.snapshot();
+  const outbound = outboundHistory.summary();
 
   return {
     ok: true,
@@ -830,8 +833,10 @@ const getOperatorStatus = async () => {
       eventSubConnected: botProcess.eventSubConnected,
       chatSubscriptionActive: botProcess.chatSubscriptionActive,
       queueReady: chatQueue.isReady(),
-      queue: chatQueue.snapshot(),
-      outboundChat: outboundHistory.summary(),
+      queue,
+      queueHealth: summarizeQueueHealth(queue, outbound),
+      outboundChat: outbound,
+      outboundRecovery: summarizeOutboundRecovery(),
       liveChatConfirmed: botProcess.liveChatConfirmed,
       note: botProcess.child
         ? "Live bot runtime is managed by this setup console."
@@ -913,6 +918,108 @@ const runPreflightCheck = async () => {
     nextAction: failed?.detail ?? "Giveaway controls ready.",
     summary: giveawayState.summary
   };
+};
+
+const summarizeQueueHealth = (
+  queue: ReturnType<MessageQueue["snapshot"]>,
+  outbound: ReturnType<typeof outboundHistory.summary>
+) => {
+  const blockers = [
+    !queue.ready ? "Outbound queue is not running." : undefined,
+    queue.oldestAgeMs > queueStaleWarningMs
+      ? `Oldest queued message has waited ${formatDuration(queue.oldestAgeMs)}.`
+      : undefined,
+    outbound.criticalFailed > 0
+      ? `${outbound.criticalFailed} critical outbound message(s) failed.`
+      : undefined
+  ].filter(Boolean) as string[];
+  const status = !queue.ready || outbound.criticalFailed > 0
+    ? "blocked"
+    : blockers.length || queue.processing || queue.queued > 0
+      ? "watch"
+      : "clear";
+  const nextAction = !queue.ready
+    ? "Restart the setup console if queue readiness does not recover."
+    : outbound.criticalFailed > 0
+      ? "Use panic resend or phase resend after confirming chat missed the message."
+      : queue.oldestAgeMs > queueStaleWarningMs
+        ? "Wait for the queue to flush or restart the bot if the age keeps rising."
+        : queue.queued > 0 || queue.processing
+          ? "Wait for queued chat messages to send."
+          : "Outbound queue clear.";
+
+  return {
+    status,
+    blockers,
+    nextAction,
+    stale: queue.oldestAgeMs > queueStaleWarningMs,
+    oldestAgeMs: queue.oldestAgeMs,
+    oldestAge: formatDuration(queue.oldestAgeMs),
+    oldestAction: queue.oldestAction,
+    oldestImportance: queue.oldestImportance,
+    pending: queue.queued,
+    processing: queue.processing,
+    maxAttempts: queue.maxAttempts
+  };
+};
+
+const summarizeOutboundRecovery = () => {
+  const latestCritical = latestFailedCriticalGiveawayMessage();
+  const latestFailed = latestCritical ?? outboundHistory.latestFailed();
+
+  if (!latestFailed) {
+    return {
+      needed: false,
+      severity: "clear",
+      safeToResend: false,
+      nextAction: "No outbound recovery needed.",
+      steps: ["Keep monitoring Live Mode during giveaway transitions."]
+    };
+  }
+
+  const safeToResend = canSendConfiguredChat();
+  const critical = latestFailed.importance === "critical";
+
+  return {
+    needed: true,
+    severity: critical ? "critical" : "warning",
+    safeToResend,
+    id: latestFailed.id,
+    category: latestFailed.category,
+    action: latestFailed.action,
+    importance: latestFailed.importance,
+    reason: latestFailed.reason || "No failure reason recorded.",
+    updatedAt: latestFailed.updatedAt,
+    attempts: latestFailed.attempts,
+    giveawayId: latestFailed.giveawayId,
+    nextAction: safeToResend
+      ? critical
+        ? "Use panic resend or phase resend if Twitch chat did not receive this critical message."
+        : "Use resend if the message is still useful."
+      : "Run Validate Setup before resending outbound chat.",
+    steps: [
+      "Check Twitch chat for the original message.",
+      safeToResend ? "Resend only if the message is missing or still relevant." : "Run Validate Setup before resending.",
+      critical ? "Use Live Mode -> Panic Resend for the latest failed critical giveaway message." : "Use Outbound Chat History -> Resend for this message.",
+      "Watch the queue health until pending messages clear."
+    ]
+  };
+};
+
+const formatDuration = (ageMs: number) => {
+  if (!Number.isFinite(ageMs) || ageMs <= 0) {
+    return "0s";
+  }
+
+  const seconds = Math.round(ageMs / 1000);
+
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 };
 
 const isSafeConfigComplete = () => {
@@ -1990,7 +2097,11 @@ const summarizeGiveawayPhase = (
     message: latest?.message ?? "",
     reason: latest?.reason ?? "",
     updatedAt: latest?.updatedAt ?? "",
-    canSend: status === "failed" || status === "missing"
+    ageMs: latest?.updatedAt ? Date.now() - Date.parse(latest.updatedAt) : 0,
+    age: latest?.updatedAt ? formatDuration(Date.now() - Date.parse(latest.updatedAt)) : "",
+    canSend: status === "failed" || status === "missing",
+    safeToResend: (status === "failed" || status === "missing") && canSendConfiguredChat(),
+    recovery: giveawayPhaseRecoveryText(phase, status)
   };
 };
 
@@ -1999,6 +2110,29 @@ const phaseStatusFromOutbound = (message: OutboundMessageRecord) => {
   if (isPendingOutboundStatus(message.status)) return "pending";
   if (message.status === "sent" || message.status === "resent") return "sent";
   return message.status;
+};
+
+const giveawayPhaseRecoveryText = (
+  phase: GiveawayAnnouncementPhase,
+  status: string
+) => {
+  if (status === "failed") {
+    return `Resend the ${phase.label} announcement if chat missed it.`;
+  }
+
+  if (status === "missing") {
+    return `Send the missing ${phase.label} announcement before continuing.`;
+  }
+
+  if (status === "pending") {
+    return `Wait for the ${phase.label} announcement to leave the outbound queue.`;
+  }
+
+  if (status === "sent") {
+    return `${phase.label} announcement is covered.`;
+  }
+
+  return "No recovery action needed yet.";
 };
 
 const summarizeGiveawayRecap = (

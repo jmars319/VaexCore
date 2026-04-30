@@ -285,6 +285,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Copy winners` and `Mark all delivered` help close out manual delivery without storing prize codes.
 - `Giveaway Chat Assurance` tracks start, reminder/last-call, close, draw, and end announcement phases. If a critical phase is missing or failed, VaexCore shows a do-not-continue warning and offers phase-level send/resend controls.
 - `Live Mode` keeps the current operator state explicit: `entries open`, `ready to draw`, `delivery pending`, `safe to end`, or `giveaway ended`. It can send the current giveaway status to chat, panic-resend the latest failed critical giveaway message, show outbound failure logs separately, and copy a post-stream recap for notes.
+- `Queue Health` and `Recovery Checklist` show pending queue age, stale queue warnings, latest failed action, resend safety, and concrete recovery steps before an operator retries a critical message.
 
 Current chat command syntax:
 

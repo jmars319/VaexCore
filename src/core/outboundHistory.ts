@@ -140,15 +140,26 @@ export const createOutboundHistory = (db: DbClient) => {
       const current = list();
       const pending = current.filter((record) => isPendingOutboundStatus(record.status));
       const resent = current.filter((record) => record.status === "resent");
+      const failed = current.filter((record) => record.status === "failed");
+      const criticalFailed = failed.filter((record) => record.importance === "critical");
+      const oldestPending = pending
+        .slice()
+        .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))[0];
+      const latestFailed = failed[0];
       return {
         total: current.length,
         queued: pending.length,
         pending: pending.length,
-        failed: current.filter((record) => record.status === "failed").length,
-        criticalFailed: current.filter((record) => record.status === "failed" && record.importance === "critical").length,
+        failed: failed.length,
+        criticalFailed: criticalFailed.length,
         sent: current.filter((record) => record.status === "sent").length,
         resent: resent.length,
-        delivered: current.filter((record) => record.status === "sent" || record.status === "resent").length
+        delivered: current.filter((record) => record.status === "sent" || record.status === "resent").length,
+        oldestPendingAt: oldestPending?.queuedAt ?? "",
+        oldestPendingAgeMs: oldestPending ? Date.now() - Date.parse(oldestPending.queuedAt) : 0,
+        latestFailedAt: latestFailed?.updatedAt ?? "",
+        latestFailedAction: latestFailed?.action ?? "",
+        latestFailedReason: latestFailed?.reason ?? ""
       };
     }
   };

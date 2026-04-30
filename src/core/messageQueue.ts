@@ -101,10 +101,20 @@ export class MessageQueue {
   }
 
   snapshot() {
+    const oldest = this.queue[0];
+    const newest = this.queue[this.queue.length - 1];
+
     return {
       ready: this.isReady(),
       queued: this.queue.length,
-      processing: this.processing
+      processing: this.processing,
+      oldestQueuedAt: oldest?.queuedAt ?? "",
+      oldestAgeMs: oldest ? Date.now() - oldest.enqueuedAt : 0,
+      oldestMessageId: oldest?.id ?? "",
+      oldestAction: oldest?.metadata.action ?? "",
+      oldestImportance: oldest?.metadata.importance ?? "normal",
+      newestQueuedAt: newest?.queuedAt ?? "",
+      maxAttempts: this.options.maxAttempts ?? 4
     };
   }
 

@@ -72,6 +72,10 @@ async function runSmoke() {
   assert(appJs.includes("Panic Resend"), "live mode exposes panic resend area");
   assert(appJs.includes("Post-Stream Recap"), "live mode exposes post-stream recap copy area");
   assert(appJs.includes("Outbound Failure Logs"), "bot runtime highlights outbound failure logs");
+  assert(appJs.includes("Queue Health"), "live mode exposes outbound queue health");
+  assert(appJs.includes("Recovery Checklist"), "live mode exposes recovery checklist");
+  assert(appJs.includes("Oldest Age"), "queue health shows pending message age");
+  assert(appJs.includes("Safe To Resend"), "recovery checklist explains resend safety");
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
@@ -80,6 +84,9 @@ async function runSmoke() {
   assert(setupServerJs.includes("entries open") && setupServerJs.includes("safe to end"), "setup server returns live giveaway state copy");
   assert(setupServerJs.includes("/api/giveaway/status/send"), "setup server can send current giveaway status");
   assert(setupServerJs.includes("/api/giveaway/critical/resend"), "setup server exposes critical giveaway panic resend");
+  assert(setupServerJs.includes("queueHealth"), "setup server returns queue health diagnostics");
+  assert(setupServerJs.includes("outboundRecovery"), "setup server returns outbound recovery guidance");
+  assert(setupServerJs.includes("safeToResend"), "setup server reports resend safety");
   assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
   assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
@@ -91,6 +98,10 @@ async function runSmoke() {
 
   const initialConfig = await json("/api/config");
   assertSafeConfig(initialConfig);
+  const initialStatus = await json("/api/status");
+  assert(initialStatus.runtime.queueHealth.status === "clear", "queue health starts clear");
+  assert(initialStatus.runtime.queueHealth.nextAction.includes("Outbound queue"), "queue health explains next action");
+  assert(initialStatus.runtime.outboundRecovery.needed === false, "outbound recovery starts clear");
 
   const invalidBotStart = await json("/api/bot/start", { method: "POST" });
   assert(invalidBotStart.ok === false, "bot start is blocked before validation");
@@ -267,6 +278,11 @@ async function runSmoke() {
     outboundAfterExternalWrite.summary.criticalFailed >= 1,
     "externally written critical outbound failures affect setup summary"
   );
+  const statusAfterFailure = await json("/api/status");
+  assert(statusAfterFailure.runtime.queueHealth.status === "blocked", "critical outbound failure blocks queue health");
+  assert(statusAfterFailure.runtime.outboundRecovery.needed === true, "outbound recovery activates after critical failure");
+  assert(statusAfterFailure.runtime.outboundRecovery.safeToResend === false, "outbound recovery blocks resend before validation");
+  assert(statusAfterFailure.runtime.outboundRecovery.steps.length > 0, "outbound recovery returns operator steps");
   const panicResendWithoutValidation = await json("/api/giveaway/critical/resend", { method: "POST" });
   assert(panicResendWithoutValidation.ok === false, "panic resend fails clearly until chat is validated");
 
