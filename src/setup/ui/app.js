@@ -83,6 +83,7 @@ const api = {
   auditLogs: () => api.get("/api/audit-logs"),
   outboundMessages: () => api.get("/api/outbound-messages"),
   resendOutboundMessage: (id) => api.post("/api/outbound-messages/resend", id ? { id } : {}),
+  resendGiveawayAnnouncement: (action) => api.post("/api/giveaway/announcement/resend", { action }),
   chatSend: (message) => api.post("/api/chat/send", { message }),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
@@ -385,21 +386,44 @@ function renderOutboundHistoryCard() {
 
 function renderGiveawayOutboundCard() {
   const messages = giveawayOutboundMessages();
+  const assurance = state.giveaway?.assurance || {};
   const critical = messages.filter((item) => item.importance === "critical");
   const failed = critical.filter((item) => item.status === "failed");
   const pending = critical.filter((item) => ["queued", "sending", "retrying"].includes(item.status));
   const sent = critical.filter((item) => ["sent", "resent"].includes(item.status));
+  const phaseRows = assurance.phases || [];
 
   return card("Giveaway Chat Assurance", [
     statusGrid([
       ["Critical Sent", sent.length, failed.length === 0],
       ["Critical Pending", pending.length, failed.length === 0],
       ["Critical Failed", failed.length, failed.length === 0],
-      ["Tracked Messages", messages.length, true]
+      ["Missing Critical", assurance.summary?.missingCritical || 0, Number(assurance.summary?.missingCritical || 0) === 0],
+      ["Tracked Messages", messages.length, true],
+      ["Recap Sent", assurance.summary?.sent || 0, true],
+      ["Recap Resent", assurance.summary?.resent || 0, true],
+      ["Recap Pending", assurance.summary?.pending || 0, Number(assurance.summary?.failed || 0) === 0]
     ]),
-    failed.length
-      ? callout("A critical giveaway chat message failed. Resend it before continuing live operations.", "bad")
-      : callout(messages.length ? "Giveaway chat messages are tracked from durable outbound history." : "No giveaway chat messages tracked yet.", messages.length ? "ok" : "muted"),
+    assurance.blockContinue
+      ? callout(`Do not continue giveaway operations yet. ${assurance.nextAction || "Resolve critical chat assurance first."}`, "bad")
+      : failed.length
+        ? callout("A critical giveaway chat message failed. Resend it before continuing live operations.", "bad")
+        : callout(messages.length ? "Giveaway chat messages are tracked from durable outbound history." : "No giveaway chat messages tracked yet.", messages.length ? "ok" : "muted"),
+    phaseRows.length ? dataTable(["Phase", "Required", "Status", "Attempts", "Reason", "Action"], phaseRows.map((phase) => [
+      phase.label,
+      phase.required ? "yes" : "tracked",
+      statusChip(phase.status),
+      phase.attempts || 0,
+      phase.reason || "",
+      phase.canSend
+        ? actionButton(phase.status === "missing" ? "Send" : "Resend", {
+            id: `phase-resend-${phase.id}`,
+            variant: "secondary",
+            busyKey: "resendGiveawayAnnouncement",
+            onClick: () => resendGiveawayAnnouncement(phase.action || phase.id)
+          })
+        : ""
+    ])) : null,
     dataTable(["Action", "Importance", "Status", "Attempts", "Message", "Updated", "Resend"], messages.slice(0, 10).map((item) => [
       item.action || "message",
       importanceChip(item.importance),
@@ -487,7 +511,11 @@ function renderGiveawayRecapCard() {
       ["Pending Delivery", recap.pendingDeliveryCount || 0, Number(recap.pendingDeliveryCount || 0) === 0],
       ["Delivered", recap.deliveredWinnerCount || 0, true],
       ["Critical Messages", recap.criticalMessageCount || 0, true],
-      ["Failed Messages", recap.failedMessageCount || 0, Number(recap.failedMessageCount || 0) === 0]
+      ["Failed Messages", recap.failedMessageCount || 0, Number(recap.failedMessageCount || 0) === 0],
+      ["Sent Messages", recap.sentMessageCount || 0, true],
+      ["Resent Messages", recap.resentMessageCount || 0, true],
+      ["Pending Messages", recap.pendingMessageCount || 0, Number(recap.pendingMessageCount || 0) === 0],
+      ["Missing Critical", recap.missingCriticalCount || 0, Number(recap.missingCriticalCount || 0) === 0]
     ]),
     dataTable(["Winner", "Delivered"], (recap.winners || []).map((winner) => [
       `${winner.displayName} @${winner.login}`,
@@ -1040,7 +1068,7 @@ function giveawayChecklist() {
   const status = summary.status || "none";
   const winners = state.giveaway?.winners || [];
   const activeWinners = winners.filter((winner) => !winner.rerolled_at);
-  return [
+  const checklist = [
     status === "none" ? "Start is available because no giveaway exists." : "Start is disabled because a giveaway already exists.",
     status === "open" ? "Close is available while entries are open." : "Close is disabled unless entries are open.",
     status === "closed" ? "Draw is available because entries are closed." : "Draw is disabled until the giveaway is closed.",
@@ -1048,6 +1076,12 @@ function giveawayChecklist() {
     status === "open" ? "Last call is available while entries are open." : "Last call is disabled unless entries are open.",
     activeWinners.length ? "Claim, deliver, and reroll controls have eligible winners." : "Claim, deliver, and reroll are disabled until winners exist."
   ];
+
+  if (state.giveaway?.assurance?.blockContinue) {
+    checklist.unshift(`Resolve chat assurance before continuing: ${state.giveaway.assurance.nextAction}`);
+  }
+
+  return checklist;
 }
 
 function missingConfigFields(config = {}) {
@@ -1205,10 +1239,22 @@ async function startGiveaway() {
 }
 
 async function runGiveawayAction(name, body = {}, confirmation) {
+  if (shouldWarnBeforeGiveawayAction(name) && !confirm(`${state.giveaway.assurance.nextAction} Continue anyway?`)) {
+    return;
+  }
+
   if (confirmation && !confirm(confirmation)) {
     return;
   }
   await runAction(`g${name}`, () => api.giveawayAction(name, body), { success: "Giveaway state updated." });
+}
+
+function shouldWarnBeforeGiveawayAction(name) {
+  const assurance = state.giveaway?.assurance;
+  return Boolean(
+    assurance?.blockContinue &&
+    ["close", "draw", "reroll", "end"].includes(name)
+  );
 }
 
 async function endGiveaway() {
@@ -1472,6 +1518,17 @@ async function resendOutboundMessage(id) {
     state.outboundSummary = result.summary || {};
     return result;
   }, { skipRefresh: true, success: "Outbound message requeued." });
+  await refreshAll();
+}
+
+async function resendGiveawayAnnouncement(action) {
+  await runAction("resendGiveawayAnnouncement", async () => {
+    const result = await api.resendGiveawayAnnouncement(action);
+    if (result.state) {
+      state.giveaway = result.state;
+    }
+    return result;
+  }, { success: "Giveaway announcement queued." });
 }
 
 function renderTestResult() {

@@ -138,12 +138,17 @@ export const createOutboundHistory = (db: DbClient) => {
     },
     summary() {
       const current = list();
+      const pending = current.filter((record) => isPendingOutboundStatus(record.status));
+      const resent = current.filter((record) => record.status === "resent");
       return {
         total: current.length,
-        queued: current.filter((record) => record.status === "queued" || record.status === "retrying" || record.status === "sending").length,
+        queued: pending.length,
+        pending: pending.length,
         failed: current.filter((record) => record.status === "failed").length,
         criticalFailed: current.filter((record) => record.status === "failed" && record.importance === "critical").length,
-        sent: current.filter((record) => record.status === "sent").length
+        sent: current.filter((record) => record.status === "sent").length,
+        resent: resent.length,
+        delivered: current.filter((record) => record.status === "sent" || record.status === "resent").length
       };
     }
   };
@@ -201,6 +206,9 @@ export const isOutboundCategory = (value: string): value is OutboundMessageCateg
 
 export const isOutboundImportance = (value: string): value is OutboundMessageImportance =>
   ["normal", "important", "critical"].includes(value);
+
+export const isPendingOutboundStatus = (status: OutboundMessageStatus) =>
+  status === "queued" || status === "retrying" || status === "sending";
 
 const outboundRecordFromRow = (row: OutboundMessageRow): OutboundMessageRecord => ({
   id: row.id,

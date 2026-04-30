@@ -18,7 +18,9 @@ import {
   classifyOutboundMessage,
   createOutboundHistory,
   isOutboundCategory,
-  isOutboundImportance
+  isOutboundImportance,
+  isPendingOutboundStatus,
+  type OutboundMessageRecord
 } from "../core/outboundHistory";
 import { createRuntimeStatus } from "../core/runtimeStatus";
 import {
@@ -225,6 +227,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
 
   if (request.method === "GET" && url.pathname === "/api/giveaway") {
     sendJson(response, 200, getGiveawayState());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/announcement/resend") {
+    const body = (await readJson(request)) as { action?: string };
+    sendJson(response, 200, await resendGiveawayAnnouncement(body.action));
     return;
   }
 
@@ -811,6 +819,7 @@ const getOperatorStatus = async () => {
       eventSubConnected: botProcess.eventSubConnected,
       chatSubscriptionActive: botProcess.chatSubscriptionActive,
       queueReady: chatQueue.isReady(),
+      queue: chatQueue.snapshot(),
       outboundChat: outboundHistory.summary(),
       liveChatConfirmed: botProcess.liveChatConfirmed,
       note: botProcess.child
@@ -825,6 +834,7 @@ const runPreflightCheck = async () => {
   const status = await getOperatorStatus();
   const runtime = status.runtime;
   const giveawayState = getGiveawayState();
+  const assurance = giveawayState.assurance;
   const outbound = outboundHistory.summary();
   const checks = [
     {
@@ -871,10 +881,10 @@ const runPreflightCheck = async () => {
     },
     {
       name: "Critical outbound failures",
-      ok: outbound.criticalFailed === 0,
-      detail: outbound.criticalFailed === 0
+      ok: outbound.criticalFailed === 0 && !assurance.blockContinue,
+      detail: outbound.criticalFailed === 0 && !assurance.blockContinue
         ? "No critical giveaway chat failures are currently tracked."
-        : "Resend failed critical giveaway messages before continuing."
+        : assurance.nextAction || "Resend failed critical giveaway messages before continuing."
     },
     {
       name: "Giveaway controls",
@@ -1525,6 +1535,65 @@ const resendOutboundMessage = async (id: string | undefined) => {
   };
 };
 
+const resendGiveawayAnnouncement = async (action: string | undefined) => {
+  const phase = getGiveawayAnnouncementPhase(action);
+
+  if (!phase) {
+    return {
+      ...getGiveawayState(),
+      ok: false,
+      error: "Unknown giveaway announcement phase."
+    };
+  }
+
+  const state = giveawaysService.getLatestGiveawayState();
+
+  if (!state.giveaway) {
+    return {
+      ...getGiveawayState(),
+      ok: false,
+      error: "No giveaway is available for announcement resend."
+    };
+  }
+
+  const existing = latestOutboundForActions(state.giveaway.id, phase.actions);
+  const announcement = existing
+    ? {
+        message: existing.message,
+        metadata: {
+          category: "giveaway" as const,
+          action: existing.action || phase.actions[0],
+          importance: existing.importance,
+          giveawayId: state.giveaway.id,
+          resentFrom: existing.id
+        },
+        resentFrom: existing.id
+      }
+    : buildGiveawayAnnouncementForPhase(phase, state);
+
+  if (!announcement) {
+    return {
+      ...getGiveawayState(),
+      ok: false,
+      error: `Cannot reconstruct the ${phase.label} announcement from current giveaway state.`
+    };
+  }
+
+  const result = await enqueueChatMessage(announcement.message, announcement.metadata);
+  const resentFrom = "resentFrom" in announcement ? announcement.resentFrom : undefined;
+
+  if (result.ok && resentFrom && typeof result.outboundMessageId === "string") {
+    outboundHistory.markResent(resentFrom, result.outboundMessageId);
+  }
+
+  return {
+    ...getGiveawayState(),
+    ...result,
+    action: phase.actions[0],
+    resentFrom
+  };
+};
+
 const sendConfiguredChatMessage = async (message: string) => {
   const secrets = readLocalSecrets();
   const twitch = secrets.twitch;
@@ -1578,14 +1647,73 @@ const resetGiveawayTemplates = (actions: unknown) => ({
   templates: giveawayTemplates.reset(actions)
 });
 
+type GiveawayAnnouncementPhase = {
+  id: string;
+  label: string;
+  actions: [string, ...string[]];
+  importance: NonNullable<MessageQueueMetadata["importance"]>;
+  requiredWhen: (state: ReturnType<GiveawaysService["getLatestGiveawayState"]>) => boolean;
+};
+
+const giveawayAnnouncementPhases: GiveawayAnnouncementPhase[] = [
+  {
+    id: "start",
+    label: "Start",
+    actions: ["start"],
+    importance: "critical",
+    requiredWhen: (state) => Boolean(state.giveaway)
+  },
+  {
+    id: "reminder",
+    label: "Reminder / Last call",
+    actions: ["reminder", "last-call"],
+    importance: "important",
+    requiredWhen: () => false
+  },
+  {
+    id: "close",
+    label: "Close",
+    actions: ["close"],
+    importance: "critical",
+    requiredWhen: (state) =>
+      state.giveaway?.status === "closed" || state.giveaway?.status === "ended"
+  },
+  {
+    id: "draw",
+    label: "Draw",
+    actions: ["draw"],
+    importance: "critical",
+    requiredWhen: (state) => state.counts.activeWinners > 0
+  },
+  {
+    id: "end",
+    label: "End",
+    actions: ["end"],
+    importance: "critical",
+    requiredWhen: (state) => state.giveaway?.status === "ended"
+  }
+];
+
+const getGiveawayAnnouncementPhase = (action: string | undefined) => {
+  if (!action) {
+    return undefined;
+  }
+
+  return giveawayAnnouncementPhases.find(
+    (phase) => phase.id === action || phase.actions.includes(action)
+  );
+};
+
 const getGiveawayState = () => {
   const state = giveawaysService.getOperatorState();
   const latest = giveawaysService.getLatestGiveawayState();
+  const assurance = summarizeGiveawayAssurance(latest);
   return {
     ok: true,
     ...state,
     summary: summarizeGiveawayState(state),
-    recap: summarizeGiveawayRecap(latest)
+    recap: summarizeGiveawayRecap(latest, assurance),
+    assurance
   };
 };
 
@@ -1618,8 +1746,115 @@ const summarizeGiveawayState = (
   };
 };
 
-const summarizeGiveawayRecap = (
+const summarizeGiveawayAssurance = (
   state: ReturnType<GiveawaysService["getLatestGiveawayState"]>
+) => {
+  if (!state.giveaway) {
+    return {
+      available: false,
+      blockContinue: false,
+      phases: [],
+      summary: {
+        sent: 0,
+        resent: 0,
+        pending: 0,
+        failed: 0,
+        missingCritical: 0,
+        failedCritical: 0
+      },
+      nextAction: "Start a giveaway."
+    };
+  }
+
+  const messages = giveawayOutboundMessagesFor(state.giveaway.id);
+  const phases = giveawayAnnouncementPhases.map((phase) =>
+    summarizeGiveawayPhase(phase, state, messages)
+  );
+  const failedCritical = phases.filter(
+    (phase) => phase.importance === "critical" && phase.status === "failed"
+  );
+  const missingCritical = phases.filter(
+    (phase) => phase.importance === "critical" && phase.status === "missing"
+  );
+  const pendingCritical = phases.filter(
+    (phase) => phase.importance === "critical" && phase.status === "pending"
+  );
+  const failed = messages.filter((message) => message.status === "failed");
+  const pending = messages.filter((message) => isPendingOutboundStatus(message.status));
+  const sent = messages.filter((message) => message.status === "sent");
+  const resent = messages.filter((message) => message.status === "resent");
+  const blockContinue = failedCritical.length > 0 || missingCritical.length > 0;
+  const nextAction =
+    failedCritical[0]
+      ? `Resend failed ${failedCritical[0].label} announcement before continuing.`
+      : missingCritical[0]
+        ? `Send missing ${missingCritical[0].label} announcement before continuing.`
+        : pendingCritical[0]
+          ? `Wait for ${pendingCritical[0].label} announcement to send.`
+          : "Giveaway chat assurance is clear.";
+
+  return {
+    available: true,
+    giveawayId: state.giveaway.id,
+    blockContinue,
+    phases,
+    summary: {
+      sent: sent.length,
+      resent: resent.length,
+      pending: pending.length,
+      failed: failed.length,
+      missingCritical: missingCritical.length,
+      failedCritical: failedCritical.length
+    },
+    nextAction,
+    latestFailure: failed[0]
+      ? {
+          action: failed[0].action,
+          reason: failed[0].reason,
+          updatedAt: failed[0].updatedAt
+        }
+      : undefined
+  };
+};
+
+const summarizeGiveawayPhase = (
+  phase: GiveawayAnnouncementPhase,
+  state: ReturnType<GiveawaysService["getLatestGiveawayState"]>,
+  messages: OutboundMessageRecord[]
+) => {
+  const latest = latestOutboundForActions(state.giveaway?.id, phase.actions, messages);
+  const required = phase.requiredWhen(state);
+  const status = latest
+    ? phaseStatusFromOutbound(latest)
+    : required
+      ? "missing"
+      : "not-reached";
+
+  return {
+    id: phase.id,
+    label: phase.label,
+    action: latest?.action || phase.actions[0],
+    importance: latest?.importance || phase.importance,
+    required,
+    status,
+    attempts: latest?.attempts ?? 0,
+    message: latest?.message ?? "",
+    reason: latest?.reason ?? "",
+    updatedAt: latest?.updatedAt ?? "",
+    canSend: status === "failed" || status === "missing"
+  };
+};
+
+const phaseStatusFromOutbound = (message: OutboundMessageRecord) => {
+  if (message.status === "failed") return "failed";
+  if (isPendingOutboundStatus(message.status)) return "pending";
+  if (message.status === "sent" || message.status === "resent") return "sent";
+  return message.status;
+};
+
+const summarizeGiveawayRecap = (
+  state: ReturnType<GiveawaysService["getLatestGiveawayState"]>,
+  assurance = summarizeGiveawayAssurance(state)
 ) => {
   if (!state.giveaway) {
     return {
@@ -1651,11 +1886,78 @@ const summarizeGiveawayRecap = (
     criticalMessageCount: criticalMessages.length,
     failedMessageCount: failedMessages.length,
     criticalFailedCount: criticalMessages.filter((message) => message.status === "failed").length,
+    sentMessageCount: assurance.summary.sent,
+    resentMessageCount: assurance.summary.resent,
+    pendingMessageCount: assurance.summary.pending,
+    missingCriticalCount: assurance.summary.missingCritical,
     winners: activeWinners.map((winner) => ({
       login: winner.login,
       displayName: winner.display_name,
       delivered: Boolean(winner.delivered_at)
     }))
+  };
+};
+
+const giveawayOutboundMessagesFor = (giveawayId: number | undefined) =>
+  outboundHistory.list().filter(
+    (message) =>
+      message.category === "giveaway" &&
+      giveawayId !== undefined &&
+      Number(message.giveawayId) === Number(giveawayId)
+  );
+
+const latestOutboundForActions = (
+  giveawayId: number | undefined,
+  actions: readonly string[],
+  messages = giveawayOutboundMessagesFor(giveawayId)
+) =>
+  messages.find(
+    (message) =>
+      actions.includes(message.action) &&
+      giveawayId !== undefined &&
+      Number(message.giveawayId) === Number(giveawayId)
+  );
+
+const buildGiveawayAnnouncementForPhase = (
+  phase: GiveawayAnnouncementPhase,
+  state: ReturnType<GiveawaysService["getLatestGiveawayState"]>
+) => {
+  const giveaway = state.giveaway;
+
+  if (!giveaway) {
+    return undefined;
+  }
+
+  const action = phase.actions[0];
+  const activeWinners = state.winners.filter((winner) => !winner.rerolled_at);
+  const message =
+    action === "start"
+      ? giveawayTemplates.start(giveaway)
+      : action === "reminder"
+        ? giveawayTemplates.reminder(giveaway, state.counts.entries)
+        : action === "close" && (giveaway.status === "closed" || giveaway.status === "ended")
+          ? giveawayTemplates.close(giveaway, state.counts.entries)
+          : action === "draw" && activeWinners.length > 0
+            ? giveawayTemplates.draw({
+                winners: activeWinners,
+                requestedCount: Math.max(activeWinners.length, giveaway.winner_count)
+              })
+            : action === "end" && giveaway.status === "ended"
+              ? giveawayTemplates.end(giveaway, state.winners)
+              : undefined;
+
+  if (!message) {
+    return undefined;
+  }
+
+  return {
+    message,
+    metadata: {
+      category: "giveaway" as const,
+      action,
+      importance: phase.importance,
+      giveawayId: giveaway.id
+    }
   };
 };
 

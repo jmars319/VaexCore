@@ -64,6 +64,9 @@ async function runSmoke() {
   assert(appJs.includes("Run preflight"), "dashboard exposes preflight rehearsal");
   assert(appJs.includes("Copy winners"), "winner workflow can copy winners");
   assert(appJs.includes("Mark all delivered"), "winner workflow can bulk mark delivery");
+  assert(appJs.includes("Do not continue giveaway operations yet"), "giveaway tab warns on critical announcement gaps");
+  assert(appJs.includes("phase-resend"), "giveaway tab exposes phase-level resend controls");
+  assert(appJs.includes("shouldWarnBeforeGiveawayAction"), "giveaway actions warn before continuing after critical chat gaps");
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
@@ -320,6 +323,18 @@ async function runSmoke() {
     keyword: "enter",
     winnerCount: 2
   });
+  const missingStartAnnouncement = await json("/api/giveaway");
+  assert(missingStartAnnouncement.assurance.available === true, "giveaway assurance is available");
+  assert(missingStartAnnouncement.assurance.blockContinue === true, "missing critical announcement blocks continue warning");
+  assert(
+    missingStartAnnouncement.assurance.phases.some((phase) => phase.id === "start" && phase.status === "missing"),
+    "giveaway assurance tracks missing start announcement"
+  );
+  const resendMissingStart = await json("/api/giveaway/announcement/resend", {
+    method: "POST",
+    body: { action: "start" }
+  });
+  assert(resendMissingStart.ok === false, "phase resend fails clearly until chat is validated");
   await expectOk("/api/giveaway/last-call");
   await expectOk("/api/giveaway/add-entrant", { login: "alice", displayName: "Alice" });
   await expectOk("/api/giveaway/add-entrant", { login: "bob", displayName: "Bob" });

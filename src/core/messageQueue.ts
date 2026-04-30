@@ -100,6 +100,14 @@ export class MessageQueue {
     return Boolean(this.timer);
   }
 
+  snapshot() {
+    return {
+      ready: this.isReady(),
+      queued: this.queue.length,
+      processing: this.processing
+    };
+  }
+
   enqueue(message: string, metadata: MessageQueueMetadata = {}) {
     const item = {
       id: `out-${Date.now().toString(36)}-${this.nextId++}`,
@@ -148,6 +156,7 @@ export class MessageQueue {
       }
 
       if (result === "failed") {
+        const maxAttempts = this.options.maxAttempts ?? 4;
         this.options.logger.error(
           {
             message: item.message,
@@ -155,6 +164,8 @@ export class MessageQueue {
             outboundStatus: "failed",
             ...logMetadata(item.metadata),
             attempts: item.attempts,
+            maxAttempts,
+            remainingAttempts: 0,
             ageMs: Date.now() - item.enqueuedAt
           },
           "Outbound chat send failed; message dropped"
@@ -187,6 +198,7 @@ export class MessageQueue {
     if (item.attempts < maxAttempts) {
       this.queue.unshift(item);
       const reasonText = formatReason(reason);
+      const remainingAttempts = maxAttempts - item.attempts;
       this.emit(item, "retrying", {
         reason: reasonText,
         queueDepth: this.queue.length
@@ -200,6 +212,8 @@ export class MessageQueue {
           ...logMetadata(item.metadata),
           attempt: item.attempts,
           maxAttempts,
+          remainingAttempts,
+          retryDelayMs: 1000,
           queued: this.queue.length
         },
         "Outbound chat send failed; message will be retried"
@@ -217,6 +231,8 @@ export class MessageQueue {
         outboundStatus: "failed",
         ...logMetadata(item.metadata),
         attempts: item.attempts,
+        maxAttempts,
+        remainingAttempts: 0,
         ageMs: Date.now() - item.enqueuedAt
       },
       "Outbound chat send failed; retry limit reached"

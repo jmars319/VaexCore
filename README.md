@@ -282,6 +282,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Message Templates` stores non-secret local giveaway wording in SQLite. Supported placeholders include `{title}`, `{keyword}`, `{winnerCount}`, `{entryCount}`, `{displayName}`, `{winners}`, `{rerolled}`, and `{replacement}`.
 - `Post-Giveaway Recap` summarizes the latest giveaway, winners, pending delivery, and critical chat message failures.
 - `Copy winners` and `Mark all delivered` help close out manual delivery without storing prize codes.
+- `Giveaway Chat Assurance` tracks start, reminder/last-call, close, draw, and end announcement phases. If a critical phase is missing or failed, VaexCore shows a do-not-continue warning and offers phase-level send/resend controls.
 
 Current chat command syntax:
 
