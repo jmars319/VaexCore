@@ -72,6 +72,12 @@ export const initializeSchema = (db: DbClient) => {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS operator_message_templates (
+      id TEXT PRIMARY KEY,
+      template TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS giveaway_reminder_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),

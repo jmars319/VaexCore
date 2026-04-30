@@ -14,6 +14,7 @@ import {
   type MessageQueueEventStatus,
   type MessageQueueMetadata
 } from "../core/messageQueue";
+import { createOperatorMessageTemplateStore } from "../core/operatorMessages";
 import {
   classifyOutboundMessage,
   createOutboundHistory,
@@ -69,6 +70,7 @@ const oauthStates = new Map<string, number>();
 const db = createDbClient(process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite");
 const giveawaysService = new GiveawaysService({ db, logger });
 const giveawayTemplates = createGiveawayTemplateStore(db);
+const operatorMessages = createOperatorMessageTemplateStore(db);
 const setupRuntimeStatus = createRuntimeStatus("local");
 const outboundHistory = createOutboundHistory(db);
 const chatQueue = new MessageQueue({
@@ -214,6 +216,29 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "POST" && url.pathname === "/api/chat/send") {
     const body = (await readJson(request)) as { message?: string };
     sendJson(response, 200, await enqueueChatMessage(body.message));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/operator-messages") {
+    sendJson(response, 200, getOperatorMessages());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/operator-messages") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveOperatorMessages(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/operator-messages/reset") {
+    const body = (await readJson(request)) as { ids?: string[] };
+    sendJson(response, 200, resetOperatorMessages(body.ids));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/operator-messages/send") {
+    const body = (await readJson(request)) as { id?: string; confirmed?: boolean };
+    sendJson(response, 200, await sendOperatorMessage(body));
     return;
   }
 
@@ -1680,6 +1705,53 @@ const enqueueChatMessage = async (
 
   const outboundMessageId = chatQueue.enqueue(text, metadata);
   return { ok: true, queued: true, outboundMessageId };
+};
+
+const getOperatorMessages = () => ({
+  ok: true,
+  templates: operatorMessages.list()
+});
+
+const saveOperatorMessages = (body: unknown) => ({
+  ...getOperatorMessages(),
+  templates: operatorMessages.save(body)
+});
+
+const resetOperatorMessages = (ids: unknown) => ({
+  ...getOperatorMessages(),
+  templates: operatorMessages.reset(ids)
+});
+
+const sendOperatorMessage = async (body: { id?: string; confirmed?: boolean }) => {
+  const template = operatorMessages.find(body.id);
+
+  if (!template) {
+    return {
+      ...getOperatorMessages(),
+      ok: false,
+      error: "Unknown operator message preset."
+    };
+  }
+
+  if (template.requiresConfirmation && body.confirmed !== true) {
+    return {
+      ...getOperatorMessages(),
+      ok: false,
+      error: `${template.label} requires confirmation before sending.`
+    };
+  }
+
+  const result = await enqueueChatMessage(template.template, {
+    category: "operator",
+    action: template.id,
+    importance: template.requiresConfirmation ? "important" : "normal"
+  });
+
+  return {
+    ...getOperatorMessages(),
+    ...result,
+    sentPreset: template.id
+  };
 };
 
 const getOutboundMessages = () => ({

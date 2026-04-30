@@ -151,6 +151,8 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
 .template-row strong { display: block; color: var(--text); margin-bottom: 4px; }
 .template-row small { display: block; color: var(--muted); line-height: 1.4; }
 .template-row textarea { min-height: 70px; }
+.operator-template-row { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) auto; }
+.operator-template-row .inline-actions { margin-top: 0; }
 .state-banner {
   display: grid;
   gap: 5px;
@@ -224,4 +226,6 @@ th { color: var(--text); font-weight: 600; }
 @media (max-width: 1020px) {
   body { min-width: 760px; }
   .status-grid, .grid.three, .setup-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operator-template-row { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); }
+  .operator-template-row .inline-actions { grid-column: 2; }
 }

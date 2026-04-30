@@ -79,6 +79,8 @@ async function runSmoke() {
   assert(appJs.includes("Send Throttle"), "queue health shows send throttle");
   assert(appJs.includes("Safe To Resend"), "recovery checklist explains resend safety");
   assert(appJs.includes("Category"), "outbound failures show failure categories");
+  assert(appJs.includes("Operator Messages"), "chat tools expose operator message presets");
+  assert(appJs.includes("Requires confirmation"), "operator message presets identify high-impact sends");
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
@@ -93,6 +95,8 @@ async function runSmoke() {
   assert(setupServerJs.includes("failureCategory"), "setup server returns outbound failure categories");
   assert(setupServerJs.includes("rate_limit"), "setup server preserves Twitch rate-limit classification");
   assert(setupServerJs.includes("retryDelayMs"), "setup server reports retry timing");
+  assert(setupServerJs.includes("operator_message_templates"), "setup server stores operator message presets locally");
+  assert(setupServerJs.includes("/api/operator-messages/send"), "setup server exposes operator message send route");
   assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
   assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
@@ -225,6 +229,38 @@ async function runSmoke() {
     body: { message: "hello chat" }
   });
   assert(chatSend.ok === false, "chat send route rejects until validation passes");
+
+  const operatorMessages = await json("/api/operator-messages");
+  assert(operatorMessages.ok === true, "operator message route exists");
+  assert(operatorMessages.templates.some((template) => template.id === "technical-pause"), "operator messages include technical pause preset");
+  assert(operatorMessages.templates.some((template) => template.requiresConfirmation === true), "operator messages mark high-impact presets");
+  const savedOperatorMessages = await json("/api/operator-messages", {
+    method: "POST",
+    body: {
+      templates: {
+        thanks: "Appreciate you hanging out tonight."
+      }
+    }
+  });
+  assert(
+    savedOperatorMessages.templates.some((template) => template.id === "thanks" && template.customized),
+    "operator message presets can be customized"
+  );
+  const unconfirmedOperatorSend = await json("/api/operator-messages/send", {
+    method: "POST",
+    body: { id: "technical-pause" }
+  });
+  assert(unconfirmedOperatorSend.ok === false, "high-impact operator message requires confirmation");
+  const operatorSendWithoutValidation = await json("/api/operator-messages/send", {
+    method: "POST",
+    body: { id: "thanks" }
+  });
+  assert(operatorSendWithoutValidation.ok === false, "operator message send rejects until validation passes");
+  const resetOperatorMessages = await json("/api/operator-messages/reset", { method: "POST" });
+  assert(
+    resetOperatorMessages.templates.every((template) => !template.customized),
+    "operator message presets can reset to defaults"
+  );
 
   const preflight = await json("/api/preflight", { method: "POST" });
   assert(Array.isArray(preflight.checks), "preflight returns check list");

@@ -14,6 +14,7 @@ const state = {
   status: null,
   giveaway: null,
   templates: [],
+  operatorMessages: [],
   reminder: null,
   preflightResult: null,
   auditLogs: [],
@@ -30,6 +31,7 @@ const state = {
   settingsDraft: {},
   giveawayDraft: {},
   templateDraft: {},
+  operatorTemplateDraft: {},
   reminderDraft: {},
   oauthNotice: readOAuthNotice()
 };
@@ -88,6 +90,10 @@ const api = {
   resendCriticalGiveaway: () => api.post("/api/giveaway/critical/resend"),
   sendGiveawayStatus: () => api.post("/api/giveaway/status/send"),
   chatSend: (message) => api.post("/api/chat/send", { message }),
+  operatorMessages: () => api.get("/api/operator-messages"),
+  saveOperatorMessages: (templates) => api.post("/api/operator-messages", { templates }),
+  resetOperatorMessages: () => api.post("/api/operator-messages/reset"),
+  sendOperatorMessage: (id, confirmed = false) => api.post("/api/operator-messages/send", { id, confirmed }),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
 };
@@ -745,6 +751,7 @@ function renderGiveaways() {
 function renderChatTools() {
   return [
     sectionHeader("Chat Tools", "Send operator messages and verify outbound chat without changing giveaway state."),
+    renderOperatorMessagesCard(),
     card("Outbound Chat", [
       formRow("Message text", h("textarea", { id: "chatMessage", placeholder: "Message to send to Twitch chat" })),
       h("div", { className: "actions" }, [
@@ -760,6 +767,40 @@ function renderChatTools() {
     renderOutboundHistoryCard(),
     message()
   ];
+}
+
+function renderOperatorMessagesCard() {
+  const templates = state.operatorMessages || [];
+
+  return card("Operator Messages", [
+    callout("Local presets only. They do not store prize codes and every send uses the normal outbound queue, history, and recovery flow.", "muted"),
+    h("div", { className: "template-list" }, templates.map((template) =>
+      h("div", { className: "template-row operator-template-row" }, [
+        h("span", {}, [
+          h("strong", { text: template.label }),
+          h("small", { text: template.description }),
+          template.requiresConfirmation ? h("small", { className: "warn", text: "Requires confirmation" }) : null
+        ]),
+        h("textarea", {
+          id: `operator-template-${template.id}`,
+          "data-id": template.id,
+          onInput: updateOperatorTemplateDraft
+        }),
+        h("div", { className: "actions inline-actions" }, [
+          actionButton("Send", {
+            id: `operator-send-${template.id}`,
+            variant: template.requiresConfirmation ? "danger" : "secondary",
+            busyKey: "sendOperatorMessage",
+            onClick: () => sendOperatorMessage(template.id, template.label, Boolean(template.requiresConfirmation))
+          })
+        ])
+      ])
+    )),
+    h("div", { className: "actions" }, [
+      actionButton("Save operator messages", { id: "saveOperatorMessages", variant: "secondary", onClick: saveOperatorMessages }),
+      actionButton("Reset operator messages", { id: "resetOperatorMessages", variant: "secondary", onClick: resetOperatorMessages })
+    ])
+  ]);
 }
 
 function renderTesting() {
@@ -1407,11 +1448,12 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, templates, reminder, audit, outbound] = await Promise.all([
+    const [config, status, giveaway, templates, operatorMessages, reminder, audit, outbound] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
       api.templates(),
+      api.operatorMessages(),
       api.reminder(),
       api.auditLogs(),
       api.outboundMessages()
@@ -1420,6 +1462,7 @@ async function refreshAll() {
     state.status = status;
     state.giveaway = giveaway;
     state.templates = templates.templates || [];
+    state.operatorMessages = operatorMessages.templates || [];
     state.reminder = reminder.reminder || {};
     state.auditLogs = audit.logs || [];
     state.outboundMessages = outbound.messages || [];
@@ -1430,9 +1473,10 @@ async function refreshAll() {
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, reminder, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.reminder(), api.auditLogs(), api.outboundMessages()]);
+  const [status, giveaway, operatorMessages, reminder, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages()]);
   state.status = status;
   state.giveaway = giveaway;
+  state.operatorMessages = operatorMessages.templates || [];
   state.reminder = reminder.reminder || {};
   state.auditLogs = audit.logs || [];
   state.outboundMessages = outbound.messages || [];
@@ -1582,6 +1626,12 @@ function updateTemplateDraft(event) {
   state.templateDraft[action] = event.target.value;
 }
 
+function updateOperatorTemplateDraft(event) {
+  const id = event.target.dataset.id;
+  if (!id) return;
+  state.operatorTemplateDraft[id] = event.target.value;
+}
+
 function updateReminderDraft(event) {
   const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
   state.reminderDraft[event.target.id] = value;
@@ -1664,6 +1714,20 @@ function readTemplatePayload() {
   return payload;
 }
 
+function readOperatorTemplatePayload() {
+  const payload = {};
+
+  for (const template of state.operatorMessages || []) {
+    const id = `operator-template-${template.id}`;
+    payload[template.id] = operatorTemplateValue(template.id, template.template || "");
+    if (field(id)) {
+      payload[template.id] = field(id).value;
+    }
+  }
+
+  return payload;
+}
+
 async function validateSetup() {
   await runAction("validate", async () => {
     const result = await api.validate();
@@ -1718,6 +1782,38 @@ async function resetTemplates() {
     state.templateDraft = {};
     return result;
   }, { skipRefresh: true, success: "Templates reset." });
+}
+
+async function saveOperatorMessages() {
+  await runAction("saveOperatorMessages", async () => {
+    const result = await api.saveOperatorMessages(readOperatorTemplatePayload());
+    state.operatorMessages = result.templates || [];
+    state.operatorTemplateDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Operator messages saved." });
+}
+
+async function resetOperatorMessages() {
+  if (!confirm("Reset operator message presets to defaults?")) {
+    return;
+  }
+
+  await runAction("resetOperatorMessages", async () => {
+    const result = await api.resetOperatorMessages();
+    state.operatorMessages = result.templates || [];
+    state.operatorTemplateDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Operator messages reset." });
+}
+
+async function sendOperatorMessage(id, label, requiresConfirmation) {
+  if (requiresConfirmation && !confirm(`Send "${label}" to Twitch chat now?`)) {
+    return;
+  }
+
+  await runAction("sendOperatorMessage", () => api.sendOperatorMessage(id, requiresConfirmation), {
+    success: "Operator message queued."
+  });
 }
 
 async function saveReminder() {
@@ -1854,6 +1950,9 @@ function syncFormValues() {
   for (const template of state.templates || []) {
     setValue(`template-${template.action}`, templateValue(template.action, template.template || ""));
   }
+  for (const template of state.operatorMessages || []) {
+    setValue(`operator-template-${template.id}`, operatorTemplateValue(template.id, template.template || ""));
+  }
   setChecked("reminderEnabled", Boolean(reminderValue("reminderEnabled", state.reminder?.enabled)));
   setValue("reminderInterval", reminderValue("reminderInterval", state.reminder?.intervalMinutes || 10));
   setValue("simActor", field("simActor")?.value || "viewer");
@@ -1874,6 +1973,10 @@ function giveawayValue(id, fallback) {
 
 function templateValue(action, fallback) {
   return draftValue(state.templateDraft, action, fallback);
+}
+
+function operatorTemplateValue(id, fallback) {
+  return draftValue(state.operatorTemplateDraft, id, fallback);
 }
 
 function reminderValue(id, fallback) {
@@ -1991,6 +2094,9 @@ function updateDisabledState() {
   setDisabled("guideTest", !state.validSetup, "Validate setup before sending a setup test message.");
   setDisabled("sendChat", !state.validSetup, "Validate setup before sending chat.");
   setDisabled("ping", !state.validSetup, "Validate setup before sending chat.");
+  for (const template of state.operatorMessages || []) {
+    setDisabled(`operator-send-${template.id}`, !state.validSetup, "Validate setup before sending operator messages.");
+  }
   setDisabled("botStart", !botStartReady || botRunning, botRunning ? "Bot is already running." : "Complete setup and validation before starting the bot.");
   setDisabled("guideBotStart", !botStartReady || botRunning, botRunning ? "Bot is already running." : "Complete setup and validation before starting the bot.");
   setDisabled("botStop", !botRunning, "Bot is not running.");
