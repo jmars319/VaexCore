@@ -38,6 +38,7 @@ import {
 } from "../core/security";
 import { createDbClient } from "../db/client";
 import { registerGiveawayCommands } from "../modules/giveaways/giveaways.commands";
+import { formatWinnerNames } from "../modules/giveaways/giveaways.messages";
 import { GiveawaysService } from "../modules/giveaways/giveaways.service";
 import { createGiveawayTemplateStore } from "../modules/giveaways/giveaways.templates";
 import {
@@ -233,6 +234,16 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "POST" && url.pathname === "/api/giveaway/announcement/resend") {
     const body = (await readJson(request)) as { action?: string };
     sendJson(response, 200, await resendGiveawayAnnouncement(body.action));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/critical/resend") {
+    sendJson(response, 200, await resendCriticalGiveawayMessage());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/status/send") {
+    sendJson(response, 200, await sendCurrentGiveawayStatus());
     return;
   }
 
@@ -1594,6 +1605,76 @@ const resendGiveawayAnnouncement = async (action: string | undefined) => {
   };
 };
 
+const resendCriticalGiveawayMessage = async () => {
+  const record = latestFailedCriticalGiveawayMessage();
+
+  if (!record) {
+    return {
+      ...getGiveawayState(),
+      ok: false,
+      error: "No failed critical giveaway message is available for panic resend."
+    };
+  }
+
+  const result = await resendOutboundMessage(record.id);
+
+  return {
+    ...getGiveawayState(),
+    ...result,
+    resentAction: record.action,
+    resentFrom: record.id
+  };
+};
+
+const latestFailedCriticalGiveawayMessage = () => {
+  const state = giveawaysService.getLatestGiveawayState();
+  const currentGiveawayId = state.giveaway?.id;
+  const failedCritical = outboundHistory.list().filter(
+    (message) =>
+      message.category === "giveaway" &&
+      message.importance === "critical" &&
+      message.status === "failed"
+  );
+
+  if (currentGiveawayId !== undefined) {
+    const currentFailure = failedCritical.find(
+      (message) => Number(message.giveawayId) === Number(currentGiveawayId)
+    );
+
+    if (currentFailure) {
+      return currentFailure;
+    }
+  }
+
+  return failedCritical[0];
+};
+
+const sendCurrentGiveawayStatus = async () => {
+  const state = giveawaysService.getLatestGiveawayState();
+  const message = buildGiveawayStatusMessage(state);
+
+  if (!state.giveaway || !message) {
+    return {
+      ...getGiveawayState(),
+      ok: false,
+      error: "No giveaway is available for a status message."
+    };
+  }
+
+  const result = await enqueueChatMessage(message, {
+    category: "giveaway",
+    action: "status",
+    importance: "normal",
+    giveawayId: state.giveaway.id
+  });
+
+  return {
+    ...getGiveawayState(),
+    ...result,
+    message
+  };
+};
+
 const sendConfiguredChatMessage = async (message: string) => {
   const secrets = readLocalSecrets();
   const twitch = secrets.twitch;
@@ -1725,6 +1806,7 @@ const summarizeGiveawayState = (
     (winner) => !winner.delivered_at
   ).length;
   const winnerCount = state.giveaway?.winner_count ?? 6;
+  const liveState = giveawayLiveState(state, activeWinners, undeliveredWinnersCount);
 
   return {
     status: state.giveaway?.status ?? "none",
@@ -1736,6 +1818,11 @@ const summarizeGiveawayState = (
     rerolledCount: state.counts.rerolledWinners,
     enoughEntrantsForFullDraw: state.counts.entries >= winnerCount,
     undeliveredWinnersCount,
+    operatorState: liveState.label,
+    operatorStateDetail: liveState.detail,
+    operatorStateTone: liveState.tone,
+    safeToEnd: liveState.safeToEnd,
+    canSendStatus: Boolean(state.giveaway),
     manualCodeDeliveryRequired: Boolean(state.giveaway),
     endWarnings: [
       state.giveaway?.status === "open" ? "Giveaway is still open." : undefined,
@@ -1743,6 +1830,68 @@ const summarizeGiveawayState = (
         ? `${undeliveredWinnersCount} winner(s) are not marked delivered.`
         : undefined
     ].filter(Boolean)
+  };
+};
+
+const giveawayLiveState = (
+  state: ReturnType<GiveawaysService["getOperatorState"]>,
+  activeWinners: ReturnType<GiveawaysService["getOperatorState"]>["winners"],
+  undeliveredWinnersCount: number
+) => {
+  const giveaway = state.giveaway;
+
+  if (!giveaway) {
+    return {
+      label: "no giveaway",
+      detail: "Start a giveaway when stream operations are ready.",
+      tone: "muted",
+      safeToEnd: false
+    };
+  }
+
+  if (giveaway.status === "open") {
+    return {
+      label: "entries open",
+      detail: `Viewers enter with !${giveaway.keyword}. Close entries before drawing.`,
+      tone: "ok",
+      safeToEnd: false
+    };
+  }
+
+  if (giveaway.status === "closed" && activeWinners.length === 0) {
+    return {
+      label: "ready to draw",
+      detail: `${state.counts.entries} entr${state.counts.entries === 1 ? "y" : "ies"} recorded. Draw winners when ready.`,
+      tone: "ok",
+      safeToEnd: false
+    };
+  }
+
+  if (giveaway.status === "ended") {
+    return {
+      label: "giveaway ended",
+      detail: undeliveredWinnersCount > 0
+        ? `${undeliveredWinnersCount} winner(s) were still pending delivery at end.`
+        : "Post-stream recap is ready.",
+      tone: undeliveredWinnersCount > 0 ? "warn" : "ok",
+      safeToEnd: false
+    };
+  }
+
+  if (undeliveredWinnersCount > 0) {
+    return {
+      label: "delivery pending",
+      detail: `${undeliveredWinnersCount} active winner(s) still need manual delivery.`,
+      tone: "warn",
+      safeToEnd: false
+    };
+  }
+
+  return {
+    label: "safe to end",
+    detail: "Active winners are marked delivered.",
+    tone: "ok",
+    safeToEnd: true
   };
 };
 
@@ -1959,6 +2108,41 @@ const buildGiveawayAnnouncementForPhase = (
       giveawayId: giveaway.id
     }
   };
+};
+
+const buildGiveawayStatusMessage = (
+  state: ReturnType<GiveawaysService["getLatestGiveawayState"]>
+) => {
+  const giveaway = state.giveaway;
+
+  if (!giveaway) {
+    return undefined;
+  }
+
+  const activeWinners = state.winners.filter((winner) => !winner.rerolled_at);
+  const pendingDelivery = activeWinners.filter((winner) => !winner.delivered_at);
+
+  if (giveaway.status === "open") {
+    return `Giveaway status: entries open for ${giveaway.title}. Type !${giveaway.keyword} to enter. Entries: ${state.counts.entries}. Winners: ${giveaway.winner_count}.`;
+  }
+
+  if (giveaway.status === "closed" && activeWinners.length === 0) {
+    return `Giveaway status: entries closed for ${giveaway.title}. ${state.counts.entries} entr${state.counts.entries === 1 ? "y" : "ies"}. Ready to draw.`;
+  }
+
+  if (activeWinners.length === 0) {
+    return `Giveaway status: ${giveaway.title} is ${giveaway.status}. No winners have been drawn.`;
+  }
+
+  const winnerText = formatWinnerNames(activeWinners, 5);
+  const deliveryText = pendingDelivery.length > 0
+    ? `Delivery pending for ${pendingDelivery.length}.`
+    : "All active winners are marked delivered.";
+  const prefix = giveaway.status === "ended"
+    ? "Final giveaway status"
+    : "Giveaway status";
+
+  return `${prefix}: ${giveaway.title}. Winner${activeWinners.length === 1 ? "" : "s"}: ${winnerText}. ${deliveryText}`;
 };
 
 const runGiveawayAction = <TResult extends Record<string, unknown>>(

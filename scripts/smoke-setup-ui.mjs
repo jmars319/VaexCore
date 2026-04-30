@@ -67,17 +67,27 @@ async function runSmoke() {
   assert(appJs.includes("Do not continue giveaway operations yet"), "giveaway tab warns on critical announcement gaps");
   assert(appJs.includes("phase-resend"), "giveaway tab exposes phase-level resend controls");
   assert(appJs.includes("shouldWarnBeforeGiveawayAction"), "giveaway actions warn before continuing after critical chat gaps");
+  assert(appJs.includes("Live Mode"), "setup UI exposes compact live mode tab");
+  assert(appJs.includes("Send status to chat"), "live mode can send current giveaway status");
+  assert(appJs.includes("Panic Resend"), "live mode exposes panic resend area");
+  assert(appJs.includes("Post-Stream Recap"), "live mode exposes post-stream recap copy area");
+  assert(appJs.includes("Outbound Failure Logs"), "bot runtime highlights outbound failure logs");
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
   assert(setupServerJs.includes("outboundImportance"), "setup server tracks outbound importance metadata");
   assert(setupServerJs.includes("giveaway_message_templates"), "setup server stores giveaway templates locally");
+  assert(setupServerJs.includes("entries open") && setupServerJs.includes("safe to end"), "setup server returns live giveaway state copy");
+  assert(setupServerJs.includes("/api/giveaway/status/send"), "setup server can send current giveaway status");
+  assert(setupServerJs.includes("/api/giveaway/critical/resend"), "setup server exposes critical giveaway panic resend");
   assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
   assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
   assert(styles.includes(".tab-panel"), "styles asset loaded");
   assert(styles.includes(".setup-step"), "setup guide styles loaded");
   assert(styles.includes(".runtime-log"), "bot runtime log styles loaded");
+  assert(styles.includes(".state-banner"), "live mode state styles loaded");
+  assert(styles.includes(".failure-log"), "outbound failure log styles loaded");
 
   const initialConfig = await json("/api/config");
   assertSafeConfig(initialConfig);
@@ -257,6 +267,8 @@ async function runSmoke() {
     outboundAfterExternalWrite.summary.criticalFailed >= 1,
     "externally written critical outbound failures affect setup summary"
   );
+  const panicResendWithoutValidation = await json("/api/giveaway/critical/resend", { method: "POST" });
+  assert(panicResendWithoutValidation.ok === false, "panic resend fails clearly until chat is validated");
 
   const viewerDenied = await json("/api/command/simulate", {
     method: "POST",
@@ -323,6 +335,10 @@ async function runSmoke() {
     keyword: "enter",
     winnerCount: 2
   });
+  const startedGiveaway = await json("/api/giveaway");
+  assert(startedGiveaway.summary.operatorState === "entries open", "live state shows entries open after start");
+  const statusSendWithoutValidation = await json("/api/giveaway/status/send", { method: "POST" });
+  assert(statusSendWithoutValidation.ok === false, "status-to-chat fails clearly until chat is validated");
   const missingStartAnnouncement = await json("/api/giveaway");
   assert(missingStartAnnouncement.assurance.available === true, "giveaway assurance is available");
   assert(missingStartAnnouncement.assurance.blockContinue === true, "missing critical announcement blocks continue warning");
@@ -341,12 +357,15 @@ async function runSmoke() {
   const reminderWithoutChat = await json("/api/giveaway/reminder/send", { method: "POST" });
   assert(reminderWithoutChat.ok === false, "manual giveaway reminder fails clearly without configured chat");
   await expectOk("/api/giveaway/close");
+  const closedGiveaway = await json("/api/giveaway");
+  assert(closedGiveaway.summary.operatorState === "ready to draw", "live state shows ready to draw after close");
   await expectOk("/api/giveaway/draw", { count: 2 });
 
   const giveaway = await json("/api/giveaway");
   assert(giveaway.entries.length === 2, "giveaway entrants load");
   assert(giveaway.winners.length === 2, "giveaway winners load");
   assert(giveaway.summary.status === "closed", "giveaway summary loads");
+  assert(giveaway.summary.operatorState === "delivery pending", "live state shows delivery pending after draw");
 
   const firstWinner = giveaway.winners[0]?.login;
   assert(Boolean(firstWinner), "winner login exists");
@@ -355,6 +374,7 @@ async function runSmoke() {
   await expectOk("/api/giveaway/deliver-all");
   const deliveredState = await json("/api/giveaway");
   assert(deliveredState.summary.undeliveredWinnersCount === 0, "bulk delivery marks remaining winners delivered");
+  assert(deliveredState.summary.operatorState === "safe to end", "live state shows safe to end after delivery");
 
   const auditLogs = await json("/api/audit-logs");
   assert(auditLogs.logs.length > 0, "audit logs load");
@@ -363,6 +383,7 @@ async function runSmoke() {
   const endedGiveaway = await json("/api/giveaway");
   assert(endedGiveaway.recap.available === true, "post-giveaway recap is available after end");
   assert(endedGiveaway.recap.status === "ended", "post-giveaway recap tracks ended status");
+  assert(endedGiveaway.summary.operatorState === "no giveaway", "active giveaway state clears after end");
   const lifecycle = await json("/api/giveaway/run-test", {
     method: "POST",
     body: { confirmed: true }

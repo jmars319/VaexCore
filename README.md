@@ -173,6 +173,7 @@ http://localhost:3434
 The console is organized into durable sections:
 
 - `Dashboard`: high-level Twitch, queue, chat, active giveaway readiness, and preflight rehearsal.
+- `Live Mode`: compact stream-night state, status-to-chat, panic resend, outbound failure logs, and recap copy.
 - `Giveaways`: start, close, draw, reroll, claim, deliver, end giveaways, manage reminder timing, edit giveaway chat templates, and review the latest recap.
 - `Chat Tools`: send chat messages, send test messages, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
@@ -283,6 +284,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Post-Giveaway Recap` summarizes the latest giveaway, winners, pending delivery, and critical chat message failures.
 - `Copy winners` and `Mark all delivered` help close out manual delivery without storing prize codes.
 - `Giveaway Chat Assurance` tracks start, reminder/last-call, close, draw, and end announcement phases. If a critical phase is missing or failed, VaexCore shows a do-not-continue warning and offers phase-level send/resend controls.
+- `Live Mode` keeps the current operator state explicit: `entries open`, `ready to draw`, `delivery pending`, `safe to end`, or `giveaway ended`. It can send the current giveaway status to chat, panic-resend the latest failed critical giveaway message, show outbound failure logs separately, and copy a post-stream recap for notes.
 
 Current chat command syntax:
 

@@ -1,5 +1,6 @@
 const tabs = [
   ["dashboard", "Dashboard"],
+  ["live-mode", "Live Mode"],
   ["giveaways", "Giveaways"],
   ["chat-tools", "Chat Tools"],
   ["testing", "Testing"],
@@ -84,6 +85,8 @@ const api = {
   outboundMessages: () => api.get("/api/outbound-messages"),
   resendOutboundMessage: (id) => api.post("/api/outbound-messages/resend", id ? { id } : {}),
   resendGiveawayAnnouncement: (action) => api.post("/api/giveaway/announcement/resend", { action }),
+  resendCriticalGiveaway: () => api.post("/api/giveaway/critical/resend"),
+  sendGiveawayStatus: () => api.post("/api/giveaway/status/send"),
   chatSend: (message) => api.post("/api/chat/send", { message }),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
@@ -185,6 +188,7 @@ function renderSidebar() {
 function renderTab(id) {
   const body = {
     dashboard: renderDashboard,
+    "live-mode": renderLiveMode,
     giveaways: renderGiveaways,
     "chat-tools": renderChatTools,
     testing: renderTesting,
@@ -276,6 +280,7 @@ function renderDashboard() {
         }
       })
     ]),
+    renderLiveStateCard({ prefix: "dashboard" }),
     renderBotRuntimeCard(runtime),
     renderPreflightCard(),
     card("Readiness", [
@@ -298,11 +303,63 @@ function renderDashboard() {
   ];
 }
 
+function renderLiveMode() {
+  const readiness = getReadiness();
+
+  return [
+    sectionHeader("Live Mode", "Compact stream-state controls for live operation.",
+      actionButton("Refresh", { id: "liveRefresh", onClick: refreshAll, busyKey: "refresh" })
+    ),
+    renderLiveStateCard({ prefix: "live" }),
+    readiness.blockers.length
+      ? card("Blockers", [list(readiness.blockers, "bad")])
+      : card("Ready Summary", [callout("Twitch connection ready", "ok")]),
+    renderPanicResendCard(),
+    renderPostStreamRecapCard({ compact: true }),
+    renderFailureLogCard()
+  ];
+}
+
+function renderLiveStateCard(options = {}) {
+  const summary = state.giveaway?.summary || state.status?.giveaway || {};
+  const assurance = state.giveaway?.assurance || {};
+  const display = liveDisplayState(summary, state.giveaway?.recap || {});
+  const tone = display.tone;
+  const label = display.label;
+  const detail = display.detail;
+  const prefix = options.prefix || "liveState";
+
+  return card("Live Giveaway State", [
+    h("div", { className: `state-banner ${tone}` }, [
+      h("strong", { text: label }),
+      h("span", { text: detail })
+    ]),
+    statusGrid([
+      ["Entries", summary.entryCount || 0, true],
+      ["Winners", `${summary.winnersDrawn || 0}/${summary.winnerCount || 0}`, true],
+      ["Delivery", Number(summary.undeliveredWinnersCount || 0) === 0 ? "clear" : `${summary.undeliveredWinnersCount} pending`, Number(summary.undeliveredWinnersCount || 0) === 0],
+      ["Safe To End", summary.safeToEnd ? "yes" : "no", Boolean(summary.safeToEnd)],
+      ["Critical Gaps", assurance.summary?.missingCritical || 0, Number(assurance.summary?.missingCritical || 0) === 0],
+      ["Critical Failed", assurance.summary?.failedCritical || 0, Number(assurance.summary?.failedCritical || 0) === 0],
+      ["Chat Queue", state.status?.runtime?.queue?.queued || 0, Number(state.status?.runtime?.queue?.queued || 0) === 0],
+      ["Bot", state.status?.runtime?.botProcess?.status || "stopped", Boolean(state.status?.runtime?.botProcess?.running)]
+    ]),
+    assurance.blockContinue ? callout(`Do not continue giveaway operations yet. ${assurance.nextAction}`, "bad") : null,
+    h("div", { className: "actions live-actions" }, [
+      actionButton("Send status to chat", { id: `${prefix}SendGiveawayStatus`, variant: "secondary", busyKey: "sendGiveawayStatus", onClick: sendGiveawayStatus }),
+      actionButton("Panic resend latest critical", { id: `${prefix}PanicResendCritical`, variant: "danger", busyKey: "resendCriticalGiveaway", onClick: resendCriticalGiveaway }),
+      actionButton("Run preflight", { id: `${prefix}RunPreflight`, variant: "secondary", busyKey: "runPreflight", onClick: runPreflight }),
+      actionButton("Copy recap", { id: `${prefix}CopyRecap`, variant: "secondary", busyKey: "copyRecap", onClick: copyRecap })
+    ])
+  ]);
+}
+
 function renderBotRuntimeCard(runtime) {
   const process = runtime?.botProcess || {};
   const running = Boolean(process.running);
   const canStart = canStartBot(runtime);
   const recentLogs = process.recentLogs || [];
+  const failureLogs = outboundFailureLogs(recentLogs);
 
   return card("Bot Runtime", [
     statusGrid([
@@ -318,7 +375,21 @@ function renderBotRuntimeCard(runtime) {
     ]),
     canStart || running ? null : callout("Complete setup and validation before starting the bot.", "warn"),
     process.lastError ? callout(process.lastError, "bad") : null,
+    failureLogs.length ? h("div", {}, [
+      h("h3", { text: "Outbound Failure Logs" }),
+      h("pre", { className: "runtime-log failure-log", text: failureLogs.slice(-5).join("\n") })
+    ]) : null,
     recentLogs.length ? h("pre", { className: "runtime-log", text: recentLogs.slice(-8).join("\n") }) : h("p", { className: "muted", text: "No bot runtime logs yet." })
+  ]);
+}
+
+function renderFailureLogCard() {
+  const logs = outboundFailureLogs(state.status?.runtime?.botProcess?.recentLogs || []);
+
+  return card("Outbound Failure Logs", [
+    logs.length
+      ? h("pre", { className: "runtime-log failure-log", text: logs.slice(-8).join("\n") })
+      : callout("No outbound chat failures in recent bot logs.", "ok")
   ]);
 }
 
@@ -521,6 +592,52 @@ function renderGiveawayRecapCard() {
       `${winner.displayName} @${winner.login}`,
       winner.delivered ? "yes" : "pending"
     ]))
+  ]);
+}
+
+function renderPanicResendCard() {
+  const failures = criticalGiveawayFailures();
+  const latest = failures[0];
+
+  return card("Panic Resend", [
+    statusGrid([
+      ["Failed Critical", failures.length, failures.length === 0],
+      ["Latest Action", latest?.action || "none", !latest],
+      ["Latest Reason", latest?.reason || "none", !latest],
+      ["Updated", latest?.updatedAt || "none", !latest]
+    ]),
+    latest
+      ? callout("Review the failed message, then resend only if chat did not receive the critical giveaway announcement.", "bad")
+      : callout("No failed critical giveaway messages need panic resend.", "ok"),
+    latest ? h("pre", { className: "runtime-log failure-log", text: `${latest.action || "message"}: ${latest.message}` }) : null,
+    h("div", { className: "actions" }, [
+      actionButton("Panic resend latest critical", {
+        id: "panicCardResendCritical",
+        variant: "danger",
+        busyKey: "resendCriticalGiveaway",
+        onClick: resendCriticalGiveaway
+      })
+    ])
+  ]);
+}
+
+function renderPostStreamRecapCard() {
+  const text = postStreamRecapText();
+
+  return card("Post-Stream Recap", [
+    h("textarea", {
+      id: "postStreamRecap",
+      className: "recap-text",
+      readonly: "readonly"
+    }, text),
+    h("div", { className: "actions" }, [
+      actionButton("Copy recap", {
+        id: "postStreamCopyRecap",
+        variant: "secondary",
+        busyKey: "copyRecap",
+        onClick: copyRecap
+      })
+    ])
   ]);
 }
 
@@ -992,6 +1109,23 @@ function getReadiness() {
   };
 }
 
+function liveDisplayState(summary = {}, recap = {}) {
+  if ((summary.status || "none") === "none" && recap.available && recap.status === "ended") {
+    const pending = Number(recap.pendingDeliveryCount || 0);
+    return {
+      label: "giveaway ended",
+      detail: pending > 0 ? `${pending} winner(s) remained pending at end.` : "Post-stream recap is ready.",
+      tone: pending > 0 ? "warn" : "ok"
+    };
+  }
+
+  return {
+    label: summary.operatorState || "loading",
+    detail: summary.operatorStateDetail || "Waiting for giveaway state.",
+    tone: summary.operatorStateTone || "muted"
+  };
+}
+
 function nextGiveawayAction(summary = {}) {
   if (summary.status === "open") return "Close entries before drawing winners";
   if (summary.status === "closed" && Number(summary.winnersDrawn || 0) === 0) return "Draw winners";
@@ -1150,6 +1284,56 @@ function giveawayOutboundMessages() {
   }
 
   return messages.filter((item) => Number(item.giveawayId) === Number(giveawayId));
+}
+
+function criticalGiveawayFailures() {
+  const giveawayId = state.giveaway?.giveaway?.id;
+  const failures = (state.outboundMessages || [])
+    .filter((item) => item.category === "giveaway" && item.importance === "critical" && item.status === "failed")
+    .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  const current = giveawayId === undefined
+    ? []
+    : failures.filter((item) => Number(item.giveawayId) === Number(giveawayId));
+
+  return current.length ? current : failures;
+}
+
+function outboundFailureLogs(logs = []) {
+  return logs.filter((line) =>
+    /Outbound chat send failed|outboundStatus.*failed|retry limit|message dropped/i.test(line)
+  );
+}
+
+function postStreamRecapText() {
+  const recap = state.giveaway?.recap || {};
+  const summary = state.giveaway?.summary || {};
+  const assurance = state.giveaway?.assurance || {};
+
+  if (!recap.available) {
+    return "No giveaway recap available yet.";
+  }
+
+  const winners = (recap.winners || []).length
+    ? (recap.winners || []).map((winner) =>
+        `- ${winner.displayName} (@${winner.login}) - ${winner.delivered ? "delivered" : "pending delivery"}`
+      )
+    : ["- No active winners recorded."];
+
+  return [
+    `Giveaway: #${recap.id} ${recap.title}`,
+    `State: ${summary.operatorState || recap.status}`,
+    `Entries: ${recap.entryCount || 0}`,
+    `Winners: ${recap.activeWinnerCount || 0}`,
+    `Pending delivery: ${recap.pendingDeliveryCount || 0}`,
+    `Critical chat sent: ${recap.sentMessageCount || 0}`,
+    `Critical chat resent: ${recap.resentMessageCount || 0}`,
+    `Critical chat pending: ${recap.pendingMessageCount || 0}`,
+    `Critical chat failed: ${recap.criticalFailedCount || 0}`,
+    `Missing critical phases: ${recap.missingCriticalCount || 0}`,
+    `Next action: ${assurance.nextAction || "none"}`,
+    "Winner list:",
+    ...winners
+  ].join("\n");
 }
 
 function formatMessagePreview(message = "") {
@@ -1501,14 +1685,44 @@ async function copyWinnerList() {
     return;
   }
 
+  await copyText(text, "Winner list copied.");
+}
+
+async function copyRecap() {
+  await copyText(postStreamRecapText(), "Post-stream recap copied.");
+}
+
+async function copyText(text, success) {
   try {
     await navigator.clipboard.writeText(text);
-    state.message = { text: "Winner list copied.", tone: "ok" };
+    state.message = { text: success, tone: "ok" };
   } catch {
-    state.message = { text: text, tone: "muted" };
+    state.message = { text, tone: "muted" };
   }
 
   render();
+}
+
+async function sendGiveawayStatus() {
+  await runAction("sendGiveawayStatus", async () => {
+    const result = await api.sendGiveawayStatus();
+    if (result.state) {
+      state.giveaway = result.state;
+    }
+    return result;
+  }, { success: "Giveaway status queued." });
+}
+
+async function resendCriticalGiveaway() {
+  await runAction("resendCriticalGiveaway", async () => {
+    const result = await api.resendCriticalGiveaway();
+    if (result.state) {
+      state.giveaway = result.state;
+    }
+    state.outboundMessages = result.messages || state.outboundMessages;
+    state.outboundSummary = result.summary || state.outboundSummary;
+    return result;
+  }, { success: "Critical giveaway message requeued." });
 }
 
 async function resendOutboundMessage(id) {
@@ -1679,6 +1893,11 @@ function updateDisabledState() {
   const guideValidationReady = validationReady && Boolean(config.hasAccessToken);
   const botRunning = Boolean(botProcess.running);
   const botStartReady = canStartBot(runtime);
+  const hasGiveaway = status !== "none";
+  const hasRecap = Boolean(state.giveaway?.recap?.available);
+  const failedCritical = criticalGiveawayFailures().length > 0;
+  const canSendGiveawayStatus = hasGiveaway && state.validSetup;
+  const canPanicResend = failedCritical && state.validSetup;
 
   setDisabled("gstart", status !== "none", "Start is disabled because a giveaway already exists.");
   setDisabled("glastcall", status !== "open", "Last call is disabled unless entries are open.");
@@ -1690,6 +1909,14 @@ function updateDisabledState() {
   setDisabled("gdeliver", undelivered.length === 0, "Deliver is disabled until an undelivered winner exists.");
   setDisabled("gdeliverAll", undelivered.length === 0, "Mark all delivered is disabled until undelivered winners exist.");
   setDisabled("copyWinners", activeWinners.length === 0, "Copy winners is disabled until winners exist.");
+  setDisabled("dashboardSendGiveawayStatus", !canSendGiveawayStatus, hasGiveaway ? "Validate setup before sending status to chat." : "No giveaway exists.");
+  setDisabled("liveSendGiveawayStatus", !canSendGiveawayStatus, hasGiveaway ? "Validate setup before sending status to chat." : "No giveaway exists.");
+  setDisabled("dashboardPanicResendCritical", !canPanicResend, failedCritical ? "Validate setup before panic resend." : "No failed critical giveaway message exists.");
+  setDisabled("livePanicResendCritical", !canPanicResend, failedCritical ? "Validate setup before panic resend." : "No failed critical giveaway message exists.");
+  setDisabled("panicCardResendCritical", !canPanicResend, failedCritical ? "Validate setup before panic resend." : "No failed critical giveaway message exists.");
+  setDisabled("dashboardCopyRecap", !hasRecap, "No giveaway recap exists.");
+  setDisabled("liveCopyRecap", !hasRecap, "No giveaway recap exists.");
+  setDisabled("postStreamCopyRecap", !hasRecap, "No giveaway recap exists.");
   setDisabled("sendReminderNow", status !== "open", "Reminder is disabled unless entries are open.");
   setDisabled("validate", !validationReady, "Save Twitch credentials and connect OAuth before validating.");
   setDisabled("guideValidate", !guideValidationReady, "Connect Twitch before validating.");

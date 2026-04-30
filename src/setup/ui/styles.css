@@ -151,6 +151,28 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
 .template-row strong { display: block; color: var(--text); margin-bottom: 4px; }
 .template-row small { display: block; color: var(--muted); line-height: 1.4; }
 .template-row textarea { min-height: 70px; }
+.state-banner {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-3);
+  padding: 13px 14px;
+  margin-bottom: 12px;
+}
+.state-banner strong { color: var(--text); font-size: 18px; }
+.state-banner span { color: var(--muted); font-size: 13px; }
+.state-banner.ok { border-color: #24594c; }
+.state-banner.warn { border-color: #6e5a24; }
+.state-banner.bad { border-color: #6b2a32; }
+.state-banner.muted { border-color: var(--line); }
+.live-actions { margin-bottom: 0; }
+.recap-text {
+  min-height: 210px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .needs-attention { border-color: var(--warn); }
 .pill, .chip {
   border: 1px solid var(--line);
@@ -185,6 +207,7 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
   line-height: 1.45;
   white-space: pre-wrap;
 }
+.runtime-log.failure-log { border-color: #6b2a32; color: #ffb4b4; }
 .message { margin-top: 12px; min-height: 20px; color: var(--muted); font-size: 13px; }
 .message.ok { color: var(--accent); }
 .message.bad { color: var(--danger); }
