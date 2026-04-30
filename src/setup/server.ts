@@ -2159,8 +2159,12 @@ const summarizeGiveawayAssurance = (
         resent: 0,
         pending: 0,
         failed: 0,
+        requiredCritical: 0,
+        confirmedCritical: 0,
+        pendingCritical: 0,
         missingCritical: 0,
-        failedCritical: 0
+        failedCritical: 0,
+        blockingCritical: 0
       },
       nextAction: "Start a giveaway."
     };
@@ -2179,11 +2183,16 @@ const summarizeGiveawayAssurance = (
   const pendingCritical = phases.filter(
     (phase) => phase.importance === "critical" && phase.status === "pending"
   );
+  const requiredCritical = phases.filter(
+    (phase) => phase.importance === "critical" && phase.required
+  );
+  const confirmedCritical = requiredCritical.filter((phase) => phase.status === "sent");
   const failed = messages.filter((message) => message.status === "failed");
   const pending = messages.filter((message) => isPendingOutboundStatus(message.status));
   const sent = messages.filter((message) => message.status === "sent");
   const resent = messages.filter((message) => message.status === "resent");
-  const blockContinue = failedCritical.length > 0 || missingCritical.length > 0;
+  const blockingCritical = [...failedCritical, ...missingCritical, ...pendingCritical];
+  const blockContinue = blockingCritical.length > 0;
   const nextAction =
     failedCritical[0]
       ? `Resend failed ${failedCritical[0].label} announcement before continuing.`
@@ -2203,13 +2212,27 @@ const summarizeGiveawayAssurance = (
       resent: resent.length,
       pending: pending.length,
       failed: failed.length,
+      requiredCritical: requiredCritical.length,
+      confirmedCritical: confirmedCritical.length,
+      pendingCritical: pendingCritical.length,
       missingCritical: missingCritical.length,
-      failedCritical: failedCritical.length
+      failedCritical: failedCritical.length,
+      blockingCritical: blockingCritical.length
     },
+    latestBlocking: blockingCritical[0]
+      ? {
+          label: blockingCritical[0].label,
+          status: blockingCritical[0].status,
+          queueStatus: blockingCritical[0].queueStatus,
+          action: blockingCritical[0].action,
+          reason: blockingCritical[0].reason
+        }
+      : undefined,
     nextAction,
     latestFailure: failed[0]
       ? {
           action: failed[0].action,
+          failureCategory: failed[0].failureCategory,
           reason: failed[0].reason,
           updatedAt: failed[0].updatedAt
         }
@@ -2229,6 +2252,9 @@ const summarizeGiveawayPhase = (
     : required
       ? "missing"
       : "not-reached";
+  const blocksContinue = phase.importance === "critical" &&
+    required &&
+    (status === "failed" || status === "missing" || status === "pending");
 
   return {
     id: phase.id,
@@ -2237,15 +2263,22 @@ const summarizeGiveawayPhase = (
     importance: latest?.importance || phase.importance,
     required,
     status,
+    queueStatus: latest?.status ?? status,
+    outboundMessageId: latest?.id ?? "",
     attempts: latest?.attempts ?? 0,
     message: latest?.message ?? "",
     reason: latest?.reason ?? "",
     failureCategory: latest?.failureCategory ?? "none",
+    retryAfterMs: latest?.retryAfterMs ?? 0,
+    nextAttemptAt: latest?.nextAttemptAt ?? "",
+    queueDepth: latest?.queueDepth ?? 0,
     updatedAt: latest?.updatedAt ?? "",
     ageMs: latest?.updatedAt ? Date.now() - Date.parse(latest.updatedAt) : 0,
     age: latest?.updatedAt ? formatDuration(Date.now() - Date.parse(latest.updatedAt)) : "",
+    blocksContinue,
     canSend: status === "failed" || status === "missing",
     safeToResend: (status === "failed" || status === "missing") && canSendConfiguredChat(),
+    deliveryDetail: giveawayPhaseDeliveryDetail(phase, status, latest),
     recovery: giveawayPhaseRecoveryText(phase, status)
   };
 };
@@ -2255,6 +2288,46 @@ const phaseStatusFromOutbound = (message: OutboundMessageRecord) => {
   if (isPendingOutboundStatus(message.status)) return "pending";
   if (message.status === "sent" || message.status === "resent") return "sent";
   return message.status;
+};
+
+const giveawayPhaseDeliveryDetail = (
+  phase: GiveawayAnnouncementPhase,
+  status: string,
+  latest: OutboundMessageRecord | undefined
+) => {
+  if (!latest) {
+    return status === "missing"
+      ? `${phase.label} announcement has no outbound record.`
+      : `${phase.label} announcement is not required yet.`;
+  }
+
+  if (latest.status === "sent") {
+    return `Send confirmed at ${latest.updatedAt}.`;
+  }
+
+  if (latest.status === "resent") {
+    return `Resent as a replacement at ${latest.updatedAt}.`;
+  }
+
+  if (latest.status === "queued") {
+    return "Queued; wait for send confirmation before continuing.";
+  }
+
+  if (latest.status === "sending") {
+    return "Sending now; wait for confirmation before continuing.";
+  }
+
+  if (latest.status === "retrying") {
+    return latest.nextAttemptAt
+      ? `Retry scheduled at ${latest.nextAttemptAt}.`
+      : "Retrying after a send failure.";
+  }
+
+  if (latest.status === "failed") {
+    return latest.reason || "Send failed.";
+  }
+
+  return `${phase.label} announcement status: ${latest.status}.`;
 };
 
 const giveawayPhaseRecoveryText = (
@@ -2317,7 +2390,11 @@ const summarizeGiveawayRecap = (
     sentMessageCount: assurance.summary.sent,
     resentMessageCount: assurance.summary.resent,
     pendingMessageCount: assurance.summary.pending,
+    requiredCriticalCount: assurance.summary.requiredCritical,
+    confirmedCriticalCount: assurance.summary.confirmedCritical,
+    pendingCriticalCount: assurance.summary.pendingCritical,
     missingCriticalCount: assurance.summary.missingCritical,
+    blockingCriticalCount: assurance.summary.blockingCritical,
     winners: activeWinners.map((winner) => ({
       login: winner.login,
       displayName: winner.display_name,

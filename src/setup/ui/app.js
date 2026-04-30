@@ -551,8 +551,8 @@ function renderGiveawayOutboundCard() {
 
   return card("Giveaway Chat Assurance", [
     statusGrid([
-      ["Critical Sent", sent.length, failed.length === 0],
-      ["Critical Pending", pending.length, failed.length === 0],
+      ["Critical Confirmed", assurance.summary?.confirmedCritical || sent.length, Number(assurance.summary?.blockingCritical || 0) === 0],
+      ["Critical Pending", assurance.summary?.pendingCritical || pending.length, Number(assurance.summary?.pendingCritical || pending.length) === 0],
       ["Critical Failed", failed.length, failed.length === 0],
       ["Missing Critical", assurance.summary?.missingCritical || 0, Number(assurance.summary?.missingCritical || 0) === 0],
       ["Tracked Messages", messages.length, true],
@@ -564,15 +564,17 @@ function renderGiveawayOutboundCard() {
       ? callout(`Do not continue giveaway operations yet. ${assurance.nextAction || "Resolve critical chat assurance first."}`, "bad")
       : failed.length
         ? callout("A critical giveaway chat message failed. Resend it before continuing live operations.", "bad")
-        : callout(messages.length ? "Giveaway chat messages are tracked from durable outbound history." : "No giveaway chat messages tracked yet.", messages.length ? "ok" : "muted"),
-    phaseRows.length ? dataTable(["Phase", "Required", "Status", "Age", "Category", "Reason", "Recovery", "Action"], phaseRows.map((phase) => [
+        : callout(messages.length ? "Required critical giveaway messages have send confirmation or are not required yet." : "No giveaway chat messages tracked yet.", messages.length ? "ok" : "muted"),
+    phaseRows.length ? dataTable(["Phase", "Required", "Delivery", "Category", "Queue ID", "Attempts", "Next Attempt", "Reason", "Recovery", "Action"], phaseRows.map((phase) => [
       phase.label,
       phase.required ? "yes" : "tracked",
-      statusChip(phase.status),
-      phase.age || "",
+      statusChip(phase.queueStatus || phase.status),
       failureCategoryChip(phase.failureCategory),
+      shortId(phase.outboundMessageId),
+      phase.attempts || 0,
+      phase.nextAttemptAt || "",
       phase.reason || "",
-      phase.recovery || "",
+      phase.deliveryDetail || phase.recovery || "",
       phase.canSend
         ? actionButton(phase.status === "missing" ? "Send" : "Resend", {
             id: `phase-resend-${phase.id}`,
@@ -674,7 +676,10 @@ function renderGiveawayRecapCard() {
       ["Sent Messages", recap.sentMessageCount || 0, true],
       ["Resent Messages", recap.resentMessageCount || 0, true],
       ["Pending Messages", recap.pendingMessageCount || 0, Number(recap.pendingMessageCount || 0) === 0],
-      ["Missing Critical", recap.missingCriticalCount || 0, Number(recap.missingCriticalCount || 0) === 0]
+      ["Critical Confirmed", recap.confirmedCriticalCount || 0, Number(recap.blockingCriticalCount || 0) === 0],
+      ["Critical Pending", recap.pendingCriticalCount || 0, Number(recap.pendingCriticalCount || 0) === 0],
+      ["Missing Critical", recap.missingCriticalCount || 0, Number(recap.missingCriticalCount || 0) === 0],
+      ["Blocking Critical", recap.blockingCriticalCount || 0, Number(recap.blockingCriticalCount || 0) === 0]
     ]),
     dataTable(["Winner", "Delivered"], (recap.winners || []).map((winner) => [
       `${winner.displayName} @${winner.login}`,
@@ -1134,6 +1139,8 @@ function renderPostStreamReviewCard() {
       ["Entries", review.giveaway.entries, true],
       ["Winners", review.giveaway.winners.length, true],
       ["Pending Delivery", review.giveaway.pendingDelivery, review.giveaway.pendingDelivery === 0],
+      ["Blocking Critical", review.outbound.blockingCritical, review.outbound.blockingCritical === 0],
+      ["Critical Pending", review.outbound.pendingCritical, review.outbound.pendingCritical === 0],
       ["Critical Failed", review.outbound.criticalFailed, review.outbound.criticalFailed === 0],
       ["Outbound Failed", review.outbound.failed, review.outbound.failed === 0],
       ["Retries", review.outbound.retries, true],
@@ -1524,6 +1531,10 @@ function giveawayChecklist() {
     checklist.unshift(`Resolve chat assurance before continuing: ${state.giveaway.assurance.nextAction}`);
   }
 
+  if (Number(state.giveaway?.assurance?.summary?.pendingCritical || 0) > 0) {
+    checklist.unshift("Wait for pending critical giveaway chat sends to confirm before moving to the next phase.");
+  }
+
   return checklist;
 }
 
@@ -1573,8 +1584,18 @@ function winnerStatus(winner) {
 }
 
 function statusChip(status) {
-  const tone = ["sent", "resent"].includes(status) ? "ok" : status === "failed" ? "bad" : "warn";
+  const tone = ["sent", "resent"].includes(status)
+    ? "ok"
+    : status === "failed"
+      ? "bad"
+      : ["not-reached", "none"].includes(status)
+        ? "muted"
+        : "warn";
   return h("span", { className: `chip ${tone}`, text: status || "unknown" });
+}
+
+function shortId(id = "") {
+  return id ? id.slice(-8) : "";
 }
 
 function importanceChip(importance = "normal") {
@@ -1678,19 +1699,23 @@ function postStreamReviewData() {
   }));
   const pendingDelivery = Number(recap.pendingDeliveryCount ?? summary.undeliveredWinnersCount ?? 0);
   const criticalFailed = Number(recap.criticalFailedCount ?? state.outboundSummary?.criticalFailed ?? 0);
+  const pendingCritical = Number(recap.pendingCriticalCount ?? state.giveaway?.assurance?.summary?.pendingCritical ?? 0);
+  const blockingCritical = Number(recap.blockingCriticalCount ?? state.giveaway?.assurance?.summary?.blockingCritical ?? 0);
   const failed = Number(state.outboundSummary?.failed ?? outboundFailures.length);
-  const tone = criticalFailed > 0 || botErrors.length > 0
+  const tone = criticalFailed > 0 || blockingCritical > 0 || botErrors.length > 0
     ? "bad"
-    : pendingDelivery > 0 || failed > 0
+    : pendingDelivery > 0 || pendingCritical > 0 || failed > 0
       ? "warn"
       : "ok";
-  const nextAction = criticalFailed > 0
-    ? "Review and recover failed critical giveaway chat before the next live run."
-    : pendingDelivery > 0
-      ? "Confirm manual prize delivery notes before closing the night."
-      : failed > 0
-        ? "Review outbound failures and decide whether any follow-up is needed."
-        : "Post-stream review is clear.";
+  const nextAction = blockingCritical > 0
+    ? "Review critical giveaway chat delivery before the next live run."
+    : criticalFailed > 0
+      ? "Review and recover failed critical giveaway chat before the next live run."
+      : pendingDelivery > 0
+        ? "Confirm manual prize delivery notes before closing the night."
+        : failed > 0
+          ? "Review outbound failures and decide whether any follow-up is needed."
+          : "Post-stream review is clear.";
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1727,6 +1752,8 @@ function postStreamReviewData() {
       pending: Number(state.outboundSummary?.pending ?? 0),
       failed,
       criticalFailed,
+      pendingCritical,
+      blockingCritical,
       retries: outboundMessages.filter((message) => Number(message.attempts || 0) > 1).length,
       giveawayTracked: giveawayMessages.length,
       failures: outboundFailures.map((message) => ({
@@ -1771,6 +1798,8 @@ function postStreamReviewText() {
     `Pending delivery: ${review.giveaway.pendingDelivery}`,
     `Outbound failed: ${review.outbound.failed}`,
     `Critical failed: ${review.outbound.criticalFailed}`,
+    `Critical pending: ${review.outbound.pendingCritical}`,
+    `Blocking critical: ${review.outbound.blockingCritical}`,
     `Retries: ${review.outbound.retries}`,
     "Winners:",
     ...winners,
@@ -1869,7 +1898,7 @@ async function startGiveaway() {
 }
 
 async function runGiveawayAction(name, body = {}, confirmation) {
-  if (shouldWarnBeforeGiveawayAction(name) && !confirm(`${state.giveaway.assurance.nextAction} Continue anyway?`)) {
+  if (shouldWarnBeforeGiveawayAction(name) && !confirm(`${state.giveaway.assurance.nextAction} Chat may not have received the previous critical giveaway announcement. Continue anyway?`)) {
     return;
   }
 

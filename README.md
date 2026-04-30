@@ -289,6 +289,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
 - `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.
+- Critical giveaway guardrails treat queued, sending, retrying, missing, and failed required chat announcements as blocking until the outbound queue confirms `sent` or `resent`. Phase rows show queue status, queue ID, retry timing, failure category, and the next recovery action.
 - `npm run smoke:giveaway` runs a temp-database giveaway readiness check covering command permissions, entry, close, draw, reroll, delivery, audit logs, recap, outbound history, and the local lifecycle test.
 
 Current chat command syntax:

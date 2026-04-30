@@ -58,6 +58,9 @@ async function runSmoke() {
   assert(appJs.includes("Send last call"), "setup UI exposes giveaway last-call operator action");
   assert(appJs.includes("Giveaway Chat Assurance"), "giveaway tab exposes chat assurance state");
   assert(appJs.includes("Critical Failed"), "giveaway tab highlights critical outbound failures");
+  assert(appJs.includes("Critical Confirmed"), "giveaway tab distinguishes confirmed critical sends");
+  assert(appJs.includes("Queue ID"), "giveaway tab exposes outbound queue identifiers");
+  assert(appJs.includes("pendingCritical"), "giveaway tab blocks on pending critical sends");
   assert(appJs.includes("Message Templates"), "giveaway tab exposes local message templates");
   assert(appJs.includes("Reminder Controls"), "giveaway tab exposes timed reminder controls");
   assert(appJs.includes("Post-Giveaway Recap"), "giveaway tab exposes post-giveaway recap");
@@ -99,6 +102,8 @@ async function runSmoke() {
   assert(setupServerJs.includes("outboundRecovery"), "setup server returns outbound recovery guidance");
   assert(setupServerJs.includes("safeToResend"), "setup server reports resend safety");
   assert(setupServerJs.includes("failureCategory"), "setup server returns outbound failure categories");
+  assert(setupServerJs.includes("blockingCritical"), "setup server reports critical delivery guardrails");
+  assert(setupServerJs.includes("queueStatus"), "setup server exposes per-phase queue status");
   assert(setupServerJs.includes("rate_limit"), "setup server preserves Twitch rate-limit classification");
   assert(setupServerJs.includes("retryDelayMs"), "setup server reports retry timing");
   assert(setupServerJs.includes("operator_message_templates"), "setup server stores operator message presets locally");

@@ -1,11 +1,15 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+const require = createRequire(import.meta.url);
+const Database = require("better-sqlite3");
 const tempDir = mkdtempSync(join(tmpdir(), "vaexcore-giveaway-smoke-"));
+const smokeDbPath = join(tempDir, "data/vaexcore.sqlite");
 process.env.VAEXCORE_CONFIG_DIR = tempDir;
-process.env.DATABASE_URL = `file:${join(tempDir, "data/vaexcore.sqlite")}`;
+process.env.DATABASE_URL = `file:${smokeDbPath}`;
 
 const { startSetupServer } = await import(
   pathToFileURL(resolve("dist-bundle/setup-server.js")).href
@@ -102,6 +106,27 @@ async function runSmoke() {
   assert(started.summary.winnerCount === 2, "winner count is stored");
   assert(started.assurance.available === true, "chat assurance is available for open giveaway");
   assert(started.assurance.blockContinue === true, "missing critical start announcement is visible when chat is not configured");
+
+  insertOutboundFixture({
+    id: "pending-critical-start",
+    status: "queued",
+    action: "start",
+    importance: "critical",
+    giveawayId: started.giveaway.id,
+    message: "Giveaway started: Tonight Readiness. Type !raid to enter. Winners: 2."
+  });
+  const pendingStart = await json("/api/giveaway");
+  assert(pendingStart.assurance.summary.pendingCritical === 1, "pending critical announcement is counted");
+  assert(pendingStart.assurance.summary.blockingCritical === 1, "pending critical announcement blocks continuation");
+  assert(pendingStart.assurance.blockContinue === true, "pending critical announcement keeps guardrail active");
+  assert(
+    pendingStart.assurance.nextAction.includes("Wait for Start announcement"),
+    "pending critical announcement explains wait action"
+  );
+  assert(
+    pendingStart.assurance.phases.some((phase) => phase.id === "start" && phase.queueStatus === "queued" && phase.blocksContinue),
+    "phase row exposes queued critical delivery state"
+  );
 
   const duplicateStart = await post("/api/giveaway/start", {
     title: "Second Giveaway",
@@ -203,6 +228,53 @@ async function json(path, options = {}) {
   });
   assert(response.ok, `${path} returned ${response.status}`);
   return response.json();
+}
+
+function insertOutboundFixture(record) {
+  const db = new Database(smokeDbPath);
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `
+      INSERT INTO outbound_messages (
+        id,
+        source,
+        status,
+        message,
+        attempts,
+        queued_at,
+        updated_at,
+        reason,
+        failure_category,
+        category,
+        action,
+        importance,
+        giveaway_id
+      ) VALUES (
+        @id,
+        'setup',
+        @status,
+        @message,
+        @attempts,
+        @queuedAt,
+        @updatedAt,
+        @reason,
+        @failureCategory,
+        'giveaway',
+        @action,
+        @importance,
+        @giveawayId
+      )
+    `
+  ).run({
+    ...record,
+    attempts: record.attempts ?? 0,
+    queuedAt: now,
+    updatedAt: now,
+    reason: record.reason ?? "",
+    failureCategory: record.failureCategory ?? "none"
+  });
+  db.close();
 }
 
 function assert(condition, message) {
