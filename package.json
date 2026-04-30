@@ -15,6 +15,7 @@
     "app:dist": "npm run build && env -u ELECTRON_RUN_AS_NODE electron-builder --mac dir && node scripts/install-electron-better-sqlite3.mjs && node scripts/build-mac-dmg-from-app.mjs",
     "check:env": "tsx src/cli/checkEnv.ts",
     "build": "tsc && esbuild src/setup/server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-bundle/setup-server.js && esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-bundle/live-bot.js && node scripts/copy-setup-ui.mjs",
+    "smoke:queue": "tsx scripts/smoke-message-queue.mjs",
     "smoke:setup": "npm run build && node scripts/smoke-setup-ui.mjs",
     "start": "node --enable-source-maps dist/index.js",
     "typecheck": "tsc --noEmit"

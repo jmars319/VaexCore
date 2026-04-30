@@ -397,6 +397,9 @@ function renderQueueHealthCard() {
       ["Processing", health.processing ? "yes" : "no", true],
       ["Oldest Action", health.oldestAction || "none", true],
       ["Oldest Importance", health.oldestImportance || "normal", health.oldestImportance !== "critical"],
+      ["Retry Delay", health.retryDelay || "0s", Number(health.retryDelayMs || 0) === 0],
+      ["Send Throttle", health.rateLimitDelay || "0s", !health.rateLimited],
+      ["Rate Limited", health.rateLimitedPending || 0, Number(health.rateLimitedPending || 0) === 0],
       ["Max Attempts", health.maxAttempts || 4, true],
       ["Stale", health.stale ? "yes" : "no", !health.stale]
     ]),
@@ -414,6 +417,7 @@ function renderRecoveryChecklistCard() {
       ["Needed", recovery.needed ? "yes" : "no", !recovery.needed],
       ["Safe To Resend", recovery.safeToResend ? "yes" : "no", recovery.needed ? recovery.safeToResend : true],
       ["Action", recovery.action || "none", !recovery.needed],
+      ["Category", recovery.failureCategory || "none", !recovery.needed || !["auth", "config"].includes(recovery.failureCategory)],
       ["Attempts", recovery.attempts || 0, !recovery.needed || Number(recovery.attempts || 0) < 4]
     ]),
     callout(recovery.nextAction || "No outbound recovery needed.", tone),
@@ -476,10 +480,11 @@ function renderOutboundHistoryCard() {
       actionButton("Refresh history", { id: "refreshOutbound", variant: "secondary", onClick: refreshOutboundMessages })
     ]),
     failed.length ? callout("One or more outbound messages failed. Use resend after checking that the text is still appropriate.", "warn") : null,
-    dataTable(["Updated", "Source", "Status", "Attempts", "Message", "Action"], recent.map((item) => [
+    dataTable(["Updated", "Source", "Status", "Category", "Attempts", "Message", "Action"], recent.map((item) => [
       item.updatedAt || "",
       item.source || "",
       statusChip(item.status),
+      failureCategoryChip(item.failureCategory),
       item.attempts || 0,
       formatMessagePreview(item.message),
       item.status === "failed"
@@ -519,11 +524,12 @@ function renderGiveawayOutboundCard() {
       : failed.length
         ? callout("A critical giveaway chat message failed. Resend it before continuing live operations.", "bad")
         : callout(messages.length ? "Giveaway chat messages are tracked from durable outbound history." : "No giveaway chat messages tracked yet.", messages.length ? "ok" : "muted"),
-    phaseRows.length ? dataTable(["Phase", "Required", "Status", "Age", "Reason", "Recovery", "Action"], phaseRows.map((phase) => [
+    phaseRows.length ? dataTable(["Phase", "Required", "Status", "Age", "Category", "Reason", "Recovery", "Action"], phaseRows.map((phase) => [
       phase.label,
       phase.required ? "yes" : "tracked",
       statusChip(phase.status),
       phase.age || "",
+      failureCategoryChip(phase.failureCategory),
       phase.reason || "",
       phase.recovery || "",
       phase.canSend
@@ -535,10 +541,11 @@ function renderGiveawayOutboundCard() {
           })
         : ""
     ])) : null,
-    dataTable(["Action", "Importance", "Status", "Attempts", "Message", "Updated", "Resend"], messages.slice(0, 10).map((item) => [
+    dataTable(["Action", "Importance", "Status", "Category", "Attempts", "Message", "Updated", "Resend"], messages.slice(0, 10).map((item) => [
       item.action || "message",
       importanceChip(item.importance),
       statusChip(item.status),
+      failureCategoryChip(item.failureCategory),
       item.attempts || 0,
       formatMessagePreview(item.message),
       item.updatedAt || "",
@@ -1135,6 +1142,9 @@ function getReadiness() {
   if (!isTwitchSetupReady()) blockers.push("Open Settings -> Setup Guide");
   if (!runtime.tokenValid || !runtime.requiredScopesPresent) blockers.push("Run Validate Setup");
   if (!runtime.queueReady) blockers.push("Start the setup console again if queue readiness does not recover");
+  if (runtime.outboundRecovery?.needed && runtime.outboundRecovery.severity === "critical") {
+    blockers.push(`Resolve critical outbound chat failure: ${runtime.outboundRecovery.nextAction}`);
+  }
   if (!runtime.eventSubConnected || !runtime.chatSubscriptionActive) blockers.push("Start bot process");
   if (!runtime.liveChatConfirmed) blockers.push("Type !ping in chat");
 
@@ -1311,6 +1321,15 @@ function statusChip(status) {
 function importanceChip(importance = "normal") {
   const tone = importance === "critical" ? "bad" : importance === "important" ? "warn" : "ok";
   return h("span", { className: `chip ${tone}`, text: importance });
+}
+
+function failureCategoryChip(category = "none") {
+  const tone = ["auth", "config", "twitch_rejected"].includes(category)
+    ? "bad"
+    : ["rate_limit", "network", "timeout", "unknown"].includes(category)
+      ? "warn"
+      : "muted";
+  return h("span", { className: `chip ${tone}`, text: category || "none" });
 }
 
 function queueTone(status) {

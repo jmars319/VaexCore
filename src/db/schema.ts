@@ -55,6 +55,9 @@ export const initializeSchema = (db: DbClient) => {
       queued_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       reason TEXT NOT NULL DEFAULT '',
+      failure_category TEXT NOT NULL DEFAULT 'none',
+      retry_after_ms INTEGER,
+      next_attempt_at TEXT,
       queue_depth INTEGER,
       category TEXT NOT NULL DEFAULT 'operator',
       action TEXT NOT NULL DEFAULT '',
@@ -88,4 +91,21 @@ export const initializeSchema = (db: DbClient) => {
     CREATE INDEX IF NOT EXISTS idx_outbound_messages_giveaway_id
       ON outbound_messages(giveaway_id);
   `);
+
+  ensureColumn(db, "outbound_messages", "failure_category", "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn(db, "outbound_messages", "retry_after_ms", "INTEGER");
+  ensureColumn(db, "outbound_messages", "next_attempt_at", "TEXT");
+};
+
+const ensureColumn = (
+  db: DbClient,
+  table: string,
+  column: string,
+  definition: string
+) => {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+
+  if (!columns.some((entry) => entry.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 };

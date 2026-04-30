@@ -1,5 +1,9 @@
 import type { DbClient } from "../db/client";
-import type { MessageQueueEventStatus, MessageQueueMetadata } from "./messageQueue";
+import type {
+  MessageQueueEventStatus,
+  MessageQueueMetadata,
+  MessageSendFailureCategory
+} from "./messageQueue";
 
 export type OutboundMessageSource = "setup" | "bot";
 export type OutboundMessageStatus = MessageQueueEventStatus | "resent";
@@ -15,6 +19,9 @@ export type OutboundMessageRecord = {
   queuedAt: string;
   updatedAt: string;
   reason: string;
+  failureCategory: MessageSendFailureCategory;
+  retryAfterMs?: number;
+  nextAttemptAt?: string;
   queueDepth?: number;
   category: OutboundMessageCategory;
   action: string;
@@ -32,6 +39,9 @@ export type OutboundHistoryEvent = {
   queuedAt?: string;
   updatedAt?: string;
   reason?: string;
+  failureCategory?: MessageSendFailureCategory;
+  retryAfterMs?: number;
+  nextAttemptAt?: string;
   queueDepth?: number;
   metadata?: MessageQueueMetadata;
 };
@@ -45,6 +55,9 @@ type OutboundMessageRow = {
   queued_at: string;
   updated_at: string;
   reason: string;
+  failure_category: MessageSendFailureCategory | null;
+  retry_after_ms: number | null;
+  next_attempt_at: string | null;
   queue_depth: number | null;
   category: OutboundMessageCategory;
   action: string;
@@ -88,6 +101,7 @@ export const createOutboundHistory = (db: DbClient) => {
         ...classified,
         ...compactOutboundMetadata(event.metadata)
       };
+      const keepsFailureDetail = event.status === "failed" || event.status === "retrying";
       const next: OutboundMessageRecord = {
         id: event.id,
         source: event.source,
@@ -96,7 +110,10 @@ export const createOutboundHistory = (db: DbClient) => {
         attempts: event.attempts ?? existing?.attempts ?? 0,
         queuedAt: event.queuedAt ?? existing?.queuedAt ?? now,
         updatedAt: event.updatedAt ?? now,
-        reason: event.reason ?? existing?.reason ?? "",
+        reason: keepsFailureDetail ? event.reason ?? existing?.reason ?? "" : event.reason ?? "",
+        failureCategory: keepsFailureDetail ? event.failureCategory ?? existing?.failureCategory ?? "unknown" : "none",
+        retryAfterMs: event.status === "retrying" ? event.retryAfterMs ?? existing?.retryAfterMs : undefined,
+        nextAttemptAt: event.status === "retrying" ? event.nextAttemptAt ?? existing?.nextAttemptAt : undefined,
         queueDepth: event.queueDepth ?? existing?.queueDepth,
         category: metadata.category ?? existing?.category ?? "operator",
         action: metadata.action ?? existing?.action ?? "",
@@ -131,7 +148,10 @@ export const createOutboundHistory = (db: DbClient) => {
         ...existing,
         status: "resent" as const,
         updatedAt: new Date().toISOString(),
-        reason: `Resent as ${resentMessageId}`
+        reason: `Resent as ${resentMessageId}`,
+        failureCategory: "none" as const,
+        retryAfterMs: undefined,
+        nextAttemptAt: undefined
       };
       records.set(id, resent);
       persistOutboundRecord(db, resent);
@@ -159,7 +179,9 @@ export const createOutboundHistory = (db: DbClient) => {
         oldestPendingAgeMs: oldestPending ? Date.now() - Date.parse(oldestPending.queuedAt) : 0,
         latestFailedAt: latestFailed?.updatedAt ?? "",
         latestFailedAction: latestFailed?.action ?? "",
-        latestFailedReason: latestFailed?.reason ?? ""
+        latestFailedReason: latestFailed?.reason ?? "",
+        latestFailedCategory: latestFailed?.failureCategory ?? "none",
+        rateLimited: current.filter((record) => record.failureCategory === "rate_limit" && isPendingOutboundStatus(record.status)).length
       };
     }
   };
@@ -218,6 +240,9 @@ export const isOutboundCategory = (value: string): value is OutboundMessageCateg
 export const isOutboundImportance = (value: string): value is OutboundMessageImportance =>
   ["normal", "important", "critical"].includes(value);
 
+export const isOutboundFailureCategory = (value: string): value is MessageSendFailureCategory =>
+  ["none", "config", "auth", "rate_limit", "twitch_rejected", "network", "timeout", "unknown"].includes(value);
+
 export const isPendingOutboundStatus = (status: OutboundMessageStatus) =>
   status === "queued" || status === "retrying" || status === "sending";
 
@@ -230,6 +255,9 @@ const outboundRecordFromRow = (row: OutboundMessageRow): OutboundMessageRecord =
   queuedAt: row.queued_at,
   updatedAt: row.updated_at,
   reason: row.reason,
+  failureCategory: row.failure_category ?? "none",
+  retryAfterMs: row.retry_after_ms ?? undefined,
+  nextAttemptAt: row.next_attempt_at ?? undefined,
   queueDepth: row.queue_depth ?? undefined,
   category: row.category,
   action: row.action,
@@ -250,6 +278,9 @@ const persistOutboundRecord = (db: DbClient, record: OutboundMessageRecord) => {
         queued_at,
         updated_at,
         reason,
+        failure_category,
+        retry_after_ms,
+        next_attempt_at,
         queue_depth,
         category,
         action,
@@ -265,6 +296,9 @@ const persistOutboundRecord = (db: DbClient, record: OutboundMessageRecord) => {
         @queuedAt,
         @updatedAt,
         @reason,
+        @failureCategory,
+        @retryAfterMs,
+        @nextAttemptAt,
         @queueDepth,
         @category,
         @action,
@@ -280,6 +314,9 @@ const persistOutboundRecord = (db: DbClient, record: OutboundMessageRecord) => {
         queued_at = excluded.queued_at,
         updated_at = excluded.updated_at,
         reason = excluded.reason,
+        failure_category = excluded.failure_category,
+        retry_after_ms = excluded.retry_after_ms,
+        next_attempt_at = excluded.next_attempt_at,
         queue_depth = excluded.queue_depth,
         category = excluded.category,
         action = excluded.action,
@@ -289,6 +326,8 @@ const persistOutboundRecord = (db: DbClient, record: OutboundMessageRecord) => {
     `
   ).run({
     ...record,
+    retryAfterMs: record.retryAfterMs ?? null,
+    nextAttemptAt: record.nextAttemptAt ?? null,
     queueDepth: record.queueDepth ?? null,
     giveawayId: record.giveawayId ?? null,
     resentFrom: record.resentFrom ?? null

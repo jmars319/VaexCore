@@ -75,7 +75,10 @@ async function runSmoke() {
   assert(appJs.includes("Queue Health"), "live mode exposes outbound queue health");
   assert(appJs.includes("Recovery Checklist"), "live mode exposes recovery checklist");
   assert(appJs.includes("Oldest Age"), "queue health shows pending message age");
+  assert(appJs.includes("Retry Delay"), "queue health shows retry delay");
+  assert(appJs.includes("Send Throttle"), "queue health shows send throttle");
   assert(appJs.includes("Safe To Resend"), "recovery checklist explains resend safety");
+  assert(appJs.includes("Category"), "outbound failures show failure categories");
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
@@ -87,9 +90,13 @@ async function runSmoke() {
   assert(setupServerJs.includes("queueHealth"), "setup server returns queue health diagnostics");
   assert(setupServerJs.includes("outboundRecovery"), "setup server returns outbound recovery guidance");
   assert(setupServerJs.includes("safeToResend"), "setup server reports resend safety");
+  assert(setupServerJs.includes("failureCategory"), "setup server returns outbound failure categories");
+  assert(setupServerJs.includes("rate_limit"), "setup server preserves Twitch rate-limit classification");
+  assert(setupServerJs.includes("retryDelayMs"), "setup server reports retry timing");
   assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
   assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
+  assert(liveBotJs.includes("failureCategory"), "standalone bot logs outbound failure categories");
   assert(styles.includes(".tab-panel"), "styles asset loaded");
   assert(styles.includes(".setup-step"), "setup guide styles loaded");
   assert(styles.includes(".runtime-log"), "bot runtime log styles loaded");
@@ -278,10 +285,15 @@ async function runSmoke() {
     outboundAfterExternalWrite.summary.criticalFailed >= 1,
     "externally written critical outbound failures affect setup summary"
   );
+  assert(
+    outboundAfterExternalWrite.messages.some((message) => message.failureCategory === "network"),
+    "outbound message history returns failure category"
+  );
   const statusAfterFailure = await json("/api/status");
   assert(statusAfterFailure.runtime.queueHealth.status === "blocked", "critical outbound failure blocks queue health");
   assert(statusAfterFailure.runtime.outboundRecovery.needed === true, "outbound recovery activates after critical failure");
   assert(statusAfterFailure.runtime.outboundRecovery.safeToResend === false, "outbound recovery blocks resend before validation");
+  assert(statusAfterFailure.runtime.outboundRecovery.failureCategory === "network", "outbound recovery explains failure category");
   assert(statusAfterFailure.runtime.outboundRecovery.steps.length > 0, "outbound recovery returns operator steps");
   const panicResendWithoutValidation = await json("/api/giveaway/critical/resend", { method: "POST" });
   assert(panicResendWithoutValidation.ok === false, "panic resend fails clearly until chat is validated");
@@ -442,6 +454,9 @@ function insertExternalOutboundFixture() {
         queued_at,
         updated_at,
         reason,
+        failure_category,
+        retry_after_ms,
+        next_attempt_at,
         queue_depth,
         category,
         action,
@@ -457,6 +472,9 @@ function insertExternalOutboundFixture() {
         @queuedAt,
         @updatedAt,
         @reason,
+        @failureCategory,
+        @retryAfterMs,
+        @nextAttemptAt,
         @queueDepth,
         @category,
         @action,
@@ -474,6 +492,9 @@ function insertExternalOutboundFixture() {
     queuedAt: now,
     updatedAt: now,
     reason: "external standalone bot write",
+    failureCategory: "network",
+    retryAfterMs: null,
+    nextAttemptAt: null,
     queueDepth: null,
     category: "giveaway",
     action: "start",

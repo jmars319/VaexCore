@@ -18,6 +18,7 @@ import {
   classifyOutboundMessage,
   createOutboundHistory,
   isOutboundCategory,
+  isOutboundFailureCategory,
   isOutboundImportance,
   isPendingOutboundStatus,
   type OutboundMessageRecord
@@ -794,7 +795,12 @@ const sendTestMessage = async () => {
   });
 
   const result = await sender.send("VaexCore setup test.");
-  return { ok: result === "sent" };
+  const structured = typeof result === "string" ? { status: result } : result;
+  return {
+    ok: structured.status === "sent",
+    error: structured.status === "sent" ? undefined : structured.reason || "Test chat message was not sent.",
+    failureCategory: structured.failureCategory
+  };
 };
 
 const getOperatorStatus = async () => {
@@ -929,24 +935,31 @@ const summarizeQueueHealth = (
     queue.oldestAgeMs > queueStaleWarningMs
       ? `Oldest queued message has waited ${formatDuration(queue.oldestAgeMs)}.`
       : undefined,
+    queue.rateLimitDelayMs > 0
+      ? `Outbound queue is waiting ${formatDuration(queue.rateLimitDelayMs)} for the send throttle.`
+      : undefined,
     outbound.criticalFailed > 0
       ? `${outbound.criticalFailed} critical outbound message(s) failed.`
       : undefined
   ].filter(Boolean) as string[];
   const status = !queue.ready || outbound.criticalFailed > 0
     ? "blocked"
-    : blockers.length || queue.processing || queue.queued > 0
+    : blockers.length || queue.processing || queue.queued > 0 || queue.rateLimitDelayMs > 0 || queue.retryDelayMs > 0
       ? "watch"
       : "clear";
   const nextAction = !queue.ready
     ? "Restart the setup console if queue readiness does not recover."
     : outbound.criticalFailed > 0
       ? "Use panic resend or phase resend after confirming chat missed the message."
-      : queue.oldestAgeMs > queueStaleWarningMs
-        ? "Wait for the queue to flush or restart the bot if the age keeps rising."
-        : queue.queued > 0 || queue.processing
-          ? "Wait for queued chat messages to send."
-          : "Outbound queue clear.";
+      : queue.retryDelayMs > 0
+        ? `Waiting ${formatDuration(queue.retryDelayMs)} before the next retry.`
+        : queue.rateLimitDelayMs > 0
+          ? `Waiting ${formatDuration(queue.rateLimitDelayMs)} for the outbound send throttle.`
+          : queue.oldestAgeMs > queueStaleWarningMs
+            ? "Wait for the queue to flush or restart the bot if the age keeps rising."
+            : queue.queued > 0 || queue.processing
+              ? "Wait for queued chat messages to send."
+              : "Outbound queue clear.";
 
   return {
     status,
@@ -957,9 +970,17 @@ const summarizeQueueHealth = (
     oldestAge: formatDuration(queue.oldestAgeMs),
     oldestAction: queue.oldestAction,
     oldestImportance: queue.oldestImportance,
+    nextAttemptAt: queue.nextAttemptAt,
+    retryDelayMs: queue.retryDelayMs,
+    retryDelay: formatDuration(queue.retryDelayMs),
+    rateLimited: queue.rateLimitDelayMs > 0,
+    rateLimitedUntil: queue.rateLimitedUntil,
+    rateLimitDelayMs: queue.rateLimitDelayMs,
+    rateLimitDelay: formatDuration(queue.rateLimitDelayMs),
     pending: queue.queued,
     processing: queue.processing,
-    maxAttempts: queue.maxAttempts
+    maxAttempts: queue.maxAttempts,
+    rateLimitedPending: outbound.rateLimited
   };
 };
 
@@ -988,22 +1009,61 @@ const summarizeOutboundRecovery = () => {
     category: latestFailed.category,
     action: latestFailed.action,
     importance: latestFailed.importance,
+    failureCategory: latestFailed.failureCategory,
     reason: latestFailed.reason || "No failure reason recorded.",
     updatedAt: latestFailed.updatedAt,
     attempts: latestFailed.attempts,
     giveawayId: latestFailed.giveawayId,
-    nextAction: safeToResend
-      ? critical
-        ? "Use panic resend or phase resend if Twitch chat did not receive this critical message."
-        : "Use resend if the message is still useful."
-      : "Run Validate Setup before resending outbound chat.",
-    steps: [
-      "Check Twitch chat for the original message.",
-      safeToResend ? "Resend only if the message is missing or still relevant." : "Run Validate Setup before resending.",
-      critical ? "Use Live Mode -> Panic Resend for the latest failed critical giveaway message." : "Use Outbound Chat History -> Resend for this message.",
-      "Watch the queue health until pending messages clear."
-    ]
+    nextAction: outboundRecoveryNextAction(latestFailed, safeToResend),
+    steps: outboundRecoverySteps(latestFailed, safeToResend)
   };
+};
+
+const outboundRecoveryNextAction = (
+  latestFailed: OutboundMessageRecord,
+  safeToResend: boolean
+) => {
+  if (!safeToResend) {
+    return latestFailed.failureCategory === "auth" || latestFailed.failureCategory === "config"
+      ? "Fix Twitch setup and run Validate Setup before resending outbound chat."
+      : "Run Validate Setup before resending outbound chat.";
+  }
+
+  if (latestFailed.failureCategory === "rate_limit") {
+    return "Wait for the queue to clear, then resend only if Twitch chat missed the message.";
+  }
+
+  if (latestFailed.importance === "critical") {
+    return "Use panic resend or phase resend if Twitch chat did not receive this critical message.";
+  }
+
+  return "Use resend if the message is still useful.";
+};
+
+const outboundRecoverySteps = (
+  latestFailed: OutboundMessageRecord,
+  safeToResend: boolean
+) => {
+  const categorySteps: Record<OutboundMessageRecord["failureCategory"], string> = {
+    none: "No failure category was recorded.",
+    config: "Open Settings and complete missing Twitch IDs or credentials.",
+    auth: "Reconnect Twitch with the bot account and required chat scopes.",
+    rate_limit: "Wait for Twitch rate limiting to clear before retrying.",
+    twitch_rejected: "Check the message and Twitch response before retrying.",
+    network: "Confirm local network connectivity before retrying.",
+    timeout: "Retry after Twitch/network latency settles.",
+    unknown: "Review the failure reason before retrying."
+  };
+
+  return [
+    categorySteps[latestFailed.failureCategory],
+    "Check Twitch chat for the original message.",
+    safeToResend ? "Resend only if the message is missing or still relevant." : "Run Validate Setup before resending.",
+    latestFailed.importance === "critical"
+      ? "Use Live Mode -> Panic Resend for the latest failed critical giveaway message."
+      : "Use Outbound Chat History -> Resend for this message.",
+    "Watch Queue Health until pending messages clear."
+  ];
 };
 
 const formatDuration = (ageMs: number) => {
@@ -1529,6 +1589,9 @@ const updateBotStatusFromLog = (line: string) => {
       outboundCategory?: unknown;
       outboundAction?: unknown;
       outboundImportance?: unknown;
+      failureCategory?: unknown;
+      retryAfterMs?: unknown;
+      nextAttemptAt?: unknown;
       giveawayId?: unknown;
       resentFrom?: unknown;
     };
@@ -1550,6 +1613,11 @@ const updateBotStatusFromLog = (line: string) => {
         message: typeof parsed.message === "string" ? parsed.message : undefined,
         attempts: parseOptionalNumber(parsed.attempts ?? parsed.attempt),
         reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
+        failureCategory: typeof parsed.failureCategory === "string" && isOutboundFailureCategory(parsed.failureCategory)
+          ? parsed.failureCategory
+          : undefined,
+        retryAfterMs: parseOptionalNumber(parsed.retryAfterMs),
+        nextAttemptAt: typeof parsed.nextAttemptAt === "string" ? parsed.nextAttemptAt : undefined,
         queueDepth: parseOptionalNumber(parsed.queued),
         metadata: {
           category: typeof parsed.outboundCategory === "string" && isOutboundCategory(parsed.outboundCategory)
@@ -1792,7 +1860,11 @@ const sendConfiguredChatMessage = async (message: string) => {
     !twitch.broadcasterUserId ||
     !twitch.botUserId
   ) {
-    throw new Error("Setup is missing resolved Twitch IDs.");
+    return {
+      status: "failed" as const,
+      failureCategory: "config" as const,
+      reason: "Setup is missing resolved Twitch IDs."
+    };
   }
 
   const sender = new TwitchChatSender({
@@ -2096,6 +2168,7 @@ const summarizeGiveawayPhase = (
     attempts: latest?.attempts ?? 0,
     message: latest?.message ?? "",
     reason: latest?.reason ?? "",
+    failureCategory: latest?.failureCategory ?? "none",
     updatedAt: latest?.updatedAt ?? "",
     ageMs: latest?.updatedAt ? Date.now() - Date.parse(latest.updatedAt) : 0,
     age: latest?.updatedAt ? formatDuration(Date.now() - Date.parse(latest.updatedAt)) : "",

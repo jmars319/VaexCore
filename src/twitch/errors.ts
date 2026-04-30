@@ -1,8 +1,9 @@
 export const explainTwitchHttpError = async (
   response: Response,
-  context: "eventsub_chat_subscription" | "send_chat_message"
+  context: "eventsub_chat_subscription" | "send_chat_message",
+  alreadyReadBody?: string
 ) => {
-  const body = await response.text();
+  const body = alreadyReadBody ?? await response.text();
   const hint = getHint(response.status, context);
 
   return new Error(`${hint}\nTwitch response: ${response.status} ${body}`);

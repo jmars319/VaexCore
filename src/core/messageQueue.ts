@@ -3,11 +3,34 @@ import type { Logger } from "./logger";
 
 type MessageQueueOptions = {
   logger: Logger;
-  send: (message: string) => Promise<"sent" | "retry" | "failed">;
+  send: (message: string) => Promise<MessageSendResult>;
   onSent?: (message: string) => void;
   onEvent?: (event: MessageQueueEvent) => void;
   maxAttempts?: number;
+  retryBaseDelayMs?: number;
+  minIntervalMs?: number;
 };
+
+export type MessageSendStatus = "sent" | "retry" | "failed";
+
+export type MessageSendFailureCategory =
+  | "none"
+  | "config"
+  | "auth"
+  | "rate_limit"
+  | "twitch_rejected"
+  | "network"
+  | "timeout"
+  | "unknown";
+
+export type StructuredMessageSendResult = {
+  status: MessageSendStatus;
+  reason?: string;
+  failureCategory?: MessageSendFailureCategory;
+  retryAfterMs?: number;
+};
+
+export type MessageSendResult = MessageSendStatus | StructuredMessageSendResult;
 
 export type MessageQueueEventStatus =
   | "queued"
@@ -24,7 +47,10 @@ export type MessageQueueEvent = {
   queuedAt: string;
   updatedAt: string;
   reason?: string;
+  failureCategory?: MessageSendFailureCategory;
   queueDepth?: number;
+  retryAfterMs?: number;
+  nextAttemptAt?: string;
   metadata?: MessageQueueMetadata;
 };
 
@@ -42,6 +68,7 @@ type QueuedMessage = {
   attempts: number;
   enqueuedAt: number;
   queuedAt: string;
+  notBefore: number;
   metadata: MessageQueueMetadata;
 };
 
@@ -50,6 +77,7 @@ export class MessageQueue {
   private timer: NodeJS.Timeout | undefined;
   private processing = false;
   private nextId = 1;
+  private nextSendAt = 0;
 
   constructor(private readonly options: MessageQueueOptions) {}
 
@@ -58,12 +86,9 @@ export class MessageQueue {
       return;
     }
 
-    const intervalMs =
-      1000 / defaultConfig.outboundMessagesPerChannelPerSecond;
-
     this.timer = setInterval(() => {
       void this.flushOne();
-    }, intervalMs);
+    }, this.intervalMs());
   }
 
   stop() {
@@ -103,6 +128,9 @@ export class MessageQueue {
   snapshot() {
     const oldest = this.queue[0];
     const newest = this.queue[this.queue.length - 1];
+    const now = Date.now();
+    const pendingRetry = this.queue.find((item) => item.notBefore > now);
+    const rateLimitDelayMs = Math.max(0, this.nextSendAt - now);
 
     return {
       ready: this.isReady(),
@@ -114,6 +142,12 @@ export class MessageQueue {
       oldestAction: oldest?.metadata.action ?? "",
       oldestImportance: oldest?.metadata.importance ?? "normal",
       newestQueuedAt: newest?.queuedAt ?? "",
+      nextAttemptAt: pendingRetry ? new Date(pendingRetry.notBefore).toISOString() : "",
+      retryDelayMs: pendingRetry ? Math.max(0, pendingRetry.notBefore - now) : 0,
+      rateLimitedUntil: rateLimitDelayMs > 0 && this.queue.length > 0
+        ? new Date(this.nextSendAt).toISOString()
+        : "",
+      rateLimitDelayMs: this.queue.length > 0 ? rateLimitDelayMs : 0,
       maxAttempts: this.options.maxAttempts ?? 4
     };
   }
@@ -125,6 +159,7 @@ export class MessageQueue {
       attempts: 0,
       enqueuedAt: Date.now(),
       queuedAt: new Date().toISOString(),
+      notBefore: 0,
       metadata
     };
     this.queue.push(item);
@@ -147,28 +182,40 @@ export class MessageQueue {
       return;
     }
 
+    if (Date.now() < this.nextSendAt) {
+      return;
+    }
+
     const item = this.queue.shift();
 
     if (!item) {
       return;
     }
 
+    if (item.notBefore > Date.now()) {
+      this.queue.unshift(item);
+      return;
+    }
+
     this.processing = true;
+    this.nextSendAt = Date.now() + this.intervalMs();
 
     try {
       item.attempts += 1;
       this.emit(item, "sending", { queueDepth: this.queue.length });
-      const result = await this.options.send(item.message);
+      const result = normalizeSendResult(await this.options.send(item.message));
 
-      if (result === "retry") {
-        this.requeueOrDrop(item, "sender requested retry");
+      if (result.status === "retry") {
+        this.requeueOrDrop(item, result);
         return;
       }
 
-      if (result === "failed") {
+      if (result.status === "failed") {
         const maxAttempts = this.options.maxAttempts ?? 4;
         this.options.logger.error(
           {
+            reason: result.reason || "sender reported non-retryable failure",
+            failureCategory: result.failureCategory ?? "unknown",
             message: item.message,
             outboundMessageId: item.id,
             outboundStatus: "failed",
@@ -180,7 +227,10 @@ export class MessageQueue {
           },
           "Outbound chat send failed; message dropped"
         );
-        this.emit(item, "failed", { reason: "sender reported non-retryable failure" });
+        this.emit(item, "failed", {
+          reason: result.reason || "sender reported non-retryable failure",
+          failureCategory: result.failureCategory ?? "unknown"
+        });
         return;
       }
 
@@ -204,18 +254,26 @@ export class MessageQueue {
 
   private requeueOrDrop(item: QueuedMessage, reason: unknown) {
     const maxAttempts = this.options.maxAttempts ?? 4;
+    const result = normalizeRetryReason(reason);
+    const reasonText = result.reason;
+    const failureCategory = result.failureCategory;
 
     if (item.attempts < maxAttempts) {
+      const retryAfterMs = result.retryAfterMs ?? this.retryDelayMs(item.attempts);
+      item.notBefore = Date.now() + retryAfterMs;
       this.queue.unshift(item);
-      const reasonText = formatReason(reason);
       const remainingAttempts = maxAttempts - item.attempts;
       this.emit(item, "retrying", {
         reason: reasonText,
-        queueDepth: this.queue.length
+        failureCategory,
+        queueDepth: this.queue.length,
+        retryAfterMs,
+        nextAttemptAt: new Date(item.notBefore).toISOString()
       });
       this.options.logger.warn(
         {
           reason: reasonText,
+          failureCategory,
           message: item.message,
           outboundMessageId: item.id,
           outboundStatus: "retrying",
@@ -223,7 +281,8 @@ export class MessageQueue {
           attempt: item.attempts,
           maxAttempts,
           remainingAttempts,
-          retryDelayMs: 1000,
+          retryDelayMs: retryAfterMs,
+          nextAttemptAt: new Date(item.notBefore).toISOString(),
           queued: this.queue.length
         },
         "Outbound chat send failed; message will be retried"
@@ -231,11 +290,11 @@ export class MessageQueue {
       return;
     }
 
-    const reasonText = formatReason(reason);
-    this.emit(item, "failed", { reason: reasonText });
+    this.emit(item, "failed", { reason: reasonText, failureCategory });
     this.options.logger.error(
       {
         reason: reasonText,
+        failureCategory,
         message: item.message,
         outboundMessageId: item.id,
         outboundStatus: "failed",
@@ -249,10 +308,25 @@ export class MessageQueue {
     );
   }
 
+  private intervalMs() {
+    return this.options.minIntervalMs ?? Math.ceil(1000 / defaultConfig.outboundMessagesPerChannelPerSecond);
+  }
+
+  private retryDelayMs(attempts: number) {
+    const base = this.options.retryBaseDelayMs ?? 1000;
+    return Math.min(base * 2 ** Math.max(0, attempts - 1), 15_000);
+  }
+
   private emit(
     item: QueuedMessage,
     status: MessageQueueEventStatus,
-    details: { reason?: string; queueDepth?: number } = {}
+    details: {
+      reason?: string;
+      failureCategory?: MessageSendFailureCategory;
+      queueDepth?: number;
+      retryAfterMs?: number;
+      nextAttemptAt?: string;
+    } = {}
   ) {
     this.options.onEvent?.({
       id: item.id,
@@ -262,13 +336,41 @@ export class MessageQueue {
       queuedAt: item.queuedAt,
       updatedAt: new Date().toISOString(),
       reason: details.reason,
+      failureCategory: details.failureCategory,
       queueDepth: details.queueDepth,
+      retryAfterMs: details.retryAfterMs,
+      nextAttemptAt: details.nextAttemptAt,
       metadata: item.metadata
     });
   }
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const normalizeSendResult = (result: MessageSendResult): StructuredMessageSendResult => {
+  if (typeof result === "string") {
+    return { status: result };
+  }
+
+  return result;
+};
+
+const normalizeRetryReason = (reason: unknown): Required<Pick<StructuredMessageSendResult, "reason" | "failureCategory">> &
+  Pick<StructuredMessageSendResult, "retryAfterMs"> => {
+  if (typeof reason === "object" && reason !== null && "status" in reason) {
+    const result = normalizeSendResult(reason as MessageSendResult);
+    return {
+      reason: result.reason || "sender requested retry",
+      failureCategory: result.failureCategory ?? "unknown",
+      retryAfterMs: result.retryAfterMs
+    };
+  }
+
+  return {
+    reason: formatReason(reason),
+    failureCategory: "unknown"
+  };
+};
 
 const formatReason = (reason: unknown) => {
   if (reason instanceof Error) {
