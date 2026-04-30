@@ -37,15 +37,7 @@ import {
 import { createDbClient } from "../db/client";
 import { registerGiveawayCommands } from "../modules/giveaways/giveaways.commands";
 import { GiveawaysService } from "../modules/giveaways/giveaways.service";
-import {
-  giveawayClosedMessage,
-  giveawayDrawMessage,
-  giveawayEndMessage,
-  giveawayEntryMessage,
-  giveawayLastCallMessage,
-  giveawayRerollMessage,
-  giveawayStartMessage
-} from "../modules/giveaways/giveaways.messages";
+import { createGiveawayTemplateStore } from "../modules/giveaways/giveaways.templates";
 import {
   defaultRedirectUri,
   getLocalSecretsPath,
@@ -71,6 +63,7 @@ const logger = createLogger("info");
 const oauthStates = new Map<string, number>();
 const db = createDbClient(process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite");
 const giveawaysService = new GiveawaysService({ db, logger });
+const giveawayTemplates = createGiveawayTemplateStore(db);
 const setupRuntimeStatus = createRuntimeStatus("local");
 const outboundHistory = createOutboundHistory(db);
 const chatQueue = new MessageQueue({
@@ -84,6 +77,7 @@ const chatQueue = new MessageQueue({
 chatQueue.start();
 setupRuntimeStatus.messageQueueReady = chatQueue.isReady();
 const botProcess = createBotProcessState();
+const giveawayReminder = createGiveawayReminderState();
 
 export const startSetupServer = async (options: { port?: number } = {}) => {
   const port = options.port ?? defaultPort;
@@ -117,9 +111,12 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
     "VaexCore setup server started"
   );
 
+  scheduleGiveawayReminder();
+
   return {
     url: `http://localhost:${port}`,
     stop: async () => {
+      clearGiveawayReminderTimer();
       await stopBotProcess({ force: true });
       await chatQueue.drain(3000);
       chatQueue.stop();
@@ -194,6 +191,11 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/preflight") {
+    sendJson(response, 200, await runPreflightCheck());
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/bot/start") {
     sendJson(response, 200, await startBotProcess());
     return;
@@ -226,6 +228,39 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/giveaway/templates") {
+    sendJson(response, 200, getGiveawayTemplates());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/templates") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveGiveawayTemplates(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/templates/reset") {
+    const body = (await readJson(request)) as { actions?: string[] };
+    sendJson(response, 200, resetGiveawayTemplates(body.actions));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/giveaway/reminder") {
+    sendJson(response, 200, getGiveawayReminder());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/reminder") {
+    const body = await readJson(request);
+    sendJson(response, 200, setGiveawayReminder(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/giveaway/reminder/send") {
+    sendJson(response, 200, sendGiveawayReminderNow());
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/giveaway/start") {
     const body = (await readJson(request)) as {
       title?: string;
@@ -253,7 +288,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: `!gstart codes=${winnerCount} keyword=${keyword} title="${title.replace(/"/g, "'")}"`,
       announcements: ({ giveaway }) =>
-        giveawayAnnouncement(giveawayStartMessage(giveaway), "start", giveaway.id, "critical")
+        giveawayAnnouncement(giveawayTemplates.start(giveaway), "start", giveaway.id, "critical")
     }));
     return;
   }
@@ -267,7 +302,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoCommand: "!gclose",
       announcements: ({ giveaway }) =>
         giveawayAnnouncement(
-          giveawayClosedMessage(giveaway, giveawaysService.countEntriesForGiveaway(giveaway.id)),
+          giveawayTemplates.close(giveaway, giveawaysService.countEntriesForGiveaway(giveaway.id)),
           "close",
           giveaway.id,
           "critical"
@@ -291,7 +326,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     }, {
       announcements: ({ giveaway, entryCount }) =>
         giveawayAnnouncement(
-          giveawayLastCallMessage(giveaway, entryCount),
+          giveawayTemplates.lastCall(giveaway, entryCount),
           "last-call",
           giveaway.id,
           "critical"
@@ -314,7 +349,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: `!gdraw ${count}`,
       announcements: ({ result }) =>
-        giveawayAnnouncement(giveawayDrawMessage(result), "draw", result.giveaway.id, "critical")
+        giveawayAnnouncement(giveawayTemplates.draw(result), "draw", result.giveaway.id, "critical")
     }));
     return;
   }
@@ -327,7 +362,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: body.username ? `!greroll ${requireUsername(body.username)}` : undefined,
       announcements: ({ result }) =>
-        giveawayAnnouncement(giveawayRerollMessage(result), "reroll", result.giveaway.id, "important")
+        giveawayAnnouncement(giveawayTemplates.reroll(result), "reroll", result.giveaway.id, "important")
     }));
     return;
   }
@@ -354,6 +389,13 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/giveaway/deliver-all") {
+    sendJson(response, 200, runGiveawayAction(() => ({
+      result: giveawaysService.deliverAll(localUiActor)
+    })));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/giveaway/end") {
     const body = (await readJson(request)) as { echoToChat?: boolean };
     sendJson(response, 200, runGiveawayAction(() => ({
@@ -363,7 +405,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoCommand: "!gend",
       announcements: ({ giveaway }) =>
         giveawayAnnouncement(
-          giveawayEndMessage(giveaway, giveawaysService.getWinnersForGiveaway(giveaway.id)),
+          giveawayTemplates.end(giveaway, giveawaysService.getWinnersForGiveaway(giveaway.id)),
           "end",
           giveaway.id,
           "critical"
@@ -394,7 +436,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       announcements: ({ result }) =>
         result.status === "entered"
           ? giveawayAnnouncement(
-              giveawayEntryMessage({
+              giveawayTemplates.entry({
                 giveaway: result.giveaway,
                 displayName: result.displayName,
                 entryCount: result.entryCount
@@ -778,6 +820,314 @@ const getOperatorStatus = async () => {
     giveaway: summarizeGiveawayState(giveaway)
   };
 };
+
+const runPreflightCheck = async () => {
+  const status = await getOperatorStatus();
+  const runtime = status.runtime;
+  const giveawayState = getGiveawayState();
+  const outbound = outboundHistory.summary();
+  const checks = [
+    {
+      name: "Twitch setup",
+      ok: isSafeConfigComplete(),
+      detail: isSafeConfigComplete()
+        ? "Required local Twitch fields are present."
+        : "Open Settings -> Setup Guide and complete credentials, usernames, OAuth, and validation."
+    },
+    {
+      name: "Token and scopes",
+      ok: runtime.tokenValid && runtime.requiredScopesPresent,
+      detail: runtime.tokenValid && runtime.requiredScopesPresent
+        ? "OAuth token is valid and required chat scopes are present."
+        : "Run Validate Setup after connecting Twitch."
+    },
+    {
+      name: "Setup queue",
+      ok: runtime.queueReady,
+      detail: runtime.queueReady
+        ? "Outbound setup queue is ready."
+        : "Restart the setup console if queue readiness does not recover."
+    },
+    {
+      name: "Bot runtime",
+      ok: Boolean(runtime.botProcess.running),
+      detail: runtime.botProcess.running
+        ? `Bot process is ${runtime.botProcess.status}.`
+        : "Start bot process from Dashboard."
+    },
+    {
+      name: "EventSub chat listener",
+      ok: runtime.eventSubConnected && runtime.chatSubscriptionActive,
+      detail: runtime.eventSubConnected && runtime.chatSubscriptionActive
+        ? "Chat subscription is active."
+        : "Wait for the bot process to connect to EventSub and create the chat subscription."
+    },
+    {
+      name: "Live chat confirmation",
+      ok: runtime.liveChatConfirmed,
+      detail: runtime.liveChatConfirmed
+        ? "Live chat has responded to !ping."
+        : "Type !ping in Twitch chat after the bot starts."
+    },
+    {
+      name: "Critical outbound failures",
+      ok: outbound.criticalFailed === 0,
+      detail: outbound.criticalFailed === 0
+        ? "No critical giveaway chat failures are currently tracked."
+        : "Resend failed critical giveaway messages before continuing."
+    },
+    {
+      name: "Giveaway controls",
+      ok: giveawayState.summary.status === "none" || giveawayState.summary.status === "open" || giveawayState.summary.status === "closed",
+      detail: giveawayState.summary.status === "none"
+        ? "No active giveaway; start controls are ready."
+        : `Giveaway is ${giveawayState.summary.status}; next action: ${giveawayState.summary.status === "open" ? "close entries before drawing" : "draw or finish delivery"}.`
+    }
+  ];
+  const failed = checks.find((check) => !check.ok);
+
+  return {
+    ok: checks.every((check) => check.ok),
+    checks,
+    nextAction: failed?.detail ?? "Giveaway controls ready.",
+    summary: giveawayState.summary
+  };
+};
+
+const isSafeConfigComplete = () => {
+  const config = getSafeConfig();
+  return Boolean(
+    config.hasClientId &&
+    config.hasClientSecret &&
+    config.hasAccessToken &&
+    config.hasBroadcasterUserId &&
+    config.hasBotUserId &&
+    config.tokenValidatedAt
+  );
+};
+
+type GiveawayReminderState = {
+  enabled: boolean;
+  intervalMinutes: number;
+  lastSentAt: string;
+  nextSendAt: string;
+  lastError: string;
+  timer: NodeJS.Timeout | undefined;
+};
+
+type GiveawayReminderSettingsRow = {
+  enabled: number;
+  interval_minutes: number;
+  last_sent_at: string;
+};
+
+function createGiveawayReminderState(): GiveawayReminderState {
+  const saved = readGiveawayReminderSettings();
+  return {
+    enabled: saved.enabled,
+    intervalMinutes: saved.intervalMinutes,
+    lastSentAt: saved.lastSentAt,
+    nextSendAt: saved.enabled ? nextGiveawayReminderAt(saved.intervalMinutes) : "",
+    lastError: "",
+    timer: undefined
+  };
+}
+
+const getGiveawayReminder = () => {
+  const status = giveawaysService.status();
+  return {
+    ok: true,
+    reminder: {
+      enabled: giveawayReminder.enabled,
+      intervalMinutes: giveawayReminder.intervalMinutes,
+      lastSentAt: giveawayReminder.lastSentAt,
+      nextSendAt: giveawayReminder.nextSendAt,
+      lastError: giveawayReminder.lastError,
+      openGiveaway: Boolean(status?.giveaway.status === "open"),
+      giveawayTitle: status?.giveaway.title ?? ""
+    }
+  };
+};
+
+const setGiveawayReminder = (body: unknown) => {
+  const input = body as { enabled?: boolean; intervalMinutes?: number | string };
+  const intervalMinutes = parseSafeInteger(input.intervalMinutes ?? giveawayReminder.intervalMinutes, {
+    field: "Reminder interval",
+    min: 2,
+    max: 60
+  });
+  const intervalChanged = intervalMinutes !== giveawayReminder.intervalMinutes;
+
+  giveawayReminder.enabled = Boolean(input.enabled);
+  giveawayReminder.intervalMinutes = intervalMinutes;
+  giveawayReminder.lastError = "";
+
+  if (!giveawayReminder.enabled) {
+    giveawayReminder.nextSendAt = "";
+    clearGiveawayReminderTimer();
+    persistGiveawayReminderSettings();
+    return getGiveawayReminder();
+  }
+
+  if (intervalChanged || !giveawayReminder.nextSendAt) {
+    giveawayReminder.nextSendAt = nextGiveawayReminderAt(intervalMinutes);
+  }
+
+  persistGiveawayReminderSettings();
+  scheduleGiveawayReminder();
+  return getGiveawayReminder();
+};
+
+const sendGiveawayReminderNow = () => {
+  const result = queueGiveawayReminderAnnouncement({ manual: true });
+
+  if (result.ok) {
+    giveawayReminder.lastSentAt = new Date().toISOString();
+    giveawayReminder.lastError = "";
+    persistGiveawayReminderSettings();
+    if (giveawayReminder.enabled) {
+      giveawayReminder.nextSendAt = nextGiveawayReminderAt(giveawayReminder.intervalMinutes);
+      scheduleGiveawayReminder();
+    }
+  } else {
+    giveawayReminder.lastError = result.error ?? "Reminder was not queued.";
+  }
+
+  return {
+    ...getGiveawayReminder(),
+    ...result
+  };
+};
+
+const queueGiveawayReminderAnnouncement = (options: { manual?: boolean } = {}) => {
+  const status = giveawaysService.status();
+
+  if (!status || status.giveaway.status !== "open") {
+    if (!options.manual) {
+      return {
+        ok: true,
+        queued: false,
+        skipped: true,
+        reason: "No open giveaway."
+      };
+    }
+
+    return {
+      ok: false,
+      error: "Reminder requires an open giveaway."
+    };
+  }
+
+  const queued = maybeQueueGiveawayAnnouncements(
+    giveawayAnnouncement(
+      giveawayTemplates.reminder(status.giveaway, status.entries),
+      "reminder",
+      status.giveaway.id,
+      "important"
+    )
+  );
+
+  if (!queued) {
+    return {
+      ok: false,
+      error: "Reminder could not queue because chat is not fully configured."
+    };
+  }
+
+  return {
+    ok: true,
+    queued: true
+  };
+};
+
+const scheduleGiveawayReminder = () => {
+  clearGiveawayReminderTimer();
+
+  if (!giveawayReminder.enabled) {
+    return;
+  }
+
+  const nextAt = Date.parse(giveawayReminder.nextSendAt);
+  const delayMs = Number.isFinite(nextAt)
+    ? Math.max(1000, nextAt - Date.now())
+    : giveawayReminder.intervalMinutes * 60 * 1000;
+
+  giveawayReminder.timer = setTimeout(() => {
+    giveawayReminder.timer = undefined;
+    const result = queueGiveawayReminderAnnouncement();
+
+    if (result.ok && result.queued) {
+      giveawayReminder.lastSentAt = new Date().toISOString();
+      giveawayReminder.lastError = "";
+      persistGiveawayReminderSettings();
+    } else if (!result.ok) {
+      giveawayReminder.lastError = result.error ?? "Reminder was not queued.";
+      logger.warn({ error: giveawayReminder.lastError }, "Giveaway reminder was not queued");
+    }
+
+    giveawayReminder.nextSendAt = nextGiveawayReminderAt(giveawayReminder.intervalMinutes);
+    scheduleGiveawayReminder();
+  }, delayMs);
+  giveawayReminder.timer.unref?.();
+};
+
+const clearGiveawayReminderTimer = () => {
+  if (!giveawayReminder.timer) {
+    return;
+  }
+
+  clearTimeout(giveawayReminder.timer);
+  giveawayReminder.timer = undefined;
+};
+
+function readGiveawayReminderSettings() {
+  const row = db
+    .prepare("SELECT enabled, interval_minutes, last_sent_at FROM giveaway_reminder_settings WHERE id = 1")
+    .get() as GiveawayReminderSettingsRow | undefined;
+  const interval = Number(row?.interval_minutes ?? 10);
+
+  return {
+    enabled: row?.enabled === 1,
+    intervalMinutes: Number.isInteger(interval) && interval >= 2 && interval <= 60
+      ? interval
+      : 10,
+    lastSentAt: row?.last_sent_at ?? ""
+  };
+}
+
+function persistGiveawayReminderSettings() {
+  db.prepare(
+    `
+      INSERT INTO giveaway_reminder_settings (
+        id,
+        enabled,
+        interval_minutes,
+        last_sent_at,
+        updated_at
+      ) VALUES (
+        1,
+        @enabled,
+        @intervalMinutes,
+        @lastSentAt,
+        @updatedAt
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        enabled = excluded.enabled,
+        interval_minutes = excluded.interval_minutes,
+        last_sent_at = excluded.last_sent_at,
+        updated_at = excluded.updated_at
+    `
+  ).run({
+    enabled: giveawayReminder.enabled ? 1 : 0,
+    intervalMinutes: giveawayReminder.intervalMinutes,
+    lastSentAt: giveawayReminder.lastSentAt,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function nextGiveawayReminderAt(intervalMinutes: number) {
+  return new Date(Date.now() + intervalMinutes * 60 * 1000).toISOString();
+}
 
 type BotProcessState = {
   child: ChildProcess | undefined;
@@ -1199,12 +1549,43 @@ const sendConfiguredChatMessage = async (message: string) => {
   return sender.send(message);
 };
 
+const getGiveawayTemplates = () => ({
+  ok: true,
+  templates: giveawayTemplates.list(),
+  placeholders: [
+    "title",
+    "keyword",
+    "winnerCount",
+    "entryCount",
+    "displayName",
+    "winners",
+    "winnerPlural",
+    "drawnCount",
+    "requestedCount",
+    "partial",
+    "rerolled",
+    "replacement"
+  ]
+});
+
+const saveGiveawayTemplates = (body: unknown) => ({
+  ...getGiveawayTemplates(),
+  templates: giveawayTemplates.save(body)
+});
+
+const resetGiveawayTemplates = (actions: unknown) => ({
+  ...getGiveawayTemplates(),
+  templates: giveawayTemplates.reset(actions)
+});
+
 const getGiveawayState = () => {
   const state = giveawaysService.getOperatorState();
+  const latest = giveawaysService.getLatestGiveawayState();
   return {
     ok: true,
     ...state,
-    summary: summarizeGiveawayState(state)
+    summary: summarizeGiveawayState(state),
+    recap: summarizeGiveawayRecap(latest)
   };
 };
 
@@ -1234,6 +1615,47 @@ const summarizeGiveawayState = (
         ? `${undeliveredWinnersCount} winner(s) are not marked delivered.`
         : undefined
     ].filter(Boolean)
+  };
+};
+
+const summarizeGiveawayRecap = (
+  state: ReturnType<GiveawaysService["getLatestGiveawayState"]>
+) => {
+  if (!state.giveaway) {
+    return {
+      available: false
+    };
+  }
+
+  const activeWinners = state.winners.filter((winner) => !winner.rerolled_at);
+  const deliveredWinners = activeWinners.filter((winner) => winner.delivered_at);
+  const pendingDelivery = activeWinners.filter((winner) => !winner.delivered_at);
+  const messages = outboundHistory.list().filter(
+    (message) =>
+      message.category === "giveaway" &&
+      Number(message.giveawayId) === Number(state.giveaway?.id)
+  );
+  const criticalMessages = messages.filter((message) => message.importance === "critical");
+  const failedMessages = messages.filter((message) => message.status === "failed");
+
+  return {
+    available: true,
+    id: state.giveaway.id,
+    title: state.giveaway.title,
+    status: state.giveaway.status,
+    entryCount: state.counts.entries,
+    activeWinnerCount: activeWinners.length,
+    deliveredWinnerCount: deliveredWinners.length,
+    pendingDeliveryCount: pendingDelivery.length,
+    rerolledCount: state.counts.rerolledWinners,
+    criticalMessageCount: criticalMessages.length,
+    failedMessageCount: failedMessages.length,
+    criticalFailedCount: criticalMessages.filter((message) => message.status === "failed").length,
+    winners: activeWinners.map((winner) => ({
+      login: winner.login,
+      displayName: winner.display_name,
+      delivered: Boolean(winner.delivered_at)
+    }))
   };
 };
 
@@ -1435,7 +1857,8 @@ const simulateCommand = async (body: {
   registerGiveawayCommands({
     router,
     service: giveawaysService,
-    runtimeStatus: setupRuntimeStatus
+    runtimeStatus: setupRuntimeStatus,
+    messages: giveawayTemplates
   });
 
   try {

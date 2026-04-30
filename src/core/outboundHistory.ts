@@ -156,6 +156,9 @@ export const classifyOutboundMessage = (message: string): MessageQueueMetadata =
   if (message.startsWith("Last call for ")) {
     return { category: "giveaway", action: "last-call", importance: "critical" };
   }
+  if (message.startsWith("Reminder:")) {
+    return { category: "giveaway", action: "reminder", importance: "important" };
+  }
   if (message.startsWith("Entries closed for ")) {
     return { category: "giveaway", action: "close", importance: "critical" };
   }

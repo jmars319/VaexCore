@@ -11,25 +11,22 @@ import {
 } from "../../core/security";
 import type { GiveawaysService } from "./giveaways.service";
 import {
-  giveawayClosedMessage,
-  giveawayDrawMessage,
-  giveawayDuplicateEntryMessage,
-  giveawayEndMessage,
-  giveawayEntryMessage,
-  giveawayRerollMessage,
-  giveawayStartMessage
+  defaultGiveawayMessageRenderer,
+  type GiveawayMessageRenderer
 } from "./giveaways.messages";
 
 type RegisterGiveawayCommandsOptions = {
   router: CommandRouter;
   service: GiveawaysService;
   runtimeStatus?: RuntimeStatus;
+  messages?: GiveawayMessageRenderer;
 };
 
 export const registerGiveawayCommands = ({
   router,
   service,
-  runtimeStatus
+  runtimeStatus,
+  messages = defaultGiveawayMessageRenderer
 }: RegisterGiveawayCommandsOptions) => {
   router.register("ghelp", PermissionLevel.Moderator, ({ reply }) => {
     reply(
@@ -38,7 +35,7 @@ export const registerGiveawayCommands = ({
   });
 
   router.register("enter", PermissionLevel.Viewer, ({ message, reply }) => {
-    handleEntryCommand({ message, keyword: "enter", reply, service });
+    handleEntryCommand({ message, keyword: "enter", reply, service, messages });
   });
 
   router.registerFallback(({ message, name, reply }) => {
@@ -48,7 +45,7 @@ export const registerGiveawayCommands = ({
       return false;
     }
 
-    handleEntryCommand({ message, keyword: name, reply, service });
+    handleEntryCommand({ message, keyword: name, reply, service, messages });
     return true;
   });
 
@@ -77,7 +74,7 @@ export const registerGiveawayCommands = ({
       title: sanitizeGiveawayTitle(options.title, "Untitled giveaway")
     });
 
-    reply(giveawayStartMessage(giveaway), giveawayMessageMetadata("start", giveaway.id, "critical"));
+    reply(messages.start(giveaway), giveawayMessageMetadata("start", giveaway.id, "critical"));
   });
 
   router.register("gstatus", PermissionLevel.Moderator, ({ reply }) => {
@@ -96,7 +93,7 @@ export const registerGiveawayCommands = ({
   router.register("gclose", PermissionLevel.Moderator, ({ message, reply }) => {
     const giveaway = service.close(message);
     reply(
-      giveawayClosedMessage(giveaway, service.countEntriesForGiveaway(giveaway.id)),
+      messages.close(giveaway, service.countEntriesForGiveaway(giveaway.id)),
       giveawayMessageMetadata("close", giveaway.id, "critical")
     );
   });
@@ -107,7 +104,7 @@ export const registerGiveawayCommands = ({
     const requestedCount = countArg ? parsePositiveInteger(countArg) : undefined;
     const result = service.draw(message, requestedCount, { allowOpen });
 
-    reply(giveawayDrawMessage(result), giveawayMessageMetadata("draw", result.giveaway.id, "critical"));
+    reply(messages.draw(result), giveawayMessageMetadata("draw", result.giveaway.id, "critical"));
   });
 
   router.register("greroll", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -120,7 +117,7 @@ export const registerGiveawayCommands = ({
 
     const result = service.reroll(message, username);
 
-    reply(giveawayRerollMessage(result), giveawayMessageMetadata("reroll", result.giveaway.id, "important"));
+    reply(messages.reroll(result), giveawayMessageMetadata("reroll", result.giveaway.id, "important"));
   });
 
   router.register("gclaim", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -150,7 +147,7 @@ export const registerGiveawayCommands = ({
   router.register("gend", PermissionLevel.Moderator, ({ message, reply }) => {
     const giveaway = service.end(message);
     reply(
-      giveawayEndMessage(giveaway, service.getWinnersForGiveaway(giveaway.id)),
+      messages.end(giveaway, service.getWinnersForGiveaway(giveaway.id)),
       giveawayMessageMetadata("end", giveaway.id, "critical")
     );
   });
@@ -161,6 +158,7 @@ const handleEntryCommand = (input: {
   keyword: string;
   reply: (message: string, metadata?: MessageQueueMetadata) => void;
   service: GiveawaysService;
+  messages: GiveawayMessageRenderer;
 }) => {
   if (!input.message.userId || !input.message.userLogin) {
     return;
@@ -169,7 +167,7 @@ const handleEntryCommand = (input: {
   const result = input.service.enter(input.message, input.keyword);
 
   if (result.status === "entered") {
-    input.reply(giveawayEntryMessage({
+    input.reply(input.messages.entry({
       giveaway: result.giveaway,
       displayName: result.displayName,
       entryCount: result.entryCount
@@ -178,7 +176,7 @@ const handleEntryCommand = (input: {
   }
 
   if (result.status === "duplicate") {
-    input.reply(giveawayDuplicateEntryMessage({
+    input.reply(input.messages.duplicateEntry({
       giveaway: result.giveaway,
       displayName: result.displayName,
       entryCount: result.entryCount

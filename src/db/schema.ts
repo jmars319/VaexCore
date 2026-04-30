@@ -63,6 +63,20 @@ export const initializeSchema = (db: DbClient) => {
       resent_from TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS giveaway_message_templates (
+      action TEXT PRIMARY KEY,
+      template TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS giveaway_reminder_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+      interval_minutes INTEGER NOT NULL DEFAULT 10,
+      last_sent_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_giveaways_status ON giveaways(status);
     CREATE INDEX IF NOT EXISTS idx_giveaway_entries_giveaway_id
       ON giveaway_entries(giveaway_id);

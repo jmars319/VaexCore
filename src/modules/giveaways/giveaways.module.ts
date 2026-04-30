@@ -4,6 +4,7 @@ import type { RuntimeStatus } from "../../core/runtimeStatus";
 import type { DbClient } from "../../db/client";
 import { registerGiveawayCommands } from "./giveaways.commands";
 import { GiveawaysService } from "./giveaways.service";
+import { createGiveawayTemplateStore } from "./giveaways.templates";
 
 type GiveawaysModuleOptions = {
   router: CommandRouter;
@@ -19,7 +20,8 @@ export const registerGiveawaysModule = ({
   runtimeStatus
 }: GiveawaysModuleOptions) => {
   const service = new GiveawaysService({ db, logger });
-  registerGiveawayCommands({ router, service, runtimeStatus });
+  const templates = createGiveawayTemplateStore(db);
+  registerGiveawayCommands({ router, service, runtimeStatus, messages: templates });
 
   return service;
 };

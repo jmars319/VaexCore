@@ -12,6 +12,9 @@ const state = {
   config: null,
   status: null,
   giveaway: null,
+  templates: [],
+  reminder: null,
+  preflightResult: null,
   auditLogs: [],
   outboundMessages: [],
   outboundSummary: { total: 0, queued: 0, failed: 0, criticalFailed: 0, sent: 0 },
@@ -25,6 +28,8 @@ const state = {
   testMessageSent: false,
   settingsDraft: {},
   giveawayDraft: {},
+  templateDraft: {},
+  reminderDraft: {},
   oauthNotice: readOAuthNotice()
 };
 
@@ -65,9 +70,16 @@ const api = {
   validate: () => api.post("/api/validate"),
   testSend: () => api.post("/api/test-send"),
   status: () => api.get("/api/status"),
+  preflight: () => api.post("/api/preflight"),
   botStart: () => api.post("/api/bot/start"),
   botStop: () => api.post("/api/bot/stop"),
   giveaway: () => api.get("/api/giveaway"),
+  templates: () => api.get("/api/giveaway/templates"),
+  saveTemplates: (templates) => api.post("/api/giveaway/templates", { templates }),
+  resetTemplates: () => api.post("/api/giveaway/templates/reset"),
+  reminder: () => api.get("/api/giveaway/reminder"),
+  saveReminder: (body) => api.post("/api/giveaway/reminder", body),
+  sendReminder: () => api.post("/api/giveaway/reminder/send"),
   auditLogs: () => api.get("/api/audit-logs"),
   outboundMessages: () => api.get("/api/outbound-messages"),
   resendOutboundMessage: (id) => api.post("/api/outbound-messages/resend", id ? { id } : {}),
@@ -264,6 +276,7 @@ function renderDashboard() {
       })
     ]),
     renderBotRuntimeCard(runtime),
+    renderPreflightCard(),
     card("Readiness", [
       statusGrid([
         ["Summary", readiness.ready ? "ready" : "not ready", readiness.ready],
@@ -305,6 +318,26 @@ function renderBotRuntimeCard(runtime) {
     canStart || running ? null : callout("Complete setup and validation before starting the bot.", "warn"),
     process.lastError ? callout(process.lastError, "bad") : null,
     recentLogs.length ? h("pre", { className: "runtime-log", text: recentLogs.slice(-8).join("\n") }) : h("p", { className: "muted", text: "No bot runtime logs yet." })
+  ]);
+}
+
+function renderPreflightCard() {
+  const result = state.preflightResult;
+
+  return card("Preflight Rehearsal", [
+    h("p", { text: "Run this before going live to confirm setup, bot runtime, chat listener, and giveaway assurance are in a usable state." }),
+    h("div", { className: "actions" }, [
+      actionButton("Run preflight", { id: "runPreflight", variant: "secondary", onClick: runPreflight })
+    ]),
+    result ? statusGrid([
+      ["Summary", result.ok ? "ready" : "not ready", result.ok],
+      ["Next action", result.nextAction || "none", result.ok]
+    ]) : null,
+    result?.checks?.length ? dataTable(["Check", "Result", "Detail"], result.checks.map((check) => [
+      check.name,
+      h("span", { className: `chip ${check.ok ? "ok" : "bad"}`, text: check.ok ? "pass" : "fail" }),
+      check.detail
+    ])) : callout("No preflight run in this session.", "muted")
   ]);
 }
 
@@ -386,6 +419,83 @@ function renderGiveawayOutboundCard() {
   ]);
 }
 
+function renderGiveawayReminderCard() {
+  const reminder = state.reminder || {};
+
+  return card("Reminder Controls", [
+    h("p", { text: "Timed reminders only queue while entries are open and chat is configured." }),
+    h("div", { className: "grid" }, [
+      h("label", { className: "inline-check" }, [
+        h("input", { id: "reminderEnabled", type: "checkbox", onChange: updateReminderDraft }),
+        "Enable timed reminders"
+      ]),
+      formRow("Interval minutes", h("input", { id: "reminderInterval", type: "number", min: "2", max: "60", onInput: updateReminderDraft }))
+    ]),
+    statusGrid([
+      ["State", reminder.enabled ? "enabled" : "off", Boolean(reminder.enabled)],
+      ["Open Giveaway", reminder.openGiveaway ? reminder.giveawayTitle || "yes" : "no", Boolean(reminder.openGiveaway)],
+      ["Last Sent", reminder.lastSentAt || "never", true],
+      ["Next Send", reminder.nextSendAt || "none", !reminder.enabled || Boolean(reminder.nextSendAt)]
+    ]),
+    reminder.lastError ? callout(reminder.lastError, "warn") : null,
+    h("div", { className: "actions" }, [
+      actionButton("Save reminder", { id: "saveReminder", variant: "secondary", onClick: saveReminder }),
+      actionButton("Send reminder now", { id: "sendReminderNow", variant: "secondary", onClick: sendReminderNow })
+    ])
+  ]);
+}
+
+function renderGiveawayTemplatesCard() {
+  const templates = state.templates || [];
+
+  return card("Message Templates", [
+    h("p", { text: "Customize local giveaway chat messages without storing prize codes. Leave placeholders in braces when you want live giveaway values inserted." }),
+    h("div", { className: "template-list" }, templates.map((template) =>
+      h("label", { className: "template-row" }, [
+        h("span", {}, [
+          h("strong", { text: template.label }),
+          h("small", { text: template.description })
+        ]),
+        h("textarea", {
+          id: `template-${template.action}`,
+          "data-action": template.action,
+          onInput: updateTemplateDraft
+        })
+      ])
+    )),
+    callout("Available placeholders: {title}, {keyword}, {winnerCount}, {entryCount}, {displayName}, {winners}, {winnerPlural}, {drawnCount}, {requestedCount}, {partial}, {rerolled}, {replacement}."),
+    h("div", { className: "actions" }, [
+      actionButton("Save templates", { id: "saveTemplates", variant: "secondary", onClick: saveTemplates }),
+      actionButton("Reset templates", { id: "resetTemplates", variant: "secondary", onClick: resetTemplates })
+    ])
+  ]);
+}
+
+function renderGiveawayRecapCard() {
+  const recap = state.giveaway?.recap || {};
+
+  if (!recap.available) {
+    return card("Post-Giveaway Recap", [callout("No giveaway has run yet.", "muted")]);
+  }
+
+  return card("Post-Giveaway Recap", [
+    statusGrid([
+      ["Giveaway", `#${recap.id} ${recap.title}`, true],
+      ["Status", recap.status, recap.status === "ended"],
+      ["Entries", recap.entryCount || 0, true],
+      ["Winners", recap.activeWinnerCount || 0, true],
+      ["Pending Delivery", recap.pendingDeliveryCount || 0, Number(recap.pendingDeliveryCount || 0) === 0],
+      ["Delivered", recap.deliveredWinnerCount || 0, true],
+      ["Critical Messages", recap.criticalMessageCount || 0, true],
+      ["Failed Messages", recap.failedMessageCount || 0, Number(recap.failedMessageCount || 0) === 0]
+    ]),
+    dataTable(["Winner", "Delivered"], (recap.winners || []).map((winner) => [
+      `${winner.displayName} @${winner.login}`,
+      winner.delivered ? "yes" : "pending"
+    ]))
+  ]);
+}
+
 function renderGiveaways() {
   const giveaway = state.giveaway;
   const summary = giveaway?.summary || state.status?.giveaway || {};
@@ -397,6 +507,9 @@ function renderGiveaways() {
       h("p", { className: "warn", text: (summary.endWarnings || []).join(" ") })
     ]),
     card("Readiness Checklist", [list(giveawayChecklist(), "muted")]),
+    renderGiveawayReminderCard(),
+    renderGiveawayTemplatesCard(),
+    renderGiveawayRecapCard(),
     renderGiveawayOutboundCard(),
     card("Start Giveaway", [
       h("div", { className: "grid three" }, [
@@ -421,7 +534,9 @@ function renderGiveaways() {
         actionButton("Draw winners", { id: "gdraw", variant: "secondary", onClick: () => runGiveawayAction("draw", { count: Number(field("drawCount").value || 1) }, "Draw winners now?") }),
         actionButton("Reroll", { id: "greroll", variant: "secondary", onClick: () => runGiveawayAction("reroll", { username: field("rerollSelect").value }, "Reroll this winner?") }),
         actionButton("Mark claimed", { id: "gclaim", variant: "secondary", onClick: () => runGiveawayAction("claim", { username: field("claimSelect").value }) }),
-        actionButton("Mark delivered", { id: "gdeliver", variant: "secondary", onClick: () => runGiveawayAction("deliver", { username: field("deliverSelect").value }) })
+        actionButton("Mark delivered", { id: "gdeliver", variant: "secondary", onClick: () => runGiveawayAction("deliver", { username: field("deliverSelect").value }) }),
+        actionButton("Copy winners", { id: "copyWinners", variant: "secondary", onClick: copyWinnerList }),
+        actionButton("Mark all delivered", { id: "gdeliverAll", variant: "secondary", onClick: () => runGiveawayAction("deliver-all", {}, "Mark all active winners delivered?") })
       ]),
       h("div", { className: "actions destructive-actions" }, [
         actionButton("End giveaway", { id: "gend", variant: "danger", onClick: endGiveaway })
@@ -968,6 +1083,10 @@ function filterWinners(winners) {
   return winners;
 }
 
+function activeWinnerList() {
+  return (state.giveaway?.winners || []).filter((winner) => !winner.rerolled_at);
+}
+
 function winnerStatus(winner) {
   const chips = ["drawn"];
   if (winner.claimed_at) chips.push("claimed");
@@ -1005,16 +1124,20 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, audit, outbound] = await Promise.all([
+    const [config, status, giveaway, templates, reminder, audit, outbound] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
+      api.templates(),
+      api.reminder(),
       api.auditLogs(),
       api.outboundMessages()
     ]);
     state.config = config;
     state.status = status;
     state.giveaway = giveaway;
+    state.templates = templates.templates || [];
+    state.reminder = reminder.reminder || {};
     state.auditLogs = audit.logs || [];
     state.outboundMessages = outbound.messages || [];
     state.outboundSummary = outbound.summary || {};
@@ -1024,9 +1147,10 @@ async function refreshAll() {
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.auditLogs(), api.outboundMessages()]);
+  const [status, giveaway, reminder, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.reminder(), api.auditLogs(), api.outboundMessages()]);
   state.status = status;
   state.giveaway = giveaway;
+  state.reminder = reminder.reminder || {};
   state.auditLogs = audit.logs || [];
   state.outboundMessages = outbound.messages || [];
   state.outboundSummary = outbound.summary || {};
@@ -1157,6 +1281,17 @@ function updateGiveawayDraft(event) {
   state.giveawayDraft[event.target.id] = event.target.value;
 }
 
+function updateTemplateDraft(event) {
+  const action = event.target.dataset.action;
+  if (!action) return;
+  state.templateDraft[action] = event.target.value;
+}
+
+function updateReminderDraft(event) {
+  const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  state.reminderDraft[event.target.id] = value;
+}
+
 function normalizeLoginField(event) {
   const normalized = normalizeLoginInput(event.target.value);
   if (normalized === event.target.value) {
@@ -1220,6 +1355,20 @@ function readSettingsPayload() {
   };
 }
 
+function readTemplatePayload() {
+  const payload = {};
+
+  for (const template of state.templates || []) {
+    const id = `template-${template.action}`;
+    payload[template.action] = templateValue(template.action, template.template || "");
+    if (field(id)) {
+      payload[template.action] = field(id).value;
+    }
+  }
+
+  return payload;
+}
+
 async function validateSetup() {
   await runAction("validate", async () => {
     const result = await api.validate();
@@ -1244,6 +1393,76 @@ async function startBot() {
 
 async function stopBot() {
   await runAction("botStop", () => api.botStop(), { success: "Bot process stopped." });
+}
+
+async function runPreflight() {
+  await runAction("runPreflight", async () => {
+    const result = await api.preflight();
+    state.preflightResult = result;
+    return { ok: true };
+  }, { success: "Preflight completed." });
+}
+
+async function saveTemplates() {
+  await runAction("saveTemplates", async () => {
+    const result = await api.saveTemplates(readTemplatePayload());
+    state.templates = result.templates || [];
+    state.templateDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Templates saved." });
+}
+
+async function resetTemplates() {
+  if (!confirm("Reset giveaway message templates to defaults?")) {
+    return;
+  }
+
+  await runAction("resetTemplates", async () => {
+    const result = await api.resetTemplates();
+    state.templates = result.templates || [];
+    state.templateDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Templates reset." });
+}
+
+async function saveReminder() {
+  await runAction("saveReminder", async () => {
+    const result = await api.saveReminder({
+      enabled: Boolean(field("reminderEnabled")?.checked),
+      intervalMinutes: Number(field("reminderInterval")?.value || 10)
+    });
+    state.reminder = result.reminder || {};
+    state.reminderDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Reminder settings saved." });
+}
+
+async function sendReminderNow() {
+  await runAction("sendReminderNow", async () => {
+    const result = await api.sendReminder();
+    state.reminder = result.reminder || {};
+    return result;
+  }, { success: "Reminder queued." });
+}
+
+async function copyWinnerList() {
+  const winners = activeWinnerList();
+  const text = winners.map((winner) => `${winner.display_name} (@${winner.login})`).join("\n");
+
+  if (!text) {
+    state.message = { text: "No winners to copy.", tone: "warn" };
+    render();
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    state.message = { text: "Winner list copied.", tone: "ok" };
+  } catch {
+    state.message = { text: text, tone: "muted" };
+  }
+
+  render();
 }
 
 async function resendOutboundMessage(id) {
@@ -1296,6 +1515,11 @@ function syncFormValues() {
   setValue("giveawayKeyword", giveawayValue("giveawayKeyword", summary.keyword || "enter"));
   setValue("winnerCount", giveawayValue("winnerCount", summary.winnerCount || 3));
   setValue("drawCount", giveawayValue("drawCount", suggestedDrawCount()));
+  for (const template of state.templates || []) {
+    setValue(`template-${template.action}`, templateValue(template.action, template.template || ""));
+  }
+  setChecked("reminderEnabled", Boolean(reminderValue("reminderEnabled", state.reminder?.enabled)));
+  setValue("reminderInterval", reminderValue("reminderInterval", state.reminder?.intervalMinutes || 10));
   setValue("simActor", field("simActor")?.value || "viewer");
   setValue("simRole", field("simRole")?.value || "viewer");
   setValue("simCommand", field("simCommand")?.value || "!gstatus");
@@ -1310,6 +1534,14 @@ function settingsValue(id, fallback) {
 
 function giveawayValue(id, fallback) {
   return draftValue(state.giveawayDraft, id, fallback);
+}
+
+function templateValue(action, fallback) {
+  return draftValue(state.templateDraft, action, fallback);
+}
+
+function reminderValue(id, fallback) {
+  return draftValue(state.reminderDraft, id, fallback);
 }
 
 function draftValue(draft, id, fallback) {
@@ -1335,6 +1567,13 @@ function setValue(id, value) {
   const node = field(id);
   if (node && document.activeElement !== node) {
     node.value = value;
+  }
+}
+
+function setChecked(id, value) {
+  const node = field(id);
+  if (node && document.activeElement !== node) {
+    node.checked = Boolean(value);
   }
 }
 
@@ -1392,6 +1631,9 @@ function updateDisabledState() {
   setDisabled("greroll", activeWinners.length === 0, "Reroll is disabled until winners exist.");
   setDisabled("gclaim", activeWinners.filter((winner) => !winner.claimed_at).length === 0, "Claim is disabled until an unclaimed winner exists.");
   setDisabled("gdeliver", undelivered.length === 0, "Deliver is disabled until an undelivered winner exists.");
+  setDisabled("gdeliverAll", undelivered.length === 0, "Mark all delivered is disabled until undelivered winners exist.");
+  setDisabled("copyWinners", activeWinners.length === 0, "Copy winners is disabled until winners exist.");
+  setDisabled("sendReminderNow", status !== "open", "Reminder is disabled unless entries are open.");
   setDisabled("validate", !validationReady, "Save Twitch credentials and connect OAuth before validating.");
   setDisabled("guideValidate", !guideValidationReady, "Connect Twitch before validating.");
   setDisabled("disconnectTwitch", !config.hasAccessToken, "No Twitch connection to disconnect.");

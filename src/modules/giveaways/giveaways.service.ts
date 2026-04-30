@@ -433,6 +433,42 @@ export class GiveawaysService {
     return { giveaway, winner: updated };
   }
 
+  deliverAll(actor: ChatMessage) {
+    const giveaway = this.requireActiveGiveaway();
+    const winners = this.getWinners(giveaway.id).filter(
+      (winner) => !winner.rerolled_at && !winner.delivered_at
+    );
+    const now = timestamp();
+
+    for (const winner of winners) {
+      this.db
+        .prepare("UPDATE giveaway_winners SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ?")
+        .run(now, winner.id);
+    }
+
+    this.audit(actor, "giveaway.deliver_all", String(giveaway.id), {
+      winners: winners.map((winner) => winner.login),
+      deliveredCount: winners.length
+    });
+    this.logger.info(
+      {
+        operatorEvent: "giveaway winners delivered",
+        giveawayId: giveaway.id,
+        deliveredCount: winners.length,
+        winners: winners.map((winner) => winner.login),
+        actor: actor.userLogin,
+        mode: actor.source
+      },
+      "Giveaway winners delivered"
+    );
+
+    return {
+      giveaway,
+      winners: this.getWinners(giveaway.id).filter((winner) => !winner.rerolled_at),
+      deliveredCount: winners.length
+    };
+  }
+
   end(actor: ChatMessage) {
     const giveaway = this.requireActiveGiveaway();
     const unresolvedWinners = this.getUnresolvedWinners(giveaway.id);
@@ -502,6 +538,34 @@ export class GiveawaysService {
     };
   }
 
+  getLatestGiveawayState() {
+    const giveaway = this.getLatestGiveaway();
+
+    if (!giveaway) {
+      return {
+        giveaway: undefined,
+        entries: [] as GiveawayEntry[],
+        winners: [] as GiveawayWinner[],
+        counts: {
+          entries: 0,
+          activeWinners: 0,
+          rerolledWinners: 0
+        }
+      };
+    }
+
+    return {
+      giveaway,
+      entries: this.getEntries(giveaway.id),
+      winners: this.getWinners(giveaway.id),
+      counts: {
+        entries: this.countEntries(giveaway.id),
+        activeWinners: this.countActiveWinners(giveaway.id),
+        rerolledWinners: this.countRerolledWinners(giveaway.id)
+      }
+    };
+  }
+
   getRecentAuditLogs(limit = 100) {
     return this.db
       .prepare(
@@ -542,6 +606,12 @@ export class GiveawaysService {
     return this.db
       .prepare("SELECT * FROM giveaways WHERE id = ?")
       .get(id) as Giveaway | undefined;
+  }
+
+  private getLatestGiveaway() {
+    return this.db
+      .prepare("SELECT * FROM giveaways ORDER BY id DESC LIMIT 1")
+      .get() as Giveaway | undefined;
   }
 
   private requireGiveawayById(id: number) {

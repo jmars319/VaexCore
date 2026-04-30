@@ -141,6 +141,16 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
   background: var(--surface-2);
   color: var(--text);
 }
+.template-list { display: grid; gap: 12px; }
+.template-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.template-row strong { display: block; color: var(--text); margin-bottom: 4px; }
+.template-row small { display: block; color: var(--muted); line-height: 1.4; }
+.template-row textarea { min-height: 70px; }
 .needs-attention { border-color: var(--warn); }
 .pill, .chip {
   border: 1px solid var(--line);

@@ -172,8 +172,8 @@ http://localhost:3434
 
 The console is organized into durable sections:
 
-- `Dashboard`: high-level Twitch, queue, chat, and active giveaway readiness.
-- `Giveaways`: start, close, draw, reroll, claim, deliver, and end giveaways.
+- `Dashboard`: high-level Twitch, queue, chat, active giveaway readiness, and preflight rehearsal.
+- `Giveaways`: start, close, draw, reroll, claim, deliver, end giveaways, manage reminder timing, edit giveaway chat templates, and review the latest recap.
 - `Chat Tools`: send chat messages, send test messages, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
 - `Settings`: configure mode, Twitch OAuth, bot identity, and broadcaster identity.
@@ -274,6 +274,14 @@ Recommended operator flow:
 9. End the giveaway after operator work is complete.
 
 Giveaway chat announcements are automatic when chat is configured. VaexCore announces start instructions, thanks each unique entrant, acknowledges duplicate entries, announces closed entries, announces drawn/rerolled winners, and repeats the final winner list when the giveaway ends. Custom keywords work too: `keyword=raffle` means viewers enter with `!raffle`.
+
+The `Giveaways` tab also includes stream-night controls:
+
+- `Preflight Rehearsal` on the Dashboard checks Twitch setup, bot runtime, EventSub, live chat confirmation, outbound failures, and giveaway state before going live.
+- `Reminder Controls` can queue timed reminder messages while entries are open. The enabled state and interval are stored locally in SQLite, and reminders stop queuing when entries are not open.
+- `Message Templates` stores non-secret local giveaway wording in SQLite. Supported placeholders include `{title}`, `{keyword}`, `{winnerCount}`, `{entryCount}`, `{displayName}`, `{winners}`, `{rerolled}`, and `{replacement}`.
+- `Post-Giveaway Recap` summarizes the latest giveaway, winners, pending delivery, and critical chat message failures.
+- `Copy winners` and `Mark all delivered` help close out manual delivery without storing prize codes.
 
 Current chat command syntax:
 

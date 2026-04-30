@@ -2,6 +2,32 @@ import type { Giveaway, GiveawayWinner } from "./giveaways.types";
 
 const maxWinnerNamesInChat = 8;
 
+export type GiveawayMessageRenderer = {
+  start: (giveaway: Giveaway) => string;
+  entry: (input: {
+    giveaway: Giveaway;
+    displayName: string;
+    entryCount: number;
+  }) => string;
+  duplicateEntry: (input: {
+    giveaway: Giveaway;
+    displayName: string;
+    entryCount: number;
+  }) => string;
+  lastCall: (giveaway: Giveaway, entryCount: number) => string;
+  close: (giveaway: Giveaway, entryCount: number) => string;
+  draw: (input: {
+    winners: GiveawayWinner[];
+    requestedCount: number;
+  }) => string;
+  reroll: (input: {
+    rerolled: GiveawayWinner;
+    replacement?: GiveawayWinner;
+  }) => string;
+  end: (giveaway: Giveaway, winners: GiveawayWinner[]) => string;
+  reminder: (giveaway: Giveaway, entryCount: number) => string;
+};
+
 export const giveawayStartMessage = (giveaway: Giveaway) =>
   `Giveaway started: ${giveaway.title}. Type !${giveaway.keyword} to enter. Winners: ${giveaway.winner_count}.`;
 
@@ -24,6 +50,9 @@ export const giveawayClosedMessage = (giveaway: Giveaway, entryCount: number) =>
 
 export const giveawayLastCallMessage = (giveaway: Giveaway, entryCount: number) =>
   `Last call for ${giveaway.title}: type !${giveaway.keyword} to enter. Current entries: ${entryCount}.`;
+
+export const giveawayReminderMessage = (giveaway: Giveaway, entryCount: number) =>
+  `Reminder: ${giveaway.title} is open. Type !${giveaway.keyword} to enter. Current entries: ${entryCount}.`;
 
 export const giveawayDrawMessage = (input: {
   winners: GiveawayWinner[];
@@ -62,10 +91,22 @@ export const giveawayEndMessage = (giveaway: Giveaway, winners: GiveawayWinner[]
   return `Giveaway ended: ${giveaway.title}. Final winner${activeWinners.length === 1 ? "" : "s"}: ${formatWinnerNames(activeWinners, 5)}.`;
 };
 
-const formatWinnerNames = (winners: GiveawayWinner[], maxNames = maxWinnerNamesInChat) => {
+export const formatWinnerNames = (winners: GiveawayWinner[], maxNames = maxWinnerNamesInChat) => {
   const shown = winners.slice(0, maxNames);
   const remaining = winners.length - shown.length;
   const names = shown.map((winner) => winner.display_name).join(", ");
 
   return remaining > 0 ? `${names}, +${remaining} more` : names;
+};
+
+export const defaultGiveawayMessageRenderer: GiveawayMessageRenderer = {
+  start: giveawayStartMessage,
+  entry: giveawayEntryMessage,
+  duplicateEntry: giveawayDuplicateEntryMessage,
+  lastCall: giveawayLastCallMessage,
+  close: giveawayClosedMessage,
+  draw: giveawayDrawMessage,
+  reroll: giveawayRerollMessage,
+  end: giveawayEndMessage,
+  reminder: giveawayReminderMessage
 };

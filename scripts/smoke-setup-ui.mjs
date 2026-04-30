@@ -58,10 +58,18 @@ async function runSmoke() {
   assert(appJs.includes("Send last call"), "setup UI exposes giveaway last-call operator action");
   assert(appJs.includes("Giveaway Chat Assurance"), "giveaway tab exposes chat assurance state");
   assert(appJs.includes("Critical Failed"), "giveaway tab highlights critical outbound failures");
+  assert(appJs.includes("Message Templates"), "giveaway tab exposes local message templates");
+  assert(appJs.includes("Reminder Controls"), "giveaway tab exposes timed reminder controls");
+  assert(appJs.includes("Post-Giveaway Recap"), "giveaway tab exposes post-giveaway recap");
+  assert(appJs.includes("Run preflight"), "dashboard exposes preflight rehearsal");
+  assert(appJs.includes("Copy winners"), "winner workflow can copy winners");
+  assert(appJs.includes("Mark all delivered"), "winner workflow can bulk mark delivery");
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
   assert(setupServerJs.includes("outboundImportance"), "setup server tracks outbound importance metadata");
+  assert(setupServerJs.includes("giveaway_message_templates"), "setup server stores giveaway templates locally");
+  assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
   assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
   assert(styles.includes(".tab-panel"), "styles asset loaded");
@@ -187,6 +195,49 @@ async function runSmoke() {
   });
   assert(chatSend.ok === false, "chat send route rejects until validation passes");
 
+  const preflight = await json("/api/preflight", { method: "POST" });
+  assert(Array.isArray(preflight.checks), "preflight returns check list");
+  assert(preflight.ok === false, "preflight reports not ready before bot runtime starts");
+
+  const templates = await json("/api/giveaway/templates");
+  assert(templates.ok === true, "giveaway template route exists");
+  assert(templates.templates.some((template) => template.action === "start"), "giveaway templates include start action");
+  assert(templates.placeholders.includes("keyword"), "giveaway templates document placeholders");
+
+  const savedTemplates = await json("/api/giveaway/templates", {
+    method: "POST",
+    body: {
+      templates: {
+        start: "Custom start for {title}: !{keyword}"
+      }
+    }
+  });
+  assert(
+    savedTemplates.templates.some((template) => template.action === "start" && template.customized),
+    "giveaway templates can be customized"
+  );
+  const resetTemplates = await json("/api/giveaway/templates/reset", { method: "POST" });
+  assert(
+    resetTemplates.templates.every((template) => !template.customized),
+    "giveaway templates can reset to defaults"
+  );
+
+  const reminder = await json("/api/giveaway/reminder");
+  assert(reminder.reminder.enabled === false, "giveaway reminder defaults off");
+  const savedReminder = await json("/api/giveaway/reminder", {
+    method: "POST",
+    body: { enabled: true, intervalMinutes: 2 }
+  });
+  assert(savedReminder.reminder.enabled === true, "giveaway reminder can be enabled");
+  assert(savedReminder.reminder.intervalMinutes === 2, "giveaway reminder stores interval");
+  assertReminderSettingsFixture({ enabled: 1, intervalMinutes: 2 });
+  const disabledReminder = await json("/api/giveaway/reminder", {
+    method: "POST",
+    body: { enabled: false, intervalMinutes: 2 }
+  });
+  assert(disabledReminder.reminder.enabled === false, "giveaway reminder can be disabled");
+  assertReminderSettingsFixture({ enabled: 0, intervalMinutes: 2 });
+
   const outboundInitial = await json("/api/outbound-messages");
   assert(outboundInitial.ok === true, "outbound message history route exists");
   assert(Array.isArray(outboundInitial.messages), "outbound message history returns messages");
@@ -272,6 +323,8 @@ async function runSmoke() {
   await expectOk("/api/giveaway/last-call");
   await expectOk("/api/giveaway/add-entrant", { login: "alice", displayName: "Alice" });
   await expectOk("/api/giveaway/add-entrant", { login: "bob", displayName: "Bob" });
+  const reminderWithoutChat = await json("/api/giveaway/reminder/send", { method: "POST" });
+  assert(reminderWithoutChat.ok === false, "manual giveaway reminder fails clearly without configured chat");
   await expectOk("/api/giveaway/close");
   await expectOk("/api/giveaway/draw", { count: 2 });
 
@@ -284,11 +337,17 @@ async function runSmoke() {
   assert(Boolean(firstWinner), "winner login exists");
   await expectOk("/api/giveaway/claim", { username: firstWinner });
   await expectOk("/api/giveaway/deliver", { username: firstWinner });
+  await expectOk("/api/giveaway/deliver-all");
+  const deliveredState = await json("/api/giveaway");
+  assert(deliveredState.summary.undeliveredWinnersCount === 0, "bulk delivery marks remaining winners delivered");
 
   const auditLogs = await json("/api/audit-logs");
   assert(auditLogs.logs.length > 0, "audit logs load");
 
   await expectOk("/api/giveaway/end");
+  const endedGiveaway = await json("/api/giveaway");
+  assert(endedGiveaway.recap.available === true, "post-giveaway recap is available after end");
+  assert(endedGiveaway.recap.status === "ended", "post-giveaway recap tracks ended status");
   const lifecycle = await json("/api/giveaway/run-test", {
     method: "POST",
     body: { confirmed: true }
@@ -371,6 +430,16 @@ function insertExternalOutboundFixture() {
     resentFrom: null
   });
   db.close();
+}
+
+function assertReminderSettingsFixture(expected) {
+  const db = new Database(smokeDbPath, { readonly: true });
+  const row = db.prepare("SELECT enabled, interval_minutes FROM giveaway_reminder_settings WHERE id = 1").get();
+  db.close();
+
+  assert(Boolean(row), "giveaway reminder settings are persisted");
+  assert(row.enabled === expected.enabled, "giveaway reminder enabled state persists");
+  assert(row.interval_minutes === expected.intervalMinutes, "giveaway reminder interval persists");
 }
 
 async function expectOk(path, body = {}) {
