@@ -1,11 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+const require = createRequire(import.meta.url);
+const Database = require("better-sqlite3");
 const tempDir = mkdtempSync(join(tmpdir(), "vaexcore-smoke-"));
+const smokeDbPath = join(tempDir, "data/vaexcore.sqlite");
 process.env.VAEXCORE_CONFIG_DIR = tempDir;
-process.env.DATABASE_URL = `file:${join(tempDir, "data/vaexcore.sqlite")}`;
+process.env.DATABASE_URL = `file:${smokeDbPath}`;
 
 const { startSetupServer } = await import(
   pathToFileURL(resolve("dist-bundle/setup-server.js")).href
@@ -52,6 +56,14 @@ async function runSmoke() {
   assert(appJs.includes("Outbound Chat History"), "setup UI exposes outbound chat history");
   assert(appJs.includes("Resend last failed"), "setup UI exposes failed outbound resend");
   assert(appJs.includes("Send last call"), "setup UI exposes giveaway last-call operator action");
+  assert(appJs.includes("Giveaway Chat Assurance"), "giveaway tab exposes chat assurance state");
+  assert(appJs.includes("Critical Failed"), "giveaway tab highlights critical outbound failures");
+  const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
+  const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
+  assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
+  assert(setupServerJs.includes("outboundImportance"), "setup server tracks outbound importance metadata");
+  assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
+  assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
   assert(styles.includes(".tab-panel"), "styles asset loaded");
   assert(styles.includes(".setup-step"), "setup guide styles loaded");
   assert(styles.includes(".runtime-log"), "bot runtime log styles loaded");
@@ -178,8 +190,19 @@ async function runSmoke() {
   const outboundInitial = await json("/api/outbound-messages");
   assert(outboundInitial.ok === true, "outbound message history route exists");
   assert(Array.isArray(outboundInitial.messages), "outbound message history returns messages");
+  assert("criticalFailed" in outboundInitial.summary, "outbound message summary tracks critical failures");
   const outboundResendEmpty = await json("/api/outbound-messages/resend", { method: "POST" });
   assert(outboundResendEmpty.ok === false, "outbound resend reports no failed message clearly");
+  insertExternalOutboundFixture();
+  const outboundAfterExternalWrite = await json("/api/outbound-messages");
+  assert(
+    outboundAfterExternalWrite.messages.some((message) => message.id === "external-bot-outbound"),
+    "setup server refreshes outbound history written by standalone bot"
+  );
+  assert(
+    outboundAfterExternalWrite.summary.criticalFailed >= 1,
+    "externally written critical outbound failures affect setup summary"
+  );
 
   const viewerDenied = await json("/api/command/simulate", {
     method: "POST",
@@ -291,6 +314,63 @@ function writeLocalSecretsFixture(secrets) {
   writeFileSync(join(tempDir, "local.secrets.json"), `${JSON.stringify(secrets, null, 2)}\n`, {
     mode: 0o600
   });
+}
+
+function insertExternalOutboundFixture() {
+  const db = new Database(smokeDbPath);
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `
+      INSERT INTO outbound_messages (
+        id,
+        source,
+        status,
+        message,
+        attempts,
+        queued_at,
+        updated_at,
+        reason,
+        queue_depth,
+        category,
+        action,
+        importance,
+        giveaway_id,
+        resent_from
+      ) VALUES (
+        @id,
+        @source,
+        @status,
+        @message,
+        @attempts,
+        @queuedAt,
+        @updatedAt,
+        @reason,
+        @queueDepth,
+        @category,
+        @action,
+        @importance,
+        @giveawayId,
+        @resentFrom
+      )
+    `
+  ).run({
+    id: "external-bot-outbound",
+    source: "bot",
+    status: "failed",
+    message: "Giveaway started: External Smoke. Type !enter to enter. Winners: 1.",
+    attempts: 4,
+    queuedAt: now,
+    updatedAt: now,
+    reason: "external standalone bot write",
+    queueDepth: null,
+    category: "giveaway",
+    action: "start",
+    importance: "critical",
+    giveawayId: null,
+    resentFrom: null
+  });
+  db.close();
 }
 
 async function expectOk(path, body = {}) {

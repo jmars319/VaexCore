@@ -1,5 +1,6 @@
 import { PermissionLevel } from "../../core/permissions";
 import type { CommandRouter } from "../../core/commandRouter";
+import type { MessageQueueMetadata } from "../../core/messageQueue";
 import type { RuntimeStatus } from "../../core/runtimeStatus";
 import {
   limits,
@@ -76,7 +77,7 @@ export const registerGiveawayCommands = ({
       title: sanitizeGiveawayTitle(options.title, "Untitled giveaway")
     });
 
-    reply(giveawayStartMessage(giveaway));
+    reply(giveawayStartMessage(giveaway), giveawayMessageMetadata("start", giveaway.id, "critical"));
   });
 
   router.register("gstatus", PermissionLevel.Moderator, ({ reply }) => {
@@ -94,7 +95,10 @@ export const registerGiveawayCommands = ({
 
   router.register("gclose", PermissionLevel.Moderator, ({ message, reply }) => {
     const giveaway = service.close(message);
-    reply(giveawayClosedMessage(giveaway, service.countEntriesForGiveaway(giveaway.id)));
+    reply(
+      giveawayClosedMessage(giveaway, service.countEntriesForGiveaway(giveaway.id)),
+      giveawayMessageMetadata("close", giveaway.id, "critical")
+    );
   });
 
   router.register("gdraw", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -103,7 +107,7 @@ export const registerGiveawayCommands = ({
     const requestedCount = countArg ? parsePositiveInteger(countArg) : undefined;
     const result = service.draw(message, requestedCount, { allowOpen });
 
-    reply(giveawayDrawMessage(result));
+    reply(giveawayDrawMessage(result), giveawayMessageMetadata("draw", result.giveaway.id, "critical"));
   });
 
   router.register("greroll", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -116,7 +120,7 @@ export const registerGiveawayCommands = ({
 
     const result = service.reroll(message, username);
 
-    reply(giveawayRerollMessage(result));
+    reply(giveawayRerollMessage(result), giveawayMessageMetadata("reroll", result.giveaway.id, "important"));
   });
 
   router.register("gclaim", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -128,7 +132,7 @@ export const registerGiveawayCommands = ({
     }
 
     const result = service.claim(message, username);
-    reply(`${result.winner.display_name} marked claimed.`);
+    reply(`${result.winner.display_name} marked claimed.`, giveawayMessageMetadata("claim", result.giveaway.id));
   });
 
   router.register("gdeliver", PermissionLevel.Moderator, ({ message, args, reply }) => {
@@ -140,19 +144,22 @@ export const registerGiveawayCommands = ({
     }
 
     const result = service.deliver(message, username);
-    reply(`${result.winner.display_name} marked delivered.`);
+    reply(`${result.winner.display_name} marked delivered.`, giveawayMessageMetadata("deliver", result.giveaway.id));
   });
 
   router.register("gend", PermissionLevel.Moderator, ({ message, reply }) => {
     const giveaway = service.end(message);
-    reply(giveawayEndMessage(giveaway, service.getWinnersForGiveaway(giveaway.id)));
+    reply(
+      giveawayEndMessage(giveaway, service.getWinnersForGiveaway(giveaway.id)),
+      giveawayMessageMetadata("end", giveaway.id, "critical")
+    );
   });
 };
 
 const handleEntryCommand = (input: {
   message: Parameters<GiveawaysService["enter"]>[0];
   keyword: string;
-  reply: (message: string) => void;
+  reply: (message: string, metadata?: MessageQueueMetadata) => void;
   service: GiveawaysService;
 }) => {
   if (!input.message.userId || !input.message.userLogin) {
@@ -166,7 +173,7 @@ const handleEntryCommand = (input: {
       giveaway: result.giveaway,
       displayName: result.displayName,
       entryCount: result.entryCount
-    }));
+    }), giveawayMessageMetadata("entry", result.giveaway.id));
     return;
   }
 
@@ -175,9 +182,20 @@ const handleEntryCommand = (input: {
       giveaway: result.giveaway,
       displayName: result.displayName,
       entryCount: result.entryCount
-    }));
+    }), giveawayMessageMetadata("duplicate-entry", result.giveaway.id));
   }
 };
+
+const giveawayMessageMetadata = (
+  action: string,
+  giveawayId: number,
+  importance: MessageQueueMetadata["importance"] = "normal"
+): MessageQueueMetadata => ({
+  category: "giveaway",
+  action,
+  importance,
+  giveawayId
+});
 
 const parsePositiveInteger = (value: string | undefined) => {
   if (!value) {

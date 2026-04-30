@@ -2,11 +2,12 @@ import type { Logger } from "./logger";
 import type { ChatMessage } from "./chatMessage";
 import { hasPermission, PermissionLevel } from "./permissions";
 import { limits, sanitizeCommandText } from "./security";
+import type { MessageQueueMetadata } from "./messageQueue";
 
 type CommandRouterOptions = {
   prefix: string;
   logger: Logger;
-  enqueueMessage: (message: string) => void;
+  enqueueMessage: (message: string, metadata?: MessageQueueMetadata) => void;
   perUserCooldownMs?: number;
   globalBurstLimit?: number;
   globalBurstWindowMs?: number;
@@ -17,7 +18,7 @@ type CommandHandler = (context: {
   name: string;
   args: string[];
   rawArgs: string;
-  reply: (message: string) => void;
+  reply: (message: string, metadata?: MessageQueueMetadata) => void;
 }) => Promise<void> | void;
 
 type FallbackCommandHandler = (context: {
@@ -25,7 +26,7 @@ type FallbackCommandHandler = (context: {
   name: string;
   args: string[];
   rawArgs: string;
-  reply: (message: string) => void;
+  reply: (message: string, metadata?: MessageQueueMetadata) => void;
 }) => Promise<boolean> | boolean;
 
 type RegisteredCommand = {
@@ -139,7 +140,7 @@ export class CommandRouter {
         name,
         args,
         rawArgs,
-        reply: (replyMessage) => this.options.enqueueMessage(replyMessage)
+        reply: (replyMessage, metadata) => this.options.enqueueMessage(replyMessage, metadata)
       });
     } catch (error) {
       const replyMessage = error instanceof Error ? error.message : "Command failed";
@@ -166,7 +167,7 @@ export class CommandRouter {
           name,
           args,
           rawArgs,
-          reply: (replyMessage) => this.options.enqueueMessage(replyMessage)
+          reply: (replyMessage, metadata) => this.options.enqueueMessage(replyMessage, metadata)
         });
 
         if (handled) {

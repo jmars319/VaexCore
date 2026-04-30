@@ -71,7 +71,7 @@ runtimeStatus.messageQueueReady = true;
 const commandRouter = new CommandRouter({
   prefix: env.COMMAND_PREFIX,
   logger,
-  enqueueMessage: (message) => messageQueue.enqueue(message)
+  enqueueMessage: (message, metadata) => messageQueue.enqueue(message, metadata)
 });
 
 const db = createDbClient(env.LOCAL_DATABASE_URL);

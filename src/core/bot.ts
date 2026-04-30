@@ -2,6 +2,7 @@ import type { LiveEnv } from "../config/env";
 import type { Logger } from "./logger";
 import { CommandRouter } from "./commandRouter";
 import { MessageQueue } from "./messageQueue";
+import { createOutboundHistory } from "./outboundHistory";
 import { TwitchEventSubClient } from "../twitch/eventsub";
 import { TwitchChatSender } from "../twitch/sendMessage";
 import type { ChatMessage } from "./chatMessage";
@@ -28,6 +29,8 @@ export class VaexCoreBot {
 
   constructor(private readonly options: BotOptions) {
     this.runtimeStatus = createRuntimeStatus(options.env.mode);
+    this.db = createDbClient(options.env.databaseUrl);
+    const outboundHistory = createOutboundHistory(this.db);
 
     const sender = new TwitchChatSender({
       clientId: options.env.twitchClientId,
@@ -43,6 +46,10 @@ export class VaexCoreBot {
     this.messageQueue = new MessageQueue({
       logger: options.logger,
       send: (message) => sender.send(message),
+      onEvent: (event) => outboundHistory.record({
+        ...event,
+        source: "bot"
+      }),
       onSent: (message) => {
         if (this.pendingLivePingConfirmation && message === "pong") {
           this.pendingLivePingConfirmation = false;
@@ -55,10 +62,9 @@ export class VaexCoreBot {
     this.commandRouter = new CommandRouter({
       prefix: options.env.commandPrefix,
       logger: options.logger,
-      enqueueMessage: (message) => this.messageQueue.enqueue(message)
+      enqueueMessage: (message, metadata) => this.messageQueue.enqueue(message, metadata)
     });
 
-    this.db = createDbClient(options.env.databaseUrl);
     const giveawaysService = registerGiveawaysModule({
       router: this.commandRouter,
       db: this.db,

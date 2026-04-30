@@ -25,6 +25,15 @@ export type MessageQueueEvent = {
   updatedAt: string;
   reason?: string;
   queueDepth?: number;
+  metadata?: MessageQueueMetadata;
+};
+
+export type MessageQueueMetadata = {
+  category?: "operator" | "giveaway" | "system";
+  action?: string;
+  importance?: "normal" | "important" | "critical";
+  giveawayId?: number;
+  resentFrom?: string;
 };
 
 type QueuedMessage = {
@@ -33,6 +42,7 @@ type QueuedMessage = {
   attempts: number;
   enqueuedAt: number;
   queuedAt: string;
+  metadata: MessageQueueMetadata;
 };
 
 export class MessageQueue {
@@ -90,13 +100,14 @@ export class MessageQueue {
     return Boolean(this.timer);
   }
 
-  enqueue(message: string) {
+  enqueue(message: string, metadata: MessageQueueMetadata = {}) {
     const item = {
       id: `out-${Date.now().toString(36)}-${this.nextId++}`,
       message,
       attempts: 0,
       enqueuedAt: Date.now(),
-      queuedAt: new Date().toISOString()
+      queuedAt: new Date().toISOString(),
+      metadata
     };
     this.queue.push(item);
     this.emit(item, "queued", { queueDepth: this.queue.length });
@@ -104,6 +115,7 @@ export class MessageQueue {
       {
         outboundMessageId: item.id,
         outboundStatus: "queued",
+        ...logMetadata(item.metadata),
         queued: this.queue.length,
         message
       },
@@ -141,6 +153,7 @@ export class MessageQueue {
             message: item.message,
             outboundMessageId: item.id,
             outboundStatus: "failed",
+            ...logMetadata(item.metadata),
             attempts: item.attempts,
             ageMs: Date.now() - item.enqueuedAt
           },
@@ -155,6 +168,7 @@ export class MessageQueue {
         {
           outboundMessageId: item.id,
           outboundStatus: "sent",
+          ...logMetadata(item.metadata),
           message: item.message
         },
         "Outbound chat message sent"
@@ -183,6 +197,7 @@ export class MessageQueue {
           message: item.message,
           outboundMessageId: item.id,
           outboundStatus: "retrying",
+          ...logMetadata(item.metadata),
           attempt: item.attempts,
           maxAttempts,
           queued: this.queue.length
@@ -200,6 +215,7 @@ export class MessageQueue {
         message: item.message,
         outboundMessageId: item.id,
         outboundStatus: "failed",
+        ...logMetadata(item.metadata),
         attempts: item.attempts,
         ageMs: Date.now() - item.enqueuedAt
       },
@@ -220,7 +236,8 @@ export class MessageQueue {
       queuedAt: item.queuedAt,
       updatedAt: new Date().toISOString(),
       reason: details.reason,
-      queueDepth: details.queueDepth
+      queueDepth: details.queueDepth,
+      metadata: item.metadata
     });
   }
 }
@@ -242,3 +259,11 @@ const formatReason = (reason: unknown) => {
     return "Unknown send failure";
   }
 };
+
+const logMetadata = (metadata: MessageQueueMetadata) => ({
+  outboundCategory: metadata.category,
+  outboundAction: metadata.action,
+  outboundImportance: metadata.importance,
+  giveawayId: metadata.giveawayId,
+  resentFrom: metadata.resentFrom
+});

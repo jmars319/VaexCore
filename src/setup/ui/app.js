@@ -14,7 +14,7 @@ const state = {
   giveaway: null,
   auditLogs: [],
   outboundMessages: [],
-  outboundSummary: { total: 0, queued: 0, failed: 0, sent: 0 },
+  outboundSummary: { total: 0, queued: 0, failed: 0, criticalFailed: 0, sent: 0 },
   validSetup: false,
   busy: new Set(),
   entrantFilter: "",
@@ -319,7 +319,8 @@ function renderOutboundHistoryCard() {
       ["Tracked", summary.total || 0],
       ["Sent", summary.sent || 0, Number(summary.failed || 0) === 0],
       ["Queued/Retrying", summary.queued || 0, true],
-      ["Failed", summary.failed || 0, Number(summary.failed || 0) === 0]
+      ["Failed", summary.failed || 0, Number(summary.failed || 0) === 0],
+      ["Critical Failed", summary.criticalFailed || 0, Number(summary.criticalFailed || 0) === 0]
     ]),
     h("div", { className: "actions" }, [
       actionButton("Resend last failed", {
@@ -349,6 +350,42 @@ function renderOutboundHistoryCard() {
   ]);
 }
 
+function renderGiveawayOutboundCard() {
+  const messages = giveawayOutboundMessages();
+  const critical = messages.filter((item) => item.importance === "critical");
+  const failed = critical.filter((item) => item.status === "failed");
+  const pending = critical.filter((item) => ["queued", "sending", "retrying"].includes(item.status));
+  const sent = critical.filter((item) => ["sent", "resent"].includes(item.status));
+
+  return card("Giveaway Chat Assurance", [
+    statusGrid([
+      ["Critical Sent", sent.length, failed.length === 0],
+      ["Critical Pending", pending.length, failed.length === 0],
+      ["Critical Failed", failed.length, failed.length === 0],
+      ["Tracked Messages", messages.length, true]
+    ]),
+    failed.length
+      ? callout("A critical giveaway chat message failed. Resend it before continuing live operations.", "bad")
+      : callout(messages.length ? "Giveaway chat messages are tracked from durable outbound history." : "No giveaway chat messages tracked yet.", messages.length ? "ok" : "muted"),
+    dataTable(["Action", "Importance", "Status", "Attempts", "Message", "Updated", "Resend"], messages.slice(0, 10).map((item) => [
+      item.action || "message",
+      importanceChip(item.importance),
+      statusChip(item.status),
+      item.attempts || 0,
+      formatMessagePreview(item.message),
+      item.updatedAt || "",
+      item.status === "failed"
+        ? actionButton("Resend", {
+            id: `giveaway-resend-${item.id}`,
+            variant: "secondary",
+            busyKey: "resendOutbound",
+            onClick: () => resendOutboundMessage(item.id)
+          })
+        : ""
+    ]))
+  ]);
+}
+
 function renderGiveaways() {
   const giveaway = state.giveaway;
   const summary = giveaway?.summary || state.status?.giveaway || {};
@@ -360,6 +397,7 @@ function renderGiveaways() {
       h("p", { className: "warn", text: (summary.endWarnings || []).join(" ") })
     ]),
     card("Readiness Checklist", [list(giveawayChecklist(), "muted")]),
+    renderGiveawayOutboundCard(),
     card("Start Giveaway", [
       h("div", { className: "grid three" }, [
         formRow("Title", h("input", { id: "giveawayTitle", onInput: updateGiveawayDraft })),
@@ -941,6 +979,24 @@ function winnerStatus(winner) {
 function statusChip(status) {
   const tone = ["sent", "resent"].includes(status) ? "ok" : status === "failed" ? "bad" : "warn";
   return h("span", { className: `chip ${tone}`, text: status || "unknown" });
+}
+
+function importanceChip(importance = "normal") {
+  const tone = importance === "critical" ? "bad" : importance === "important" ? "warn" : "ok";
+  return h("span", { className: `chip ${tone}`, text: importance });
+}
+
+function giveawayOutboundMessages() {
+  const giveawayId = state.giveaway?.giveaway?.id;
+  const messages = (state.outboundMessages || [])
+    .filter((item) => item.category === "giveaway")
+    .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+
+  if (!giveawayId) {
+    return messages;
+  }
+
+  return messages.filter((item) => Number(item.giveawayId) === Number(giveawayId));
 }
 
 function formatMessagePreview(message = "") {

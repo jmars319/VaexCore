@@ -9,7 +9,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogger } from "../core/logger";
 import type { ChatMessage } from "../core/chatMessage";
 import { CommandRouter } from "../core/commandRouter";
-import { MessageQueue, type MessageQueueEventStatus } from "../core/messageQueue";
+import {
+  MessageQueue,
+  type MessageQueueEventStatus,
+  type MessageQueueMetadata
+} from "../core/messageQueue";
+import {
+  classifyOutboundMessage,
+  createOutboundHistory,
+  isOutboundCategory,
+  isOutboundImportance
+} from "../core/outboundHistory";
 import { createRuntimeStatus } from "../core/runtimeStatus";
 import {
   limits,
@@ -62,7 +72,7 @@ const oauthStates = new Map<string, number>();
 const db = createDbClient(process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite");
 const giveawaysService = new GiveawaysService({ db, logger });
 const setupRuntimeStatus = createRuntimeStatus("local");
-const outboundHistory = createOutboundHistory();
+const outboundHistory = createOutboundHistory(db);
 const chatQueue = new MessageQueue({
   logger,
   send: async (message) => sendConfiguredChatMessage(message),
@@ -242,7 +252,8 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     }, {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: `!gstart codes=${winnerCount} keyword=${keyword} title="${title.replace(/"/g, "'")}"`,
-      announcements: ({ giveaway }) => giveawayStartMessage(giveaway)
+      announcements: ({ giveaway }) =>
+        giveawayAnnouncement(giveawayStartMessage(giveaway), "start", giveaway.id, "critical")
     }));
     return;
   }
@@ -255,7 +266,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: "!gclose",
       announcements: ({ giveaway }) =>
-        giveawayClosedMessage(giveaway, giveawaysService.countEntriesForGiveaway(giveaway.id))
+        giveawayAnnouncement(
+          giveawayClosedMessage(giveaway, giveawaysService.countEntriesForGiveaway(giveaway.id)),
+          "close",
+          giveaway.id,
+          "critical"
+        )
     }));
     return;
   }
@@ -274,7 +290,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       };
     }, {
       announcements: ({ giveaway, entryCount }) =>
-        giveawayLastCallMessage(giveaway, entryCount)
+        giveawayAnnouncement(
+          giveawayLastCallMessage(giveaway, entryCount),
+          "last-call",
+          giveaway.id,
+          "critical"
+        )
     }));
     return;
   }
@@ -292,7 +313,8 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     }), {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: `!gdraw ${count}`,
-      announcements: ({ result }) => giveawayDrawMessage(result)
+      announcements: ({ result }) =>
+        giveawayAnnouncement(giveawayDrawMessage(result), "draw", result.giveaway.id, "critical")
     }));
     return;
   }
@@ -304,7 +326,8 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     }), {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: body.username ? `!greroll ${requireUsername(body.username)}` : undefined,
-      announcements: ({ result }) => giveawayRerollMessage(result)
+      announcements: ({ result }) =>
+        giveawayAnnouncement(giveawayRerollMessage(result), "reroll", result.giveaway.id, "important")
     }));
     return;
   }
@@ -339,7 +362,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoToChat: Boolean(body.echoToChat),
       echoCommand: "!gend",
       announcements: ({ giveaway }) =>
-        giveawayEndMessage(giveaway, giveawaysService.getWinnersForGiveaway(giveaway.id))
+        giveawayAnnouncement(
+          giveawayEndMessage(giveaway, giveawaysService.getWinnersForGiveaway(giveaway.id)),
+          "end",
+          giveaway.id,
+          "critical"
+        )
     }));
     return;
   }
@@ -365,11 +393,15 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
       echoCommand: "!enter",
       announcements: ({ result }) =>
         result.status === "entered"
-          ? giveawayEntryMessage({
-              giveaway: result.giveaway,
-              displayName: result.displayName,
-              entryCount: result.entryCount
-            })
+          ? giveawayAnnouncement(
+              giveawayEntryMessage({
+                giveaway: result.giveaway,
+                displayName: result.displayName,
+                entryCount: result.entryCount
+              }),
+              "entry",
+              result.giveaway.id
+            )
           : undefined
     }));
     return;
@@ -908,106 +940,6 @@ const getBotProcessSnapshot = () => ({
   recentLogs: botProcess.recentLogs.slice(-20)
 });
 
-type OutboundMessageSource = "setup" | "bot";
-type OutboundMessageStatus = MessageQueueEventStatus | "resent";
-
-type OutboundMessageRecord = {
-  id: string;
-  source: OutboundMessageSource;
-  status: OutboundMessageStatus;
-  message: string;
-  attempts: number;
-  queuedAt: string;
-  updatedAt: string;
-  reason: string;
-  queueDepth?: number;
-};
-
-type OutboundHistoryEvent = {
-  id: string;
-  source: OutboundMessageSource;
-  status: MessageQueueEventStatus;
-  message?: string;
-  attempts?: number;
-  queuedAt?: string;
-  updatedAt?: string;
-  reason?: string;
-  queueDepth?: number;
-};
-
-function createOutboundHistory() {
-  const records = new Map<string, OutboundMessageRecord>();
-  const list = () =>
-    [...records.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-
-  return {
-    record(event: OutboundHistoryEvent) {
-      const now = new Date().toISOString();
-      const existing = records.get(event.id);
-      const next: OutboundMessageRecord = {
-        id: event.id,
-        source: event.source,
-        status: event.status,
-        message: event.message ?? existing?.message ?? "",
-        attempts: event.attempts ?? existing?.attempts ?? 0,
-        queuedAt: event.queuedAt ?? existing?.queuedAt ?? now,
-        updatedAt: event.updatedAt ?? now,
-        reason: event.reason ?? existing?.reason ?? "",
-        queueDepth: event.queueDepth ?? existing?.queueDepth
-      };
-      records.set(event.id, next);
-      trimOutboundHistory(records);
-      return next;
-    },
-    list() {
-      return list();
-    },
-    find(id: string | undefined) {
-      if (!id) return undefined;
-      return records.get(id);
-    },
-    latestFailed() {
-      return list().find((record) => record.status === "failed");
-    },
-    markResent(id: string, resentMessageId: string) {
-      const existing = records.get(id);
-
-      if (!existing) {
-        return;
-      }
-
-      records.set(id, {
-        ...existing,
-        status: "resent",
-        updatedAt: new Date().toISOString(),
-        reason: `Resent as ${resentMessageId}`
-      });
-    },
-    summary() {
-      const current = list();
-      return {
-        total: current.length,
-        queued: current.filter((record) => record.status === "queued" || record.status === "retrying" || record.status === "sending").length,
-        failed: current.filter((record) => record.status === "failed").length,
-        sent: current.filter((record) => record.status === "sent").length
-      };
-    }
-  };
-}
-
-const trimOutboundHistory = (records: Map<string, OutboundMessageRecord>) => {
-  const max = 100;
-
-  if (records.size <= max) {
-    return;
-  }
-
-  const byUpdatedAt = [...records.values()].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-  for (const record of byUpdatedAt.slice(0, records.size - max)) {
-    records.delete(record.id);
-  }
-};
-
 const getBotRuntimeCommand = () => {
   const currentDir = dirname(fileURLToPath(import.meta.url));
   const sourceRoot = resolve(currentDir, "../..");
@@ -1116,6 +1048,11 @@ const updateBotStatusFromLog = (line: string) => {
       attempts?: unknown;
       attempt?: unknown;
       queued?: unknown;
+      outboundCategory?: unknown;
+      outboundAction?: unknown;
+      outboundImportance?: unknown;
+      giveawayId?: unknown;
+      resentFrom?: unknown;
     };
     const msg = parsed.msg ?? "";
     const operatorEvent = parsed.operatorEvent ?? "";
@@ -1135,7 +1072,18 @@ const updateBotStatusFromLog = (line: string) => {
         message: typeof parsed.message === "string" ? parsed.message : undefined,
         attempts: parseOptionalNumber(parsed.attempts ?? parsed.attempt),
         reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
-        queueDepth: parseOptionalNumber(parsed.queued)
+        queueDepth: parseOptionalNumber(parsed.queued),
+        metadata: {
+          category: typeof parsed.outboundCategory === "string" && isOutboundCategory(parsed.outboundCategory)
+            ? parsed.outboundCategory
+            : undefined,
+          action: typeof parsed.outboundAction === "string" ? parsed.outboundAction : undefined,
+          importance: typeof parsed.outboundImportance === "string" && isOutboundImportance(parsed.outboundImportance)
+            ? parsed.outboundImportance
+            : undefined,
+          giveawayId: parseOptionalNumber(parsed.giveawayId),
+          resentFrom: typeof parsed.resentFrom === "string" ? parsed.resentFrom : undefined
+        }
       });
     }
 
@@ -1168,7 +1116,10 @@ const isOutboundStatus = (value: string): value is MessageQueueEventStatus =>
 const parseOptionalNumber = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
-const enqueueChatMessage = async (message: string | undefined) => {
+const enqueueChatMessage = async (
+  message: string | undefined,
+  metadata: MessageQueueMetadata = {}
+) => {
   const text = sanitizeChatMessage(message);
 
   const validation = await validateSetup();
@@ -1181,7 +1132,7 @@ const enqueueChatMessage = async (message: string | undefined) => {
     };
   }
 
-  const outboundMessageId = chatQueue.enqueue(text);
+  const outboundMessageId = chatQueue.enqueue(text, metadata);
   return { ok: true, queued: true, outboundMessageId };
 };
 
@@ -1203,7 +1154,13 @@ const resendOutboundMessage = async (id: string | undefined) => {
     };
   }
 
-  const result = await enqueueChatMessage(record.message);
+  const result = await enqueueChatMessage(record.message, {
+    category: record.category,
+    action: record.action,
+    importance: record.importance,
+    giveawayId: record.giveawayId,
+    resentFrom: record.id
+  });
 
   if (result.ok && typeof result.outboundMessageId === "string") {
     outboundHistory.markResent(record.id, result.outboundMessageId);
@@ -1285,7 +1242,7 @@ const runGiveawayAction = <TResult extends Record<string, unknown>>(
   options: {
     echoToChat?: boolean;
     echoCommand?: string;
-    announcements?: (result: TResult) => string | string[] | undefined;
+    announcements?: (result: TResult) => GiveawayAnnouncement | GiveawayAnnouncement[] | string | string[] | undefined;
   } = {}
 ) => {
   try {
@@ -1311,8 +1268,30 @@ const runGiveawayAction = <TResult extends Record<string, unknown>>(
   }
 };
 
-const maybeQueueGiveawayAnnouncements = (messages: string | string[] | undefined) => {
-  const list = (Array.isArray(messages) ? messages : [messages]).filter(Boolean);
+type GiveawayAnnouncement = {
+  message: string;
+  metadata: MessageQueueMetadata;
+};
+
+const giveawayAnnouncement = (
+  message: string,
+  action: string,
+  giveawayId: number,
+  importance: MessageQueueMetadata["importance"] = "normal"
+): GiveawayAnnouncement => ({
+  message,
+  metadata: {
+    category: "giveaway",
+    action,
+    importance,
+    giveawayId
+  }
+});
+
+const maybeQueueGiveawayAnnouncements = (
+  messages: GiveawayAnnouncement | GiveawayAnnouncement[] | string | string[] | undefined
+) => {
+  const list = (Array.isArray(messages) ? messages : [messages]).filter(isGiveawayAnnouncementInput);
 
   if (list.length === 0 || !canSendConfiguredChat()) {
     return false;
@@ -1320,10 +1299,12 @@ const maybeQueueGiveawayAnnouncements = (messages: string | string[] | undefined
 
   let queued = false;
 
-  for (const message of list) {
+  for (const item of list) {
     try {
+      const message = typeof item === "string" ? item : item.message;
+      const metadata = typeof item === "string" ? classifyOutboundMessage(item) : item.metadata;
       const text = sanitizeChatMessage(message);
-      chatQueue.enqueue(text);
+      chatQueue.enqueue(text, metadata);
       queued = true;
     } catch (error) {
       logger.warn({ error }, "Giveaway chat announcement rejected");
@@ -1336,6 +1317,10 @@ const maybeQueueGiveawayAnnouncements = (messages: string | string[] | undefined
 
   return queued;
 };
+
+const isGiveawayAnnouncementInput = (
+  item: GiveawayAnnouncement | string | undefined
+): item is GiveawayAnnouncement | string => Boolean(item);
 
 const canSendConfiguredChat = () => {
   const twitch = readLocalSecrets().twitch;

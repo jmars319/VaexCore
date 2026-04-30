@@ -46,11 +46,32 @@ export const initializeSchema = (db: DbClient) => {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS outbound_messages (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL CHECK (source IN ('setup', 'bot')),
+      status TEXT NOT NULL CHECK (status IN ('queued', 'sending', 'retrying', 'sent', 'failed', 'resent')),
+      message TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      queued_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      queue_depth INTEGER,
+      category TEXT NOT NULL DEFAULT 'operator',
+      action TEXT NOT NULL DEFAULT '',
+      importance TEXT NOT NULL DEFAULT 'normal' CHECK (importance IN ('normal', 'important', 'critical')),
+      giveaway_id INTEGER REFERENCES giveaways(id) ON DELETE SET NULL,
+      resent_from TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_giveaways_status ON giveaways(status);
     CREATE INDEX IF NOT EXISTS idx_giveaway_entries_giveaway_id
       ON giveaway_entries(giveaway_id);
     CREATE INDEX IF NOT EXISTS idx_giveaway_winners_giveaway_id
       ON giveaway_winners(giveaway_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_outbound_messages_updated_at
+      ON outbound_messages(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_outbound_messages_giveaway_id
+      ON outbound_messages(giveaway_id);
   `);
 };
