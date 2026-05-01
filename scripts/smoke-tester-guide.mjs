@@ -13,6 +13,8 @@ const requiredGuideText = [
   "unsigned",
   "not notarized",
   "Open Anyway",
+  "Updating VaexCore",
+  "Do not delete",
   "Settings -> Setup Guide",
   "Copy support bundle",
   "client secrets, access tokens, and refresh tokens",

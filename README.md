@@ -402,6 +402,7 @@ Create an unsigned tester zip:
 npm run app:zip
 npm run smoke:unsigned-release
 npm run smoke:tester-artifact
+npm run smoke:tester-update
 ```
 
 Run the full unsigned release checklist:
@@ -419,6 +420,7 @@ release/
 The `.app` bundle can be copied into `/Applications`. The DMG, when built, can be opened and installed normally. The unsigned tester zip writes a `.zip`, `.zip.sha256`, and `.json` manifest under `release/`.
 
 `npm run smoke:tester-artifact` extracts that zip into a temporary folder, launches the extracted `VaexCore.app` with isolated app data, and verifies the setup UI, Diagnostics, support bundle redaction, and packaged `better-sqlite3` path.
+`npm run smoke:tester-update` launches the same extracted artifact against a seeded existing app-data folder and verifies Twitch setup flags, safe config redaction, and SQLite audit data survive the app replacement.
 
 App-local data is stored under:
 
@@ -427,6 +429,7 @@ App-local data is stored under:
 ```
 
 That folder contains `local.secrets.json` and `data/vaexcore.sqlite`. To reset the app config, quit VaexCore and remove that folder. Development CLI mode still uses the project-local config path unless `VAEXCORE_CONFIG_DIR` is set.
+For normal tester updates, replace only `VaexCore.app`; do not delete this Application Support folder unless you intentionally want to reset Twitch setup and local giveaway/operator data.
 
 CLI fallback remains available:
 
@@ -467,6 +470,14 @@ Tester install flow:
 4. First launch may require right-clicking `VaexCore.app` and choosing `Open`, or opening `System Settings -> Privacy & Security` and choosing `Open Anyway`.
 5. Open `Diagnostics` and verify SQLite says `better-sqlite3`, Setup UI assets are present, and first-run recovery points to `Settings -> Setup Guide` if the app is not configured yet.
 
+Tester update flow:
+
+1. Quit VaexCore.
+2. Unzip the new archive.
+3. Replace the old `VaexCore.app` in `/Applications`.
+4. Do not delete `~/Library/Application Support/VaexCore`.
+5. Open VaexCore and check `Diagnostics -> About This Build` for the new version.
+
 Do not describe these builds as notarized. Public distribution should wait until Developer ID signing and notarization are available.
 
 ### Release Checklist
@@ -476,7 +487,7 @@ Before sharing a tester build:
 1. Update `package.json` version when the artifact should have a new filename.
 2. Add or update the matching section in `CHANGELOG.md`.
 3. Run `npm run release:unsigned`.
-4. Confirm the tester artifact dry run passed.
+4. Confirm the tester artifact dry run and tester update preservation checks passed.
 5. Share all three generated files from `release/`: `.zip`, `.zip.sha256`, and `.json`.
 6. Tell testers the build is unsigned, ad-hoc signed, and not notarized.
 

@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { createReadStream, existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import {
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  writeFileSync
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -18,6 +27,8 @@ const manifestPath = join(releaseDir, `${artifactBase}.json`);
 const tempDir = mkdtempSync(join(tmpdir(), "vaexcore-tester-artifact-"));
 const extractDir = join(tempDir, "extracted");
 const userDataDir = join(tempDir, "user-data");
+const scenario = process.argv.includes("--preserve-data") ? "preserve-data" : "clean-install";
+const require = createRequire(import.meta.url);
 
 let child;
 
@@ -27,7 +38,7 @@ if (process.platform !== "darwin") {
 
 try {
   await runSmoke();
-  console.log("tester artifact smoke passed");
+  console.log(scenario === "preserve-data" ? "tester update smoke passed" : "tester artifact smoke passed");
 } finally {
   await stopChild();
   rmSync(tempDir, { recursive: true, force: true });
@@ -52,6 +63,10 @@ async function runSmoke() {
   assert(manifest.notarized === false, "manifest marks artifact as not notarized");
   assert(manifest.signing === "ad-hoc", "manifest marks ad-hoc signing");
 
+  if (scenario === "preserve-data") {
+    seedExistingAppData();
+  }
+
   const env = { ...process.env, VAEXCORE_APP_USER_DATA: userDataDir };
   delete env.ELECTRON_RUN_AS_NODE;
 
@@ -71,6 +86,8 @@ async function runSmoke() {
   assert(appJs.includes("Setup Guide"), "setup guide code is present in tester artifact");
   assert(appJs.includes("Diagnostics"), "diagnostics UI code is present in tester artifact");
   assert(appJs.includes("Copy support bundle"), "support bundle UI code is present in tester artifact");
+  assert(appJs.includes("About This Build"), "build/version diagnostics UI is present in tester artifact");
+  assert(appJs.includes("Manual updates should replace only VaexCore.app"), "update-safe diagnostics note is present in tester artifact");
 
   const diagnostics = await json("/api/diagnostics");
   assert(diagnostics.app.runtime === "electron", "diagnostics reports Electron runtime");
@@ -81,9 +98,15 @@ async function runSmoke() {
   assert(diagnostics.database.driver === "better-sqlite3", "tester artifact uses better-sqlite3");
   assert(diagnostics.setupUi.appJs === true, "tester artifact sees app.js");
   assert(diagnostics.setupUi.stylesCss === true, "tester artifact sees styles.css");
-  assert(diagnostics.firstRun.cleanInstall === true, "tester artifact starts as clean install with isolated data");
-  assert(diagnostics.firstRun.nextAction === "Open Settings -> Setup Guide.", "clean install points to setup guide");
-  assert(diagnostics.readiness.blockers.some((blocker) => blocker.includes("Required Twitch config")), "diagnostics reports missing setup blockers");
+
+  if (scenario === "clean-install") {
+    assert(diagnostics.firstRun.cleanInstall === true, "tester artifact starts as clean install with isolated data");
+    assert(diagnostics.firstRun.nextAction === "Open Settings -> Setup Guide.", "clean install points to setup guide");
+    assert(diagnostics.readiness.blockers.some((blocker) => blocker.includes("Required Twitch config")), "diagnostics reports missing setup blockers");
+  } else {
+    await assertExistingAppDataSurvived(diagnostics);
+  }
+
   assertSafeReport(diagnostics);
 
   const bundle = await json("/api/support-bundle");
@@ -93,6 +116,66 @@ async function runSmoke() {
   assert(bundle.diagnostics.paths.configDir === userDataDir, "support bundle keeps isolated app user data");
   assert(Array.isArray(bundle.recovery), "support bundle includes recovery steps");
   assertSafeReport(bundle);
+}
+
+function seedExistingAppData() {
+  mkdirSync(join(userDataDir, "data"), { recursive: true });
+  writeFileSync(join(userDataDir, "local.secrets.json"), `${JSON.stringify({
+    mode: "live",
+    twitch: {
+      clientId: "update-client-id",
+      clientSecret: "update-client-secret",
+      redirectUri: "http://localhost:3434/auth/twitch/callback",
+      broadcasterLogin: "vaexil",
+      broadcasterUserId: "update-broadcaster-id",
+      botLogin: "vaexcorebot",
+      botUserId: "update-bot-id",
+      accessToken: "update-access-token-123456",
+      refreshToken: "update-refresh-token-123456",
+      scopes: ["user:read:chat", "user:write:chat"],
+      tokenExpiresAt: "2099-01-01T00:00:00.000Z",
+      tokenValidatedAt: "2099-01-01T00:00:00.000Z"
+    }
+  }, null, 2)}\n`, { mode: 0o600 });
+
+  const Database = require("better-sqlite3");
+  const db = new Database(join(userDataDir, "data/vaexcore.sqlite"));
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_twitch_user_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target TEXT,
+      metadata_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.prepare(`
+    INSERT INTO audit_logs (actor_twitch_user_id, action, target, metadata_json, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run("tester-update-smoke", "tester_update_marker", "existing-app-data", "{}", "2099-01-01T00:00:00.000Z");
+  db.close();
+}
+
+async function assertExistingAppDataSurvived(diagnostics) {
+  assert(diagnostics.firstRun.cleanInstall === false, "existing app data is not treated as a clean install");
+  assert(diagnostics.firstRun.setupComplete === true, "existing setup remains complete after update launch");
+  assert(diagnostics.readiness.blockers.length === 0, "existing setup has no readiness blockers after update launch");
+  assert(diagnostics.config.hasClientId === true, "existing Client ID is preserved");
+  assert(diagnostics.config.hasClientSecret === true, "existing Client Secret is preserved");
+  assert(diagnostics.config.hasAccessToken === true, "existing OAuth token is preserved");
+  assert(diagnostics.config.hasRefreshToken === true, "existing refresh token is preserved");
+  assert(diagnostics.config.broadcasterLogin === "vaexil", "existing broadcaster login is preserved");
+  assert(diagnostics.config.botLogin === "vaexcorebot", "existing bot login is preserved");
+
+  const config = await json("/api/config");
+  assert(config.hasClientId === true, "config route sees existing Client ID");
+  assert(config.hasClientSecret === true, "config route sees existing Client Secret");
+  assert(config.hasRefreshToken === true, "config route sees existing refresh token");
+  assert(config.botLogin === "vaexcorebot", "config route preserves bot login");
+
+  const audit = await json("/api/audit-logs");
+  assert(audit.logs.some((log) => log.action === "tester_update_marker"), "existing SQLite audit data survives update launch");
 }
 
 async function assertChecksum() {
@@ -217,6 +300,9 @@ function assertSafeReport(report) {
   assert(!raw.includes("client_secret"), "report omits client_secret values");
   assert(!raw.includes("access_token"), "report omits access_token values");
   assert(!raw.includes("refresh_token"), "report omits refresh_token values");
+  assert(!raw.includes("update-client-secret"), "report omits seeded client secret");
+  assert(!raw.includes("update-access-token-123456"), "report omits seeded access token");
+  assert(!raw.includes("update-refresh-token-123456"), "report omits seeded refresh token");
   assert(!raw.includes("Bearer "), "report omits bearer tokens");
 }
 

@@ -1174,14 +1174,25 @@ function renderDiagnostics() {
       firstRun.warnings?.length ? list(firstRun.warnings, "warn") : null,
       firstRun.recoverySteps?.length ? list(firstRun.recoverySteps, firstRun.blockers?.length ? "bad" : "muted") : null
     ]),
-    card("Environment", [
+    card("About This Build", [
       statusGrid([
         ["Version", app.version || "unknown", Boolean(app.version)],
+        ["Distribution", app.runtime === "electron" ? "manual unsigned zip" : "local development", Boolean(app.runtime)],
+        ["Update method", app.runtime === "electron" ? "quit app, replace VaexCore.app" : "rebuild and restart local server", Boolean(app.runtime)],
         ["Runtime", app.runtime || "unknown", Boolean(app.runtime)],
-        ["Node", app.node || "unknown", Boolean(app.node)],
         ["Electron", app.electron || "not electron", Boolean(app.electron)],
         ["Platform", `${app.platform || "unknown"} ${app.arch || ""}`.trim(), Boolean(app.platform)],
         ["Generated", report?.generatedAt || "not run", Boolean(report?.generatedAt)]
+      ]),
+      app.runtime === "electron"
+        ? callout("Manual updates should replace only VaexCore.app. Keep the Application Support folder unless you intentionally want to reset Twitch setup and local data.", "muted")
+        : null
+    ]),
+    card("Environment", [
+      statusGrid([
+        ["Node", app.node || "unknown", Boolean(app.node)],
+        ["Config", paths.configDir || "unknown", Boolean(paths.configDir)],
+        ["Database", paths.databasePath || "unknown", Boolean(paths.databasePath)]
       ])
     ]),
     card("Local Paths", [

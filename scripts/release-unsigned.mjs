@@ -21,7 +21,8 @@ const steps = [
   ["CLI env smoke", ["npm", "run", "smoke:cli-env"]],
   ["Message queue smoke", ["npm", "run", "smoke:queue"]],
   ["Unsigned release artifact smoke", ["npm", "run", "smoke:unsigned-release"]],
-  ["Tester artifact dry run", ["npm", "run", "smoke:tester-artifact"]]
+  ["Tester artifact dry run", ["npm", "run", "smoke:tester-artifact"]],
+  ["Tester update preservation", ["npm", "run", "smoke:tester-update"]]
 ];
 
 for (const [label, command] of steps) {

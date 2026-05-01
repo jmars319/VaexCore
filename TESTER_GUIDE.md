@@ -15,7 +15,7 @@ You need:
 
 This build is unsigned and not notarized. macOS may warn that the developer cannot be verified. Only run a build that came directly from the maintainer.
 
-Before sharing the zip, the maintainer should have run the tester artifact dry run. That dry run launches the extracted app from the zip, checks the local setup UI, confirms Diagnostics and support bundle redaction, and verifies packaged SQLite reports `better-sqlite3`.
+Before sharing the zip, the maintainer should have run the tester artifact dry run and tester update preservation check. Those dry runs launch the extracted app from the zip, check the local setup UI, confirm Diagnostics and support bundle redaction, verify packaged SQLite reports `better-sqlite3`, and prove an existing local setup survives app replacement.
 
 ## Install
 
@@ -37,6 +37,24 @@ If macOS blocks the first launch:
 2. Choose `Open`.
 3. Confirm `Open` again if macOS asks.
 4. If there is no `Open` button, open `System Settings -> Privacy & Security`, scroll down, and choose `Open Anyway`.
+
+## Updating VaexCore
+
+When you receive a newer unsigned zip:
+
+1. Quit VaexCore.
+2. Unzip the new archive.
+3. Replace the old `VaexCore.app` in `/Applications`.
+4. Do not delete:
+
+   ```text
+   ~/Library/Application Support/VaexCore
+   ```
+
+5. Open VaexCore.
+6. Open `Diagnostics -> About This Build` and confirm the version changed.
+
+That Application Support folder is where Twitch setup, tokens, giveaway data, and local operator data live. Deleting it resets VaexCore.
 
 ## First Setup
 
