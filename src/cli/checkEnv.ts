@@ -1,5 +1,9 @@
 import { formatEnvError, loadEnv } from "../config/env";
+import { getLocalSecretsPath } from "../config/localSecrets";
+import { resolveDatabasePath } from "../db/client";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const isGitRepo = () => {
   try {
@@ -17,12 +21,16 @@ try {
   const gitReady = isGitRepo();
 
   console.log("VaexCore environment check passed.");
+  console.log(`- app version: ${getPackageVersion()}`);
+  console.log(`- runtime: cli`);
   console.log(`- git repository present: ${gitReady}`);
   if (!gitReady) {
     console.log("  Git was not initialized automatically. See README Git Hygiene.");
   }
   console.log(`- mode: ${env.mode}`);
   console.log(`- database URL present: ${Boolean(env.databaseUrl)}`);
+  console.log(`- database path: ${resolveDatabasePath(env.databaseUrl)}`);
+  console.log(`- local config path: ${getLocalSecretsPath()}`);
 
   if (env.mode === "live") {
     console.log(`- bot user ID present: ${Boolean(env.twitchBotUserId)}`);
@@ -50,4 +58,15 @@ try {
   console.error("VaexCore environment check failed:");
   console.error(formatEnvError(error));
   process.exitCode = 1;
+}
+
+function getPackageVersion() {
+  try {
+    const parsed = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+      version?: string;
+    };
+    return parsed.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
 }

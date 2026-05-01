@@ -68,7 +68,7 @@ const canFallbackToNodeSqlite = (error: unknown) => {
   return message.includes("NODE_MODULE_VERSION") || message.includes("better_sqlite3.node");
 };
 
-const resolveDatabasePath = (databaseUrl: string) => {
+export const resolveDatabasePath = (databaseUrl: string) => {
   if (databaseUrl === ":memory:") {
     return databaseUrl;
   }

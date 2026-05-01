@@ -5,6 +5,7 @@ const tabs = [
   ["chat-tools", "Chat Tools"],
   ["testing", "Testing"],
   ["settings", "Settings"],
+  ["diagnostics", "Diagnostics"],
   ["audit-log", "Audit Log"]
 ];
 
@@ -17,6 +18,7 @@ const state = {
   operatorMessages: [],
   reminder: null,
   preflightResult: null,
+  diagnostics: null,
   auditLogs: [],
   outboundMessages: [],
   outboundSummary: { total: 0, queued: 0, failed: 0, criticalFailed: 0, sent: 0 },
@@ -73,6 +75,7 @@ const api = {
   validate: () => api.post("/api/validate"),
   testSend: () => api.post("/api/test-send"),
   status: () => api.get("/api/status"),
+  diagnostics: () => api.get("/api/diagnostics"),
   preflight: () => api.post("/api/preflight"),
   botStart: () => api.post("/api/bot/start"),
   botStop: () => api.post("/api/bot/stop"),
@@ -199,6 +202,7 @@ function renderTab(id) {
     "chat-tools": renderChatTools,
     testing: renderTesting,
     settings: renderSettings,
+    diagnostics: renderDiagnostics,
     "audit-log": renderAuditLog
   }[id]();
 
@@ -1118,6 +1122,92 @@ function renderValidationSummary() {
   ]);
 }
 
+function renderDiagnostics() {
+  const report = state.diagnostics;
+  const readiness = report?.readiness || {};
+  const app = report?.app || {};
+  const paths = report?.paths || {};
+  const database = report?.database || {};
+  const setupUi = report?.setupUi || {};
+  const runtime = report?.runtime || {};
+  const bot = runtime.botProcess || {};
+
+  return [
+    sectionHeader("Diagnostics", "Safe local report for setup, packaging, runtime, and support handoff.",
+      h("div", { className: "actions" }, [
+        actionButton("Run readiness check", { id: "runDiagnostics", onClick: runDiagnostics, busyKey: "diagnostics" }),
+        actionButton("Copy diagnostic report", { id: "copyDiagnostics", variant: "secondary", onClick: copyDiagnostics, busyKey: "copyDiagnostics" })
+      ])
+    ),
+    readiness.status
+      ? callout(
+          readiness.status === "ready"
+            ? "Diagnostics clear."
+            : readiness.status === "attention"
+              ? `Attention: ${readiness.nextAction}`
+              : `Not ready: ${readiness.nextAction}`,
+          readiness.status === "ready" ? "ok" : readiness.status === "attention" ? "warn" : "bad"
+        )
+      : callout("Run diagnostics to generate a local support report.", "muted"),
+    card("Readiness", [
+      statusGrid([
+        ["Status", readiness.status || "not run", readiness.status === "ready"],
+        ["Blockers", readiness.blockers?.length || 0, !readiness.blockers?.length],
+        ["Warnings", readiness.warnings?.length || 0, !readiness.warnings?.length],
+        ["Next action", readiness.nextAction || "Run diagnostics", readiness.status === "ready"]
+      ]),
+      readiness.blockers?.length ? list(readiness.blockers, "bad") : null,
+      readiness.warnings?.length ? list(readiness.warnings, "warn") : null
+    ]),
+    card("Environment", [
+      statusGrid([
+        ["Version", app.version || "unknown", Boolean(app.version)],
+        ["Runtime", app.runtime || "unknown", Boolean(app.runtime)],
+        ["Node", app.node || "unknown", Boolean(app.node)],
+        ["Electron", app.electron || "not electron", Boolean(app.electron)],
+        ["Platform", `${app.platform || "unknown"} ${app.arch || ""}`.trim(), Boolean(app.platform)],
+        ["Generated", report?.generatedAt || "not run", Boolean(report?.generatedAt)]
+      ])
+    ]),
+    card("Local Paths", [
+      statusGrid([
+        ["Config", paths.configDir || "unknown", Boolean(paths.configDir)],
+        ["Secrets", paths.secretsPath || "unknown", Boolean(paths.secretsPath)],
+        ["Database", paths.databasePath || "unknown", Boolean(paths.databasePath)],
+        ["UI assets", paths.setupUiDir || "unknown", Boolean(paths.setupUiDir)]
+      ])
+    ]),
+    card("Storage And Assets", [
+      statusGrid([
+        ["Database", database.ok ? "ok" : "failed", database.ok],
+        ["SQLite", database.driver || "unknown", database.driver === "better-sqlite3"],
+        ["app.js", setupUi.appJs ? "present" : "missing", setupUi.appJs],
+        ["styles.css", setupUi.stylesCss ? "present" : "missing", setupUi.stylesCss]
+      ]),
+      database.error ? callout(database.error, database.ok ? "muted" : "bad") : null
+    ]),
+    card("Runtime Snapshot", [
+      statusGrid([
+        ["Bot process", bot.status || "stopped", Boolean(bot.running)],
+        ["PID", bot.pid || "none", Boolean(bot.pid)],
+        ["EventSub", runtime.eventSubConnected ? "connected" : "not connected", runtime.eventSubConnected],
+        ["Chat subscription", runtime.chatSubscriptionActive ? "active" : "inactive", runtime.chatSubscriptionActive],
+        ["Live chat", runtime.liveChatConfirmed ? "confirmed" : "pending", runtime.liveChatConfirmed],
+        ["Queue", runtime.queueHealth?.status || "unknown", runtime.queueHealth?.status === "clear"]
+      ])
+    ]),
+    card("Checks", [
+      dataTable(["Check", "Severity", "Result", "Detail"], (report?.checks || []).map((check) => [
+        check.name,
+        check.severity,
+        check.ok ? "pass" : "fail",
+        check.detail
+      ]))
+    ]),
+    message()
+  ];
+}
+
 function renderAuditLog() {
   return [
     sectionHeader("Audit Log", "Post-stream review and latest 100 local audit entries.",
@@ -1819,7 +1909,7 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, templates, operatorMessages, reminder, audit, outbound] = await Promise.all([
+    const [config, status, giveaway, templates, operatorMessages, reminder, audit, outbound, diagnostics] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
@@ -1827,7 +1917,8 @@ async function refreshAll() {
       api.operatorMessages(),
       api.reminder(),
       api.auditLogs(),
-      api.outboundMessages()
+      api.outboundMessages(),
+      api.diagnostics()
     ]);
     state.config = config;
     state.status = status;
@@ -1838,6 +1929,7 @@ async function refreshAll() {
     state.auditLogs = audit.logs || [];
     state.outboundMessages = outbound.messages || [];
     state.outboundSummary = outbound.summary || {};
+    state.diagnostics = diagnostics;
     state.validSetup = isValidationPassed();
     return { ok: true };
   }, { quiet: true });
@@ -2251,6 +2343,20 @@ function exportPostStreamReviewJson() {
 
 async function copyIncidentNote() {
   await copyText(incidentNoteText(), "Incident note copied.");
+}
+
+async function runDiagnostics() {
+  await runAction("diagnostics", async () => {
+    const report = await api.diagnostics();
+    state.diagnostics = report;
+    return report;
+  }, { skipRefresh: true, success: "Diagnostics updated." });
+}
+
+async function copyDiagnostics() {
+  const report = state.diagnostics || await api.diagnostics();
+  state.diagnostics = report;
+  await copyText(JSON.stringify(report, null, 2), "Diagnostic report copied.");
 }
 
 function incidentNoteText() {

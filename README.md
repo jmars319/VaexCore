@@ -182,6 +182,7 @@ The console is organized into durable sections:
 - `Chat Tools`: send chat messages, send test messages, edit local operator message presets, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
 - `Settings`: configure mode, Twitch OAuth, bot identity, and broadcaster identity.
+- `Diagnostics`: copy a safe local report with app version, runtime, config path, database path, SQLite driver, setup assets, readiness checks, and current runtime state.
 - `Audit Log`: review post-stream summaries and the latest 100 local audit entries.
 
 Direct UI actions call the local service layer first. Optional chat echo is visibility only; if enabled, VaexCore queues the equivalent chat command after the local action succeeds.
@@ -224,6 +225,7 @@ npm run typecheck
 npm run build
 npm run smoke:cli-env
 npm run smoke:token-refresh
+npm run smoke:diagnostics
 npm run setup
 ```
 
@@ -299,6 +301,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:giveaway` runs a temp-database giveaway readiness check covering command permissions, entry, close, draw, reroll, delivery, audit logs, recap, outbound history, and the local lifecycle test.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
+- `npm run smoke:diagnostics` checks the local diagnostics route, setup assets, database driver, token-refresh readiness flags, and report redaction.
 
 Current chat command syntax:
 
@@ -423,6 +426,8 @@ npm run dev:app-config
 After changing setup UI assets, run `npm run app:build` again so `dist-bundle/setup-ui` is refreshed before packaging. Electron loads the same localhost setup server as `npm run setup`.
 
 VaexCore uses native `better-sqlite3`. The app build leaves the project `node_modules` on the normal Node ABI, then installs the Electron ABI prebuild into the packaged `.app`, re-signs the app bundle so macOS accepts the modified native module, and probes it before finishing. A `node:sqlite` fallback remains as a last resort if a future Electron/native prebuild is unavailable; that fallback may emit Node's experimental SQLite warning.
+
+For support handoff, open `Diagnostics` and click `Copy diagnostic report`. The copied report is local-only and intentionally omits Twitch client secrets, access tokens, and refresh tokens while still showing the paths and readiness checks needed to troubleshoot setup or packaging.
 
 If Electron fails to load the packaged app after Node, Electron, or dependency upgrades, reinstall dependencies and rebuild the package:
 

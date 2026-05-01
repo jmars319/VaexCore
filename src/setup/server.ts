@@ -38,7 +38,7 @@ import {
   sanitizeGiveawayTitle,
   sanitizeText
 } from "../core/security";
-import { createDbClient } from "../db/client";
+import { createDbClient, resolveDatabasePath } from "../db/client";
 import { registerGiveawayCommands } from "../modules/giveaways/giveaways.commands";
 import { formatWinnerNames } from "../modules/giveaways/giveaways.messages";
 import { GiveawaysService } from "../modules/giveaways/giveaways.service";
@@ -71,9 +71,10 @@ export type SetupServerHandle = {
 const host = "127.0.0.1";
 const defaultPort = 3434;
 const queueStaleWarningMs = 30_000;
+const databaseUrl = process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite";
 const logger = createLogger("info");
 const oauthStates = new Map<string, number>();
-const db = createDbClient(process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite");
+const db = createDbClient(databaseUrl);
 const giveawaysService = new GiveawaysService({ db, logger });
 const giveawayTemplates = createGiveawayTemplateStore(db);
 const operatorMessages = createOperatorMessageTemplateStore(db);
@@ -201,6 +202,11 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
 
   if (request.method === "GET" && url.pathname === "/api/status") {
     sendJson(response, 200, await getOperatorStatus());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/diagnostics") {
+    sendJson(response, 200, getDiagnosticsReport());
     return;
   }
 
@@ -992,6 +998,253 @@ const runPreflightCheck = async () => {
     nextAction: failed?.detail ?? "Giveaway controls ready.",
     summary: giveawayState.summary
   };
+};
+
+type DiagnosticCheck = {
+  name: string;
+  ok: boolean;
+  severity: "blocker" | "warning" | "info";
+  detail: string;
+};
+
+const getDiagnosticsReport = () => {
+  const generatedAt = new Date().toISOString();
+  const packageInfo = getPackageInfo();
+  const config = getSafeConfig();
+  const database = getDatabaseDiagnostics();
+  const queue = chatQueue.snapshot();
+  const outbound = outboundHistory.summary();
+  const giveaway = giveawaysService.getOperatorState();
+  const giveawayState = getGiveawayState();
+  const queueHealth = summarizeQueueHealth(queue, outbound);
+  const setupUi = getSetupUiDiagnostics();
+  const botSnapshot = getBotProcessSnapshot();
+  const checks = getDiagnosticChecks({
+    config,
+    database,
+    setupUi,
+    queue,
+    queueHealth,
+    outbound,
+    giveawayState,
+    botSnapshot
+  });
+  const blockers = checks.filter((check) => !check.ok && check.severity === "blocker");
+  const warnings = checks.filter((check) => !check.ok && check.severity === "warning");
+
+  return {
+    ok: blockers.length === 0,
+    generatedAt,
+    app: {
+      name: packageInfo.name,
+      version: packageInfo.version,
+      runtime: getRuntimeKind(),
+      node: process.versions.node,
+      electron: process.versions.electron ?? "",
+      platform: process.platform,
+      arch: process.arch
+    },
+    paths: {
+      configDir: dirname(getLocalSecretsPath()),
+      secretsPath: getLocalSecretsPath(),
+      databaseUrl: safeDatabaseUrl(databaseUrl),
+      databasePath: resolveDatabasePath(databaseUrl),
+      setupUiDir: getSetupUiDir()
+    },
+    setupUi,
+    config,
+    database,
+    runtime: {
+      botProcess: botSnapshot,
+      eventSubConnected: botProcess.eventSubConnected,
+      chatSubscriptionActive: botProcess.chatSubscriptionActive,
+      liveChatConfirmed: botProcess.liveChatConfirmed,
+      queueReady: chatQueue.isReady(),
+      queue,
+      queueHealth,
+      outboundChat: outbound
+    },
+    giveaway: summarizeGiveawayState(giveaway),
+    readiness: {
+      status: blockers.length > 0 ? "not_ready" : warnings.length > 0 ? "attention" : "ready",
+      blockers: blockers.map((check) => `${check.name}: ${check.detail}`),
+      warnings: warnings.map((check) => `${check.name}: ${check.detail}`),
+      nextAction: blockers[0]?.detail ?? warnings[0]?.detail ?? "Diagnostics are clear."
+    },
+    checks
+  };
+};
+
+const getDiagnosticChecks = (input: {
+  config: ReturnType<typeof getSafeConfig>;
+  database: ReturnType<typeof getDatabaseDiagnostics>;
+  setupUi: ReturnType<typeof getSetupUiDiagnostics>;
+  queue: ReturnType<MessageQueue["snapshot"]>;
+  queueHealth: ReturnType<typeof summarizeQueueHealth>;
+  outbound: ReturnType<typeof outboundHistory.summary>;
+  giveawayState: ReturnType<typeof getGiveawayState>;
+  botSnapshot: ReturnType<typeof getBotProcessSnapshot>;
+}): DiagnosticCheck[] => [
+  {
+    name: "Setup UI assets",
+    ok: input.setupUi.appJs && input.setupUi.stylesCss,
+    severity: "blocker",
+    detail: input.setupUi.appJs && input.setupUi.stylesCss
+      ? "Static setup UI assets are present."
+      : "Rebuild VaexCore so setup UI assets are available."
+  },
+  {
+    name: "Database",
+    ok: input.database.ok,
+    severity: "blocker",
+    detail: input.database.ok
+      ? `${input.database.driver} responded to SELECT 1.`
+      : input.database.error || "Database did not respond."
+  },
+  {
+    name: "better-sqlite3",
+    ok: input.database.driver === "better-sqlite3",
+    severity: "warning",
+    detail: input.database.driver === "better-sqlite3"
+      ? "Native better-sqlite3 is active."
+      : "Using SQLite fallback; rebuild the app package if this appears in Electron."
+  },
+  {
+    name: "Required Twitch config",
+    ok: isSafeConfigComplete(),
+    severity: "blocker",
+    detail: isSafeConfigComplete()
+      ? "Required Twitch config fields are present."
+      : "Open Settings -> Setup Guide and complete missing Twitch fields."
+  },
+  {
+    name: "OAuth refresh",
+    ok: input.config.hasClientSecret && input.config.hasRefreshToken,
+    severity: "warning",
+    detail: input.config.hasClientSecret && input.config.hasRefreshToken
+      ? "Token refresh is available."
+      : "Reconnect Twitch or add refresh-capable CLI config to enable automatic token refresh."
+  },
+  {
+    name: "Validated identities",
+    ok: input.config.hasBotUserId && input.config.hasBroadcasterUserId,
+    severity: "blocker",
+    detail: input.config.hasBotUserId && input.config.hasBroadcasterUserId
+      ? "Bot and broadcaster identities are resolved."
+      : "Run Validate Setup after connecting Twitch."
+  },
+  {
+    name: "Outbound queue",
+    ok: input.queue.ready && input.queueHealth.status !== "blocked",
+    severity: "blocker",
+    detail: input.queue.ready && input.queueHealth.status !== "blocked"
+      ? "Outbound queue is ready."
+      : input.queueHealth.nextAction
+  },
+  {
+    name: "Critical giveaway chat",
+    ok: input.outbound.criticalFailed === 0 && !input.giveawayState.assurance.blockContinue,
+    severity: "blocker",
+    detail: input.outbound.criticalFailed === 0 && !input.giveawayState.assurance.blockContinue
+      ? "No blocking critical giveaway chat issue is tracked."
+      : input.giveawayState.assurance.nextAction || "Resolve critical giveaway chat delivery before continuing."
+  },
+  {
+    name: "Bot runtime",
+    ok: Boolean(input.botSnapshot.running),
+    severity: "warning",
+    detail: input.botSnapshot.running
+      ? `Bot process is ${input.botSnapshot.status}.`
+      : "Start Bot when you are ready for live chat commands."
+  },
+  {
+    name: "Live chat confirmation",
+    ok: botProcess.liveChatConfirmed,
+    severity: "warning",
+    detail: botProcess.liveChatConfirmed
+      ? "Live chat confirmation has been observed."
+      : "Type !ping in chat after starting the bot."
+  }
+];
+
+const getDatabaseDiagnostics = () => {
+  try {
+    const row = db.prepare("SELECT 1 AS ok").get() as { ok?: unknown } | undefined;
+    const ok = row?.ok === 1;
+
+    return {
+      ok,
+      driver: db.pragma ? "better-sqlite3" : "node:sqlite fallback",
+      path: resolveDatabasePath(databaseUrl),
+      error: ok ? "" : "Unexpected SELECT 1 result."
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      driver: db.pragma ? "better-sqlite3" : "node:sqlite fallback",
+      path: resolveDatabasePath(databaseUrl),
+      error: safeErrorMessage(error, "Database probe failed.")
+    };
+  }
+};
+
+const getSetupUiDiagnostics = () => {
+  const dir = getSetupUiDir();
+  return {
+    dir,
+    appJs: existsSync(join(dir, "app.js")),
+    stylesCss: existsSync(join(dir, "styles.css"))
+  };
+};
+
+const getPackageInfo = () => {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(process.cwd(), "package.json"),
+    resolve(currentDir, "..", "package.json"),
+    resolve(currentDir, "..", "..", "package.json")
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) {
+        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as {
+          name?: string;
+          version?: string;
+        };
+        return {
+          name: parsed.name ?? "vaexcore",
+          version: parsed.version ?? "unknown"
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return { name: "vaexcore", version: "unknown" };
+};
+
+const getRuntimeKind = () => {
+  if (process.versions.electron) {
+    return "electron";
+  }
+
+  return dirname(fileURLToPath(import.meta.url)).includes("dist-bundle")
+    ? "bundled-node"
+    : "source-tsx";
+};
+
+const safeDatabaseUrl = (value: string) => {
+  if (value === ":memory:") {
+    return value;
+  }
+
+  if (value.startsWith("file:")) {
+    return "file:<local sqlite path>";
+  }
+
+  return "<local sqlite path>";
 };
 
 const summarizeQueueHealth = (
