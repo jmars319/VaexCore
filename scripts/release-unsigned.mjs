@@ -11,6 +11,7 @@ const manifestPath = join(releaseDir, `${artifactBase}.json`);
 
 const steps = [
   ["Release metadata", ["node", "scripts/verify-release-metadata.mjs"]],
+  ["Tester guide", ["npm", "run", "smoke:tester-guide"]],
   ["Typecheck", ["npm", "run", "typecheck"]],
   ["Clean install smoke", ["npm", "run", "smoke:clean-install"]],
   ["Diagnostics smoke", ["npm", "run", "smoke:diagnostics"]],

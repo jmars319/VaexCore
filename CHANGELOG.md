@@ -4,6 +4,7 @@
 
 Current release state: usable local Twitch operator console with unsigned macOS tester packaging.
 
+- Milestone 27: tester onboarding guide with unsigned launch steps, setup checklist, support bundle handoff, and common fixes.
 - Milestone 26: release discipline with changelog, metadata checks, known limitations, and a full unsigned release command.
 - Milestone 25: unsigned macOS tester zip, SHA-256 checksum, manifest, and artifact smoke test.
 - Milestone 24: support bundle, first-run recovery diagnostics, safer bot start readiness, and clean-install smoke coverage.

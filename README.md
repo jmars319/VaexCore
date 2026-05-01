@@ -448,6 +448,8 @@ For support handoff, open `Diagnostics` and click `Copy diagnostic report` for t
 
 VaexCore currently has no Apple Developer ID signing or notarization. That means tester builds are intentionally labeled unsigned and macOS may show an unidentified developer warning. Share only zips you built yourself from this repo, and include the `.zip.sha256` checksum and `.json` manifest with the zip.
 
+For non-developer testers, send [TESTER_GUIDE.md](TESTER_GUIDE.md) with the unsigned zip.
+
 Tester install flow:
 
 1. Download the unsigned zip and matching `.zip.sha256` file.
