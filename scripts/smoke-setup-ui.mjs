@@ -94,10 +94,14 @@ async function runSmoke() {
   assert(appJs.includes("Requires confirmation"), "operator message presets identify high-impact sends");
   assert(appJs.includes("Diagnostics"), "setup UI exposes diagnostics tab");
   assert(appJs.includes("Copy diagnostic report"), "diagnostics report can be copied");
+  assert(appJs.includes("Copy support bundle"), "diagnostics tab can copy support bundle");
+  assert(appJs.includes("First Run And Recovery"), "diagnostics tab exposes first-run recovery");
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("/api/diagnostics"), "setup server exposes diagnostics route");
+  assert(setupServerJs.includes("/api/support-bundle"), "setup server exposes support bundle route");
   assert(setupServerJs.includes("getDiagnosticsReport"), "setup server builds safe diagnostics reports");
+  assert(setupServerJs.includes("getBotStartReadiness"), "setup server gates bot start with readiness checks");
   assert(setupServerJs.includes("outbound_messages"), "setup server persists outbound message history");
   assert(setupServerJs.includes("outboundImportance"), "setup server tracks outbound importance metadata");
   assert(setupServerJs.includes("giveaway_message_templates"), "setup server stores giveaway templates locally");

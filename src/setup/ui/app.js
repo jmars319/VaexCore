@@ -76,6 +76,7 @@ const api = {
   testSend: () => api.post("/api/test-send"),
   status: () => api.get("/api/status"),
   diagnostics: () => api.get("/api/diagnostics"),
+  supportBundle: () => api.get("/api/support-bundle"),
   preflight: () => api.post("/api/preflight"),
   botStart: () => api.post("/api/bot/start"),
   botStop: () => api.post("/api/bot/stop"),
@@ -1129,6 +1130,7 @@ function renderDiagnostics() {
   const paths = report?.paths || {};
   const database = report?.database || {};
   const setupUi = report?.setupUi || {};
+  const firstRun = report?.firstRun || {};
   const runtime = report?.runtime || {};
   const bot = runtime.botProcess || {};
 
@@ -1136,7 +1138,8 @@ function renderDiagnostics() {
     sectionHeader("Diagnostics", "Safe local report for setup, packaging, runtime, and support handoff.",
       h("div", { className: "actions" }, [
         actionButton("Run readiness check", { id: "runDiagnostics", onClick: runDiagnostics, busyKey: "diagnostics" }),
-        actionButton("Copy diagnostic report", { id: "copyDiagnostics", variant: "secondary", onClick: copyDiagnostics, busyKey: "copyDiagnostics" })
+        actionButton("Copy diagnostic report", { id: "copyDiagnostics", variant: "secondary", onClick: copyDiagnostics, busyKey: "copyDiagnostics" }),
+        actionButton("Copy support bundle", { id: "copySupportBundle", variant: "secondary", onClick: copySupportBundle, busyKey: "copySupportBundle" })
       ])
     ),
     readiness.status
@@ -1158,6 +1161,18 @@ function renderDiagnostics() {
       ]),
       readiness.blockers?.length ? list(readiness.blockers, "bad") : null,
       readiness.warnings?.length ? list(readiness.warnings, "warn") : null
+    ]),
+    card("First Run And Recovery", [
+      statusGrid([
+        ["Clean install", firstRun.cleanInstall ? "yes" : "no", !firstRun.cleanInstall],
+        ["Config file", firstRun.configFilePresent ? "present" : "not yet", Boolean(firstRun.configFilePresent)],
+        ["Setup complete", firstRun.setupComplete ? "yes" : "no", Boolean(firstRun.setupComplete)],
+        ["Missing fields", firstRun.missingConfig?.length || 0, !firstRun.missingConfig?.length],
+        ["Next action", firstRun.nextAction || "Run diagnostics", Boolean(firstRun.nextAction) && firstRun.setupComplete]
+      ]),
+      firstRun.blockers?.length ? list(firstRun.blockers, "bad") : null,
+      firstRun.warnings?.length ? list(firstRun.warnings, "warn") : null,
+      firstRun.recoverySteps?.length ? list(firstRun.recoverySteps, firstRun.blockers?.length ? "bad" : "muted") : null
     ]),
     card("Environment", [
       statusGrid([
@@ -2210,7 +2225,21 @@ async function sendSetupTest() {
 }
 
 async function startBot() {
-  await runAction("botStart", () => api.botStart(), { success: "Bot process starting." });
+  await runAction("botStart", async () => {
+    const result = await api.botStart();
+    if (result?.checks) {
+      state.preflightResult = {
+        ok: Boolean(result.ok),
+        checks: result.checks,
+        nextAction: result.nextAction || result.error || "",
+        summary: state.giveaway?.summary || {}
+      };
+    }
+    if (result?.diagnostics) {
+      state.diagnostics = result.diagnostics;
+    }
+    return result;
+  }, { success: "Bot process starting." });
 }
 
 async function stopBot() {
@@ -2357,6 +2386,15 @@ async function copyDiagnostics() {
   const report = state.diagnostics || await api.diagnostics();
   state.diagnostics = report;
   await copyText(JSON.stringify(report, null, 2), "Diagnostic report copied.");
+}
+
+async function copySupportBundle() {
+  await runAction("copySupportBundle", async () => {
+    const bundle = await api.supportBundle();
+    state.diagnostics = bundle.diagnostics || state.diagnostics;
+    await copyText(JSON.stringify(bundle, null, 2), "Support bundle copied.");
+    return bundle;
+  }, { skipRefresh: true, quiet: true });
 }
 
 function incidentNoteText() {

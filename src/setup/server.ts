@@ -210,6 +210,11 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/support-bundle") {
+    sendJson(response, 200, getSupportBundle());
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/preflight") {
     sendJson(response, 200, await runPreflightCheck());
     return;
@@ -1019,6 +1024,7 @@ const getDiagnosticsReport = () => {
   const queueHealth = summarizeQueueHealth(queue, outbound);
   const setupUi = getSetupUiDiagnostics();
   const botSnapshot = getBotProcessSnapshot();
+  const firstRun = getFirstRunStatus({ config, database, setupUi });
   const checks = getDiagnosticChecks({
     config,
     database,
@@ -1052,6 +1058,7 @@ const getDiagnosticsReport = () => {
       setupUiDir: getSetupUiDir()
     },
     setupUi,
+    firstRun,
     config,
     database,
     runtime: {
@@ -1072,6 +1079,51 @@ const getDiagnosticsReport = () => {
       nextAction: blockers[0]?.detail ?? warnings[0]?.detail ?? "Diagnostics are clear."
     },
     checks
+  };
+};
+
+const getSupportBundle = () => {
+  const diagnostics = getDiagnosticsReport();
+  const outbound = outboundHistory.list().slice(0, 50).map((record) => ({
+    id: record.id,
+    source: record.source,
+    status: record.status,
+    category: record.category,
+    action: record.action,
+    importance: record.importance,
+    attempts: record.attempts,
+    queuedAt: record.queuedAt,
+    updatedAt: record.updatedAt,
+    reason: safeSupportText(record.reason),
+    failureCategory: record.failureCategory,
+    retryAfterMs: record.retryAfterMs,
+    nextAttemptAt: record.nextAttemptAt,
+    queueDepth: record.queueDepth,
+    giveawayId: record.giveawayId,
+    messagePreview: safeSupportText(record.message).slice(0, 180)
+  }));
+  const audit = giveawaysService.getRecentAuditLogs(50).map((log) => ({
+    id: log.id,
+    actor: log.actor_twitch_user_id,
+    action: log.action,
+    target: log.target,
+    createdAt: log.created_at,
+    metadata: safeAuditMetadata(log.metadata_json)
+  }));
+  const botLogs = getBotProcessSnapshot().recentLogs.slice(-40).map(safeSupportText);
+
+  return {
+    ok: true,
+    bundleVersion: 1,
+    generatedAt: new Date().toISOString(),
+    note: "Secret-safe local support bundle. Twitch client secrets, access tokens, and refresh tokens are not included.",
+    diagnostics,
+    recent: {
+      botLogs,
+      outbound,
+      audit
+    },
+    recovery: diagnostics.firstRun.recoverySteps
   };
 };
 
@@ -1167,6 +1219,122 @@ const getDiagnosticChecks = (input: {
   }
 ];
 
+const getFirstRunStatus = (input: {
+  config: ReturnType<typeof getSafeConfig>;
+  database: ReturnType<typeof getDatabaseDiagnostics>;
+  setupUi: ReturnType<typeof getSetupUiDiagnostics>;
+}) => {
+  const configFilePresent = existsSync(getLocalSecretsPath());
+  const missingConfig = missingSafeConfigFields(input.config);
+  const identitiesResolved = input.config.hasBotUserId && input.config.hasBroadcasterUserId;
+  const cleanInstall = !configFilePresent && !input.config.hasClientId && !input.config.hasAccessToken;
+  const blockers = [
+    !input.setupUi.appJs || !input.setupUi.stylesCss
+      ? "Setup UI assets are missing; rebuild VaexCore."
+      : undefined,
+    !input.database.ok
+      ? "SQLite did not respond; rebuild or reset the local app data folder."
+      : undefined,
+    missingConfig.length > 0
+      ? `Missing Twitch setup fields: ${missingConfig.join(", ")}.`
+      : undefined,
+    missingConfig.length === 0 && !identitiesResolved
+      ? "Twitch identities are not validated; run Validate Setup."
+      : undefined
+  ].filter(Boolean) as string[];
+  const warnings = [
+    input.database.driver !== "better-sqlite3"
+      ? "SQLite fallback is active; rebuild the packaged app if this appears in Electron."
+      : undefined,
+    input.config.hasClientSecret && !input.config.hasRefreshToken
+      ? "Automatic token refresh is not available; reconnect Twitch to store a refresh token."
+      : undefined
+  ].filter(Boolean) as string[];
+
+  const nextAction = cleanInstall
+    ? "Open Settings -> Setup Guide."
+    : blockers[0]
+    ?? warnings[0]
+    ?? "Start Bot when you are ready.";
+
+  return {
+    cleanInstall,
+    configFilePresent,
+    setupComplete: missingConfig.length === 0 && identitiesResolved,
+    missingConfig,
+    blockers,
+    warnings,
+    nextAction,
+    recoverySteps: firstRunRecoverySteps({
+      cleanInstall,
+      blockers,
+      warnings,
+      configFilePresent,
+      databaseOk: input.database.ok,
+      setupUiOk: input.setupUi.appJs && input.setupUi.stylesCss
+    })
+  };
+};
+
+const missingSafeConfigFields = (config: ReturnType<typeof getSafeConfig>) => {
+  const missing: string[] = [];
+  if (!config.hasClientId) missing.push("Client ID");
+  if (!config.hasClientSecret) missing.push("Client Secret");
+  if (!config.redirectUri) missing.push("Redirect URI");
+  if (!config.broadcasterLogin) missing.push("Broadcaster Login");
+  if (!config.botLogin) missing.push("Bot Login");
+  if (!config.hasAccessToken) missing.push("Twitch OAuth");
+  return missing;
+};
+
+const firstRunRecoverySteps = (input: {
+  cleanInstall: boolean;
+  blockers: string[];
+  warnings: string[];
+  configFilePresent: boolean;
+  databaseOk: boolean;
+  setupUiOk: boolean;
+}) => {
+  if (input.cleanInstall) {
+    return [
+      "Open Settings -> Setup Guide.",
+      "Create or reuse a Twitch Developer application.",
+      "Save credentials and usernames, then Connect Twitch.",
+      "Run Validate Setup, Send test message, then Start Bot."
+    ];
+  }
+
+  if (!input.setupUiOk) {
+    return ["Run npm run build, then reopen VaexCore or rerun npm run setup."];
+  }
+
+  if (!input.databaseOk) {
+    return [
+      "Quit VaexCore.",
+      "Back up the local app data folder if needed.",
+      "Rebuild the app; reset the local data folder only if SQLite remains unhealthy."
+    ];
+  }
+
+  if (input.blockers.length > 0) {
+    return [
+      "Open Settings -> Setup Guide.",
+      "Complete the missing setup item shown in Diagnostics.",
+      "Run Validate Setup before starting the bot."
+    ];
+  }
+
+  if (input.warnings.length > 0) {
+    return [
+      "Review the warning before going live.",
+      "If token refresh is missing, reconnect Twitch.",
+      "If SQLite fallback appears in Electron, rebuild the packaged app."
+    ];
+  }
+
+  return ["Start Bot, then type !ping in Twitch chat to confirm live chat."];
+};
+
 const getDatabaseDiagnostics = () => {
   try {
     const row = db.prepare("SELECT 1 AS ok").get() as { ok?: unknown } | undefined;
@@ -1246,6 +1414,20 @@ const safeDatabaseUrl = (value: string) => {
 
   return "<local sqlite path>";
 };
+
+const safeAuditMetadata = (raw: string) => {
+  try {
+    return redactSecrets(JSON.parse(raw));
+  } catch {
+    return safeSupportText(raw);
+  }
+};
+
+const safeSupportText = (value: unknown) =>
+  String(value ?? "")
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/(client_secret|access_token|refresh_token|authorization)=([^&\s]+)/gi, "$1=[redacted]")
+    .replace(/"(clientSecret|accessToken|refreshToken|authorization)"\s*:\s*"[^"]*"/gi, "\"$1\":\"[redacted]\"");
 
 const summarizeQueueHealth = (
   queue: ReturnType<MessageQueue["snapshot"]>,
@@ -1680,17 +1862,39 @@ const startBotProcess = async () => {
   }
 
   const validation = await validateSetup();
+  const startReadiness = getBotStartReadiness(validation.checks);
 
-  if (!validation.ok) {
+  if (!validation.ok || !startReadiness.ok) {
+    const failed = startReadiness.checks.find((check) => !check.ok);
     return {
       ok: false,
-      error: "Validation must pass before starting the live bot.",
-      checks: validation.checks,
+      error: failed?.detail || "Resolve readiness blockers before starting the live bot.",
+      nextAction: failed?.detail || "Run Validate Setup before starting the bot.",
+      checks: startReadiness.checks,
+      diagnostics: getDiagnosticsReport(),
       botProcess: getBotProcessSnapshot()
     };
   }
 
-  const command = getBotRuntimeCommand();
+  let command: ReturnType<typeof getBotRuntimeCommand>;
+
+  try {
+    command = getBotRuntimeCommand();
+  } catch (error) {
+    const detail = safeErrorMessage(error, "Unable to find VaexCore live bot entrypoint.");
+    return {
+      ok: false,
+      error: detail,
+      nextAction: "Run npm run build, then try Start Bot again.",
+      checks: [
+        ...startReadiness.checks,
+        { name: "Bot runtime entrypoint", ok: false, detail }
+      ],
+      diagnostics: getDiagnosticsReport(),
+      botProcess: getBotProcessSnapshot()
+    };
+  }
+
   resetBotProcessForStart();
 
   const child = spawn(command.executable, command.args, {
@@ -1730,7 +1934,32 @@ const startBotProcess = async () => {
     appendBotLog("system", `Live bot process ${botProcess.status}.`);
   });
 
-  return { ok: true, started: true, botProcess: getBotProcessSnapshot() };
+  return {
+    ok: true,
+    started: true,
+    nextAction: "Wait for EventSub, then type !ping in Twitch chat.",
+    checks: startReadiness.checks,
+    botProcess: getBotProcessSnapshot()
+  };
+};
+
+const getBotStartReadiness = (validationChecks: Array<{ name: string; ok: boolean; detail: string }>) => {
+  const queue = chatQueue.snapshot();
+  const checks = [
+    ...validationChecks,
+    {
+      name: "Outbound queue",
+      ok: queue.ready,
+      detail: queue.ready
+        ? "Outbound queue is ready."
+        : "Restart the setup console if queue readiness does not recover."
+    }
+  ];
+
+  return {
+    ok: checks.every((check) => check.ok),
+    checks
+  };
 };
 
 const stopBotProcess = async (options: { force?: boolean } = {}) => {

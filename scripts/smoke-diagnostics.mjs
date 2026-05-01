@@ -61,7 +61,17 @@ async function runSmoke() {
   assert(Array.isArray(diagnostics.checks), "diagnostics returns checks");
   assert(diagnostics.checks.some((check) => check.name === "OAuth refresh" && check.ok), "diagnostics checks OAuth refresh");
   assert(diagnostics.readiness.warnings.some((warning) => warning.includes("Bot runtime")), "diagnostics warns when bot is stopped");
+  assert(diagnostics.firstRun.cleanInstall === false, "diagnostics does not mark configured app as clean install");
+  assert(diagnostics.firstRun.setupComplete === true, "diagnostics reports setup complete");
   assertSafeDiagnostics(diagnostics);
+
+  const bundle = await json("/api/support-bundle");
+  assert(bundle.ok === true, "support bundle route returns ok");
+  assert(bundle.bundleVersion === 1, "support bundle has version");
+  assert(bundle.diagnostics.config.hasRefreshToken === true, "support bundle includes safe diagnostics");
+  assert(Array.isArray(bundle.recent.outbound), "support bundle includes outbound history");
+  assert(Array.isArray(bundle.recent.audit), "support bundle includes audit history");
+  assertSafeDiagnostics(bundle);
 }
 
 async function text(path) {
@@ -84,9 +94,10 @@ function writeLocalSecretsFixture(secrets) {
 
 function assertSafeDiagnostics(report) {
   const raw = JSON.stringify(report);
-  assert(!("clientSecret" in report.config), "safe config omits clientSecret");
-  assert(!("accessToken" in report.config), "safe config omits accessToken");
-  assert(!("refreshToken" in report.config), "safe config omits refreshToken");
+  const config = report.config || report.diagnostics?.config || {};
+  assert(!("clientSecret" in config), "safe config omits clientSecret");
+  assert(!("accessToken" in config), "safe config omits accessToken");
+  assert(!("refreshToken" in config), "safe config omits refreshToken");
   assert(!raw.includes("diagnostics-client-secret"), "diagnostics does not expose client secret");
   assert(!raw.includes("diagnostics-access-token"), "diagnostics does not expose access token");
   assert(!raw.includes("diagnostics-refresh-token"), "diagnostics does not expose refresh token");

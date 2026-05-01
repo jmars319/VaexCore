@@ -182,7 +182,7 @@ The console is organized into durable sections:
 - `Chat Tools`: send chat messages, send test messages, edit local operator message presets, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
 - `Settings`: configure mode, Twitch OAuth, bot identity, and broadcaster identity.
-- `Diagnostics`: copy a safe local report with app version, runtime, config path, database path, SQLite driver, setup assets, readiness checks, and current runtime state.
+- `Diagnostics`: copy a safe local report or support bundle with app version, runtime, config path, database path, SQLite driver, setup assets, first-run recovery steps, readiness checks, and current runtime state.
 - `Audit Log`: review post-stream summaries and the latest 100 local audit entries.
 
 Direct UI actions call the local service layer first. Optional chat echo is visibility only; if enabled, VaexCore queues the equivalent chat command after the local action succeeds.
@@ -226,6 +226,7 @@ npm run build
 npm run smoke:cli-env
 npm run smoke:token-refresh
 npm run smoke:diagnostics
+npm run smoke:clean-install
 npm run setup
 ```
 
@@ -302,6 +303,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
 - `npm run smoke:diagnostics` checks the local diagnostics route, setup assets, database driver, token-refresh readiness flags, and report redaction.
+- `npm run smoke:clean-install` checks a fresh app data folder, first-run recovery guidance, blocked bot startup before setup, and support bundle redaction.
 
 Current chat command syntax:
 
@@ -427,7 +429,13 @@ After changing setup UI assets, run `npm run app:build` again so `dist-bundle/se
 
 VaexCore uses native `better-sqlite3`. The app build leaves the project `node_modules` on the normal Node ABI, then installs the Electron ABI prebuild into the packaged `.app`, re-signs the app bundle so macOS accepts the modified native module, and probes it before finishing. A `node:sqlite` fallback remains as a last resort if a future Electron/native prebuild is unavailable; that fallback may emit Node's experimental SQLite warning.
 
-For support handoff, open `Diagnostics` and click `Copy diagnostic report`. The copied report is local-only and intentionally omits Twitch client secrets, access tokens, and refresh tokens while still showing the paths and readiness checks needed to troubleshoot setup or packaging.
+For support handoff, open `Diagnostics` and click `Copy diagnostic report` for the short report or `Copy support bundle` for diagnostics plus recent non-secret bot logs, outbound history, and audit summaries. Both are local-only and intentionally omit Twitch client secrets, access tokens, and refresh tokens while still showing the paths and readiness checks needed to troubleshoot setup or packaging.
+
+### Installing, Resetting, And Recovering
+
+On first launch, VaexCore should open directly to the local setup console. If setup is incomplete, use `Settings -> Setup Guide`; Diagnostics will show the exact missing fields and recovery steps. `Start Bot` validates and refreshes Twitch OAuth first, then blocks with concrete checks instead of launching a broken runtime.
+
+If the app cannot open because port `3434` is busy, quit the other VaexCore instance or any process using `localhost:3434`, then reopen VaexCore. If the app opens but SQLite reports fallback or database failure in Diagnostics, run `npm run app:build` again. Reset local app data only after backing up anything you need from `~/Library/Application Support/VaexCore`.
 
 If Electron fails to load the packaged app after Node, Electron, or dependency upgrades, reinstall dependencies and rebuild the package:
 

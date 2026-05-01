@@ -109,7 +109,7 @@ const getJson = (url) => new Promise((resolve, reject) => {
 
 const showStartupError = (error) => {
   const message = isAddressInUse(error)
-    ? `Port ${setupPort} is already in use by another process. Quit the other process using localhost:${setupPort}, then open VaexCore again.`
+    ? `Port ${setupPort} is already in use and did not respond as VaexCore. Quit the other app or process using localhost:${setupPort}, then open VaexCore again.\n\nFor recovery, run: lsof -nP -iTCP:${setupPort} -sTCP:LISTEN`
     : error?.message || "VaexCore could not start.";
 
   dialog.showErrorBox("VaexCore startup failed", message);
