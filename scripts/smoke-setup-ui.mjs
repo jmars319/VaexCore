@@ -44,6 +44,8 @@ async function runSmoke() {
   assert(appJs.includes("Preview response"), "custom command UI can preview responses");
   assert(appJs.includes("Feature Gate"), "browser UI exposes feature gates");
   assert(appJs.includes("setFeatureGate"), "browser UI can update feature gates");
+  assert(appJs.includes("Schedule local stream messages"), "browser UI exposes timers");
+  assert(appJs.includes("Save timer"), "browser UI can save timers");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");
   assert(appJs.includes("Open Twitch Developer Console"), "setup guide includes Twitch Developer Console link");
   assert(appJs.includes("Twitch authorization failed"), "setup guide surfaces OAuth errors");
@@ -128,6 +130,8 @@ async function runSmoke() {
   assert(setupServerJs.includes("/api/commands"), "setup server exposes custom command routes");
   assert(setupServerJs.includes("/api/feature-gates"), "setup server exposes feature gate routes");
   assert(setupServerJs.includes("feature_gates"), "setup server persists feature gates locally");
+  assert(setupServerJs.includes("/api/timers"), "setup server exposes timer routes");
+  assert(setupServerJs.includes("timers"), "setup server persists timers locally");
   assert(setupServerJs.includes("custom_commands"), "setup server persists custom command definitions");
   assert(setupServerJs.includes("custom_command_invocations"), "setup server persists custom command usage history");
   assert(setupServerJs.includes("Token refreshed"), "setup server reports automatic token refresh during validation");
@@ -159,6 +163,9 @@ async function runSmoke() {
   const initialFeatureGates = await json("/api/feature-gates");
   assert(initialFeatureGates.ok === true, "feature gate route exists");
   assert(initialFeatureGates.featureGates.some((gate) => gate.key === "timers" && gate.mode === "off"), "future timers default off");
+  const initialTimers = await json("/api/timers");
+  assert(initialTimers.ok === true, "timer route exists");
+  assert(initialTimers.featureGate.mode === "off", "timer route returns feature gate");
 
   const invalidBotStart = await json("/api/bot/start", { method: "POST" });
   assert(invalidBotStart.ok === false, "bot start is blocked before validation");

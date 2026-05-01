@@ -57,6 +57,10 @@ import { formatWinnerNames } from "../modules/giveaways/giveaways.messages";
 import { GiveawaysService } from "../modules/giveaways/giveaways.service";
 import { createGiveawayTemplateStore } from "../modules/giveaways/giveaways.templates";
 import {
+  TimersService,
+  timerMetadata
+} from "../modules/timers/timers.module";
+import {
   defaultRedirectUri,
   getLocalSecretsPath,
   readLocalSecrets,
@@ -91,6 +95,7 @@ const db = createDbClient(databaseUrl);
 const giveawaysService = new GiveawaysService({ db, logger });
 const featureGates = createFeatureGateStore(db);
 const customCommandsService = new CustomCommandsService(db, { featureGates });
+const timersService = new TimersService(db);
 const giveawayTemplates = createGiveawayTemplateStore(db);
 const operatorMessages = createOperatorMessageTemplateStore(db);
 const setupRuntimeStatus = createRuntimeStatus("local");
@@ -238,6 +243,35 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "POST" && url.pathname === "/api/feature-gates") {
     const body = (await readJson(request)) as { key?: FeatureKey; mode?: FeatureGateMode };
     sendJson(response, 200, setFeatureGate(body));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/timers") {
+    sendJson(response, 200, getTimers());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/timers") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveTimer(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/timers/enable") {
+    const body = (await readJson(request)) as { id?: number; enabled?: boolean };
+    sendJson(response, 200, setTimerEnabled(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/timers/delete") {
+    const body = (await readJson(request)) as { id?: number };
+    sendJson(response, 200, deleteTimer(body.id));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/timers/send-now") {
+    const body = (await readJson(request)) as { id?: number };
+    sendJson(response, 200, await sendTimerNow(body.id));
     return;
   }
 
@@ -976,6 +1010,7 @@ const getOperatorStatus = async () => {
   const queue = chatQueue.snapshot();
   const outbound = outboundHistory.summary();
   const featureGateStates = featureGates.list();
+  const timers = timersService.listTimers();
 
   return {
     ok: true,
@@ -1001,6 +1036,7 @@ const getOperatorStatus = async () => {
         : "Start the live bot runtime from Dashboard or Settings to receive chat commands."
     },
     featureGates: featureGateStates,
+    timers: summarizeTimers(timers),
     giveaway: summarizeGiveawayState(giveaway)
   };
 };
@@ -1097,6 +1133,7 @@ const getDiagnosticsReport = () => {
   const giveawayState = getGiveawayState();
   const commands = customCommandsService.listCommands();
   const featureGateStates = featureGates.list();
+  const timers = timersService.listTimers();
   const queueHealth = summarizeQueueHealth(queue, outbound);
   const setupUi = getSetupUiDiagnostics();
   const botSnapshot = getBotProcessSnapshot();
@@ -1157,6 +1194,7 @@ const getDiagnosticsReport = () => {
       aliases: commands.reduce((total, command) => total + command.aliases.length, 0),
       uses: commands.reduce((total, command) => total + command.useCount, 0)
     },
+    timers: summarizeTimers(timers),
     featureGates: featureGateStates,
     readiness: {
       status: blockers.length > 0 ? "not_ready" : warnings.length > 0 ? "attention" : "ready",
@@ -1204,6 +1242,18 @@ const getSupportBundle = () => {
     createdAt: entry.createdAt,
     responsePreview: safeSupportText(entry.responseText).slice(0, 180)
   }));
+  const timers = timersService.listTimers().map((timer) => ({
+    id: timer.id,
+    name: timer.name,
+    enabled: timer.enabled,
+    intervalMinutes: timer.intervalMinutes,
+    fireCount: timer.fireCount,
+    lastSentAt: timer.lastSentAt,
+    nextFireAt: timer.nextFireAt,
+    lastStatus: timer.lastStatus,
+    lastError: safeSupportText(timer.lastError),
+    messagePreview: safeSupportText(timer.message).slice(0, 180)
+  }));
   const botLogs = getBotProcessSnapshot().recentLogs.slice(-40).map(safeSupportText);
 
   return {
@@ -1217,11 +1267,29 @@ const getSupportBundle = () => {
       botLogs,
       outbound,
       audit,
-      customCommandInvocations
+      customCommandInvocations,
+      timers
     },
     recovery: diagnostics.firstRun.recoverySteps
   };
 };
+
+const summarizeTimers = (timers: ReturnType<TimersService["listTimers"]>) => ({
+  total: timers.length,
+  enabled: timers.filter((timer) => timer.enabled).length,
+  disabled: timers.filter((timer) => !timer.enabled).length,
+  due: timers.filter((timer) =>
+    timer.enabled &&
+    timer.nextFireAt &&
+    Date.parse(timer.nextFireAt) <= Date.now()
+  ).length,
+  sent: timers.reduce((total, timer) => total + timer.fireCount, 0),
+  nextFireAt: timers
+    .filter((timer) => timer.enabled && timer.nextFireAt)
+    .map((timer) => timer.nextFireAt)
+    .sort()[0] ?? "",
+  blocked: timers.filter((timer) => timer.lastStatus === "blocked").length
+});
 
 const getDiagnosticChecks = (input: {
   config: ReturnType<typeof getSafeConfig>;
@@ -2402,6 +2470,188 @@ const setFeatureGate = (body: { key?: FeatureKey; mode?: FeatureGateMode }) => {
       error: safeErrorMessage(error, "Feature gate update failed")
     };
   }
+};
+
+const getTimers = () => {
+  const timers = timersService.listTimers();
+
+  return {
+    ok: true,
+    timers,
+    featureGate: featureGates.get("timers"),
+    readiness: getTimerSendReadiness(),
+    summary: {
+      total: timers.length,
+      enabled: timers.filter((timer) => timer.enabled).length,
+      disabled: timers.filter((timer) => !timer.enabled).length,
+      sent: timers.reduce((total, timer) => total + timer.fireCount, 0)
+    }
+  };
+};
+
+const saveTimer = (body: unknown) => {
+  try {
+    const timer = timersService.saveTimer(body as Record<string, unknown>, localUiActor);
+    return {
+      ...getTimers(),
+      ok: true,
+      timer
+    };
+  } catch (error) {
+    return {
+      ...getTimers(),
+      ok: false,
+      error: safeErrorMessage(error, "Timer save failed")
+    };
+  }
+};
+
+const setTimerEnabled = (body: { id?: number; enabled?: boolean }) => {
+  try {
+    const timer = timersService.setEnabled(
+      parseSafeInteger(body.id, { field: "Timer ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      Boolean(body.enabled),
+      localUiActor
+    );
+
+    return {
+      ...getTimers(),
+      ok: true,
+      timer
+    };
+  } catch (error) {
+    return {
+      ...getTimers(),
+      ok: false,
+      error: safeErrorMessage(error, "Timer update failed")
+    };
+  }
+};
+
+const deleteTimer = (id: number | undefined) => {
+  try {
+    const timer = timersService.deleteTimer(
+      parseSafeInteger(id, { field: "Timer ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      localUiActor
+    );
+
+    return {
+      ...getTimers(),
+      ok: true,
+      deleted: timer
+    };
+  } catch (error) {
+    return {
+      ...getTimers(),
+      ok: false,
+      error: safeErrorMessage(error, "Timer delete failed")
+    };
+  }
+};
+
+const sendTimerNow = async (id: number | undefined) => {
+  try {
+    const timer = timersService.requireTimer(
+      parseSafeInteger(id, { field: "Timer ID", min: 1, max: Number.MAX_SAFE_INTEGER })
+    );
+    const readiness = getTimerSendReadiness();
+
+    if (!timer.enabled) {
+      timersService.markBlocked(timer.id, "Timer is disabled.");
+      return {
+        ...getTimers(),
+        ok: false,
+        error: "Enable the timer before sending it."
+      };
+    }
+
+    if (!readiness.ok) {
+      timersService.markBlocked(timer.id, readiness.reason);
+      return {
+        ...getTimers(),
+        ok: false,
+        error: readiness.reason
+      };
+    }
+
+    const result = await enqueueChatMessage(timer.message, timerMetadata(timer));
+
+    if (!result.ok || typeof result.outboundMessageId !== "string") {
+      const error = result.error || "Timer message could not queue.";
+      timersService.markBlocked(timer.id, error);
+      return {
+        ...getTimers(),
+        ...result,
+        ok: false,
+        error
+      };
+    }
+
+    const sent = timersService.markQueued(timer.id, result.outboundMessageId);
+
+    return {
+      ...getTimers(),
+      ok: true,
+      queued: true,
+      timer: sent,
+      outboundMessageId: result.outboundMessageId
+    };
+  } catch (error) {
+    return {
+      ...getTimers(),
+      ok: false,
+      error: safeErrorMessage(error, "Timer send failed")
+    };
+  }
+};
+
+const getTimerSendReadiness = () => {
+  const gate = featureGates.get("timers");
+
+  if (gate.mode !== "live") {
+    return {
+      ok: false,
+      reason: gate.mode === "test"
+        ? "Timers are in test mode and will not send to Twitch chat."
+        : "Timers are off. Move the Timers feature gate to Live before sending."
+    };
+  }
+
+  if (!botProcess.child || !getBotProcessSnapshot().running) {
+    return {
+      ok: false,
+      reason: "Start the live bot before timers can send."
+    };
+  }
+
+  if (!botProcess.eventSubConnected || !botProcess.chatSubscriptionActive) {
+    return {
+      ok: false,
+      reason: "Timers wait for EventSub chat to be connected."
+    };
+  }
+
+  if (!botProcess.liveChatConfirmed) {
+    return {
+      ok: false,
+      reason: "Timers wait for live chat confirmation. Type !ping in chat."
+    };
+  }
+
+  const queue = chatQueue.snapshot();
+  const queueHealth = summarizeQueueHealth(queue, outboundHistory.summary());
+
+  if (queueHealth.status !== "clear") {
+    return {
+      ok: false,
+      reason: queueHealth.nextAction
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "Timers can queue."
+  };
 };
 
 const getCustomCommands = () => {

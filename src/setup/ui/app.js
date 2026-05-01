@@ -2,6 +2,7 @@ const tabs = [
   ["dashboard", "Dashboard"],
   ["live-mode", "Live Mode"],
   ["commands", "Commands"],
+  ["timers", "Timers"],
   ["giveaways", "Giveaways"],
   ["chat-tools", "Chat Tools"],
   ["testing", "Testing"],
@@ -20,6 +21,10 @@ const state = {
   commandSummary: { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 },
   commandReservedNames: [],
   commandFeatureGate: null,
+  timers: [],
+  timerSummary: { total: 0, enabled: 0, disabled: 0, sent: 0 },
+  timerFeatureGate: null,
+  timerReadiness: { ok: false, reason: "" },
   featureGates: [],
   templates: [],
   operatorMessages: [],
@@ -35,6 +40,7 @@ const state = {
   winnerFilter: "all",
   commandFilter: "",
   selectedCommandId: null,
+  selectedTimerId: null,
   message: { text: "", tone: "muted" },
   testResult: null,
   commandPreview: null,
@@ -42,6 +48,7 @@ const state = {
   testMessageSent: false,
   settingsDraft: {},
   commandDraft: {},
+  timerDraft: {},
   giveawayDraft: {},
   templateDraft: {},
   operatorTemplateDraft: {},
@@ -119,6 +126,11 @@ const api = {
   exportCommands: () => api.get("/api/commands/export"),
   importCommands: (body) => api.post("/api/commands/import", body),
   previewCommand: (body) => api.post("/api/commands/preview", body),
+  timers: () => api.get("/api/timers"),
+  saveTimer: (body) => api.post("/api/timers", body),
+  enableTimer: (id, enabled) => api.post("/api/timers/enable", { id, enabled }),
+  deleteTimer: (id) => api.post("/api/timers/delete", { id }),
+  sendTimerNow: (id) => api.post("/api/timers/send-now", { id }),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
 };
@@ -221,6 +233,7 @@ function renderTab(id) {
     dashboard: renderDashboard,
     "live-mode": renderLiveMode,
     commands: renderCommands,
+    timers: renderTimers,
     giveaways: renderGiveaways,
     "chat-tools": renderChatTools,
     testing: renderTesting,
@@ -910,6 +923,71 @@ function renderCommands() {
         entry.userLogin || "",
         formatMessagePreview(entry.responseText || "")
       ]))
+    ]),
+    message()
+  ];
+}
+
+function renderTimers() {
+  const timers = state.timers || [];
+  const selected = selectedTimer();
+  const readiness = state.timerReadiness || {};
+
+  return [
+    sectionHeader("Timers", "Schedule local stream messages with live readiness and queue guardrails.",
+      h("div", { className: "actions section-actions" }, [
+        actionButton("New timer", { id: "newTimer", variant: "secondary", onClick: newTimer }),
+        actionButton("Refresh", { id: "refreshTimers", variant: "secondary", busyKey: "refresh", onClick: refreshAll })
+      ])
+    ),
+    renderFeatureGateCard("timers"),
+    card("Timer Library", [
+      statusGrid([
+        ["Total", state.timerSummary.total || 0, true],
+        ["Enabled", state.timerSummary.enabled || 0, true],
+        ["Disabled", state.timerSummary.disabled || 0, Number(state.timerSummary.disabled || 0) === 0],
+        ["Sent", state.timerSummary.sent || 0, true],
+        ["Readiness", readiness.ok ? "ready" : "blocked", Boolean(readiness.ok)]
+      ]),
+      readiness.reason ? callout(readiness.reason, readiness.ok ? "ok" : "warn") : null,
+      dataTable(["Timer", "State", "Interval", "Last Sent", "Next Fire", "Status", "Actions"], timers.map((timer) => [
+        timer.name,
+        statusChip(timer.enabled ? "enabled" : "disabled"),
+        `${timer.intervalMinutes}m`,
+        timer.lastSentAt || "never",
+        timer.nextFireAt || "none",
+        timer.lastStatus === "blocked" && timer.lastError
+          ? `${timer.lastStatus}: ${timer.lastError}`
+          : timer.lastStatus || "never",
+        h("div", { className: "actions inline-actions table-actions" }, [
+          actionButton("Edit", { id: `timer-edit-${timer.id}`, variant: "secondary", onClick: () => editTimer(timer.id) }),
+          actionButton(timer.enabled ? "Disable" : "Enable", { id: `timer-enable-${timer.id}`, variant: "secondary", busyKey: "timerEnable", onClick: () => toggleTimer(timer.id, !timer.enabled) }),
+          actionButton("Send now", { id: `timer-send-${timer.id}`, variant: "secondary", busyKey: "timerSend", disabled: !timer.enabled || !readiness.ok, onClick: () => sendTimerNow(timer.id) }),
+          actionButton("Delete", { id: `timer-delete-${timer.id}`, variant: "danger", busyKey: "timerDelete", onClick: () => deleteTimer(timer.id, timer.name) })
+        ])
+      ]))
+    ]),
+    card("Timer Editor", [
+      selected ? callout(`Editing ${selected.name}`, selected.enabled ? "ok" : "warn") : callout("Create a timer or select one from the library.", "muted"),
+      h("div", { className: "grid three" }, [
+        formRow("Timer name", h("input", { id: "timerName", placeholder: "Discord reminder", onInput: updateTimerDraft })),
+        formRow("Interval minutes", h("input", { id: "timerInterval", type: "number", min: "5", max: "1440", onInput: updateTimerDraft })),
+        h("label", { className: "inline-check editor-check" }, [
+          h("input", { id: "timerEnabled", type: "checkbox", onChange: updateTimerDraft }),
+          "Enabled"
+        ])
+      ]),
+      formRow("Message", h("textarea", {
+        id: "timerMessage",
+        className: "command-response-editor",
+        placeholder: "Follow the channel for schedule updates.",
+        onInput: updateTimerDraft
+      })),
+      callout("Timers use the outbound queue and only fire when Timers are Live, the bot is live-ready, and the queue is clear. Minimum interval is 5 minutes.", "info"),
+      h("div", { className: "actions" }, [
+        actionButton("Save timer", { id: "saveTimer", onClick: saveTimer }),
+        selected ? actionButton("Send now", { id: "sendSelectedTimer", variant: "secondary", busyKey: "timerSend", disabled: !selected.enabled || !readiness.ok, onClick: () => sendTimerNow(selected.id) }) : null
+      ])
     ]),
     message()
   ];
@@ -1883,6 +1961,7 @@ function winnerStatus(winner) {
 function featureGate(key) {
   return (state.featureGates || []).find((gate) => gate.key === key) ||
     (key === "custom_commands" ? state.commandFeatureGate : null) ||
+    (key === "timers" ? state.timerFeatureGate : null) ||
     { key, label: key, mode: "off", liveAllowed: false, testAllowed: false };
 }
 
@@ -1900,6 +1979,10 @@ function featureGateSummary(gate = {}) {
 
 function selectedCustomCommand() {
   return (state.commands || []).find((command) => Number(command.id) === Number(state.selectedCommandId));
+}
+
+function selectedTimer() {
+  return (state.timers || []).find((timer) => Number(timer.id) === Number(state.selectedTimerId));
 }
 
 function filteredCustomCommands() {
@@ -2167,11 +2250,12 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, commands, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult] = await Promise.all([
+    const [config, status, giveaway, commands, timers, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
       api.commands(),
+      api.timers(),
       api.templates(),
       api.operatorMessages(),
       api.reminder(),
@@ -2184,6 +2268,7 @@ async function refreshAll() {
     state.status = status;
     state.giveaway = giveaway;
     setCommandState(commands);
+    setTimerState(timers);
     state.templates = templates.templates || [];
     state.operatorMessages = operatorMessages.templates || [];
     state.reminder = reminder.reminder || {};
@@ -2198,10 +2283,11 @@ async function refreshAll() {
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, commands, operatorMessages, reminder, audit, outbound, featureGateResult] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates()]);
+  const [status, giveaway, commands, timers, operatorMessages, reminder, audit, outbound, featureGateResult] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.timers(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates()]);
   state.status = status;
   state.giveaway = giveaway;
   setCommandState(commands);
+  setTimerState(timers);
   state.operatorMessages = operatorMessages.templates || [];
   state.reminder = reminder.reminder || {};
   state.auditLogs = audit.logs || [];
@@ -2238,6 +2324,18 @@ function setCommandState(result = {}) {
   if (state.selectedCommandId && !state.commands.some((command) => Number(command.id) === Number(state.selectedCommandId))) {
     state.selectedCommandId = null;
     state.commandDraft = {};
+  }
+}
+
+function setTimerState(result = {}) {
+  state.timers = result.timers || [];
+  state.timerSummary = result.summary || { total: 0, enabled: 0, disabled: 0, sent: 0 };
+  state.timerFeatureGate = result.featureGate || state.timerFeatureGate;
+  state.timerReadiness = result.readiness || state.timerReadiness;
+
+  if (state.selectedTimerId && !state.timers.some((timer) => Number(timer.id) === Number(state.selectedTimerId))) {
+    state.selectedTimerId = null;
+    state.timerDraft = {};
   }
 }
 
@@ -2330,6 +2428,70 @@ async function setFeatureGate(key, mode) {
   await runAction("featureGate", () => api.setFeatureGate(key, mode), {
     success: "Feature gate updated."
   });
+}
+
+function newTimer() {
+  state.selectedTimerId = null;
+  state.timerDraft = {
+    timerName: "",
+    timerInterval: 5,
+    timerEnabled: false,
+    timerMessage: ""
+  };
+  render();
+}
+
+function editTimer(id) {
+  const timer = (state.timers || []).find((item) => Number(item.id) === Number(id));
+  if (!timer) return;
+  state.selectedTimerId = timer.id;
+  state.timerDraft = {};
+  render();
+  field("timerName")?.focus();
+}
+
+async function saveTimer() {
+  await runAction("saveTimer", async () => {
+    const result = await api.saveTimer(readTimerPayload());
+    setTimerState(result);
+    state.selectedTimerId = result.timer?.id ?? state.selectedTimerId;
+    state.timerDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Timer saved." });
+}
+
+async function toggleTimer(id, enabled) {
+  await runAction("timerEnable", async () => {
+    const result = await api.enableTimer(id, enabled);
+    setTimerState(result);
+    return result;
+  }, { skipRefresh: true, success: enabled ? "Timer enabled." : "Timer disabled." });
+}
+
+async function deleteTimer(id, name) {
+  if (!confirm(`Delete timer "${name}"?`)) {
+    return;
+  }
+
+  await runAction("timerDelete", async () => {
+    const result = await api.deleteTimer(id);
+    setTimerState(result);
+    state.selectedTimerId = null;
+    state.timerDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Timer deleted." });
+}
+
+async function sendTimerNow(id) {
+  if (!confirm("Send this timer message to Twitch chat now?")) {
+    return;
+  }
+
+  await runAction("timerSend", async () => {
+    const result = await api.sendTimerNow(id);
+    setTimerState(result);
+    return result;
+  }, { skipRefresh: true, success: "Timer queued." });
 }
 
 function newCustomCommand() {
@@ -2496,6 +2658,11 @@ function updateCommandDraft(event) {
   state.commandDraft[event.target.id] = value;
 }
 
+function updateTimerDraft(event) {
+  const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  state.timerDraft[event.target.id] = value;
+}
+
 function updateGiveawayDraft(event) {
   state.giveawayDraft[event.target.id] = event.target.value;
 }
@@ -2591,6 +2758,17 @@ function readCommandPayload() {
     userCooldownSeconds: Number(field("commandUserCooldown")?.value || 0),
     aliases: splitLinesAndCommas(field("commandAliases")?.value || ""),
     responses: splitLines(field("commandResponses")?.value || "")
+  };
+}
+
+function readTimerPayload() {
+  const selected = selectedTimer();
+  return {
+    id: selected?.id,
+    name: field("timerName")?.value || "",
+    intervalMinutes: Number(field("timerInterval")?.value || 5),
+    enabled: Boolean(field("timerEnabled")?.checked),
+    message: field("timerMessage")?.value || ""
   };
 }
 
@@ -2942,6 +3120,7 @@ function syncFormValues() {
   const config = state.config || {};
   const summary = state.giveaway?.summary || {};
   const selectedCommand = selectedCustomCommand();
+  const currentTimer = selectedTimer();
   setValue("mode", settingsValue("mode", config.mode || "live"));
   setValue("redirectUri", settingsValue("redirectUri", config.redirectUri || defaultRedirectUri));
   setValue("clientId", settingsValue("clientId", config.hasClientId ? savedCredentialMask : ""));
@@ -2958,6 +3137,10 @@ function syncFormValues() {
   setValue("commandPreviewActor", field("commandPreviewActor")?.value || "viewer");
   setValue("commandPreviewRole", field("commandPreviewRole")?.value || "viewer");
   setValue("commandPreviewArgs", field("commandPreviewArgs")?.value || "target");
+  setValue("timerName", timerValue("timerName", currentTimer?.name || ""));
+  setValue("timerInterval", timerValue("timerInterval", currentTimer?.intervalMinutes || 5));
+  setChecked("timerEnabled", Boolean(timerValue("timerEnabled", currentTimer?.enabled ?? false)));
+  setValue("timerMessage", timerValue("timerMessage", currentTimer?.message || ""));
   setValue("giveawayTitle", giveawayValue("giveawayTitle", summary.title || "Community Giveaway"));
   setValue("giveawayKeyword", giveawayValue("giveawayKeyword", summary.keyword || "enter"));
   setValue("winnerCount", giveawayValue("winnerCount", summary.winnerCount || 3));
@@ -2984,6 +3167,10 @@ function settingsValue(id, fallback) {
 
 function commandValue(id, fallback) {
   return draftValue(state.commandDraft, id, fallback);
+}
+
+function timerValue(id, fallback) {
+  return draftValue(state.timerDraft, id, fallback);
 }
 
 function giveawayValue(id, fallback) {

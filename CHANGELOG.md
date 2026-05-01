@@ -4,6 +4,7 @@
 
 Current release state: clean-main unsigned tester cut for wider local testing.
 
+- Milestone 33: feature-gated chat timers with local definitions, enable/disable without deletion, minimum intervals, live-readiness and outbound-queue guardrails, queue-owned delivery, last/next fire status, audit logging, and smoke coverage for no-spam and feature-gate behavior.
 - Milestone 32: operational guardrails with documented development rules, protected command registry, feature gates for off/test/live module rollout, bounded redacted audit retention, custom command secret checks, diagnostics visibility, and smoke coverage.
 - Milestone 31: custom command center with local command definitions, aliases, permissions, cooldowns, response variants, usage history, import/export, audit logging, runtime fallback handling, and smoke coverage.
 - Milestone 30: versioned tester release cut with clean-main release guard, full git SHA manifests, tester handoff notes, and rebuilt unsigned artifacts.

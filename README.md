@@ -179,6 +179,7 @@ The console is organized into durable sections:
 - `Dashboard`: high-level Twitch, queue, chat, active giveaway readiness, live runbook, and preflight rehearsal.
 - `Live Mode`: compact stream-night state, live runbook, status-to-chat, panic resend, outbound failure logs, and recap copy.
 - `Commands`: create, edit, test, import, export, and audit local custom chat commands.
+- `Timers`: create, enable, disable, and monitor scheduled chat messages behind live readiness and queue guardrails.
 - `Giveaways`: start, close, draw, reroll, claim, deliver, end giveaways, manage reminder timing, edit giveaway chat templates, and review the latest recap.
 - `Chat Tools`: send chat messages, send test messages, edit local operator message presets, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
@@ -207,6 +208,20 @@ Open `Commands` to manage local command definitions stored in SQLite. Custom com
 Built-in names such as `!ping`, `!vcstatus`, and giveaway commands are reserved through the protected command registry. While a giveaway is active, its entry keyword is also reserved in the setup UI. At runtime, built-in commands and active giveaway keywords are checked before custom command fallback, so giveaway entry behavior stays predictable.
 
 The `Commands` tab includes a feature gate for custom commands. `Live` responds in Twitch chat, `Test` responds only to local simulations, and `Off` disables custom command replies while keeping definitions available.
+
+## Timers
+
+Open `Timers` to manage scheduled chat messages stored locally in SQLite. Timers support:
+
+- feature-gated rollout with `off`, `test`, and `live` modes
+- enable/disable without deleting the timer definition
+- minimum 5-minute intervals
+- bounded, redacted timer messages
+- next fire time, last sent time, last status, and send count
+- manual `Send now` only when timers are live, the bot is live-ready, and the outbound queue is clear
+- audit entries for create, update, delete, enable, and disable actions
+
+Automatic timer delivery runs in the live bot runtime and uses the same outbound message queue, retry handling, rate-limit behavior, and outbound history as other VaexCore chat sends. Timers do not fire while the Timers feature gate is `off` or `test`, before live chat confirmation, or while the outbound queue is degraded.
 
 ## First-Time Setup (No Twitch Experience Required)
 
@@ -321,7 +336,8 @@ The `Giveaways` tab also includes stream-night controls:
 - `Queue Health` and `Recovery Checklist` show pending queue age, retry delay, send throttle delay, failure category, latest failed action, resend safety, and concrete recovery steps before an operator retries a critical message. Auth/config failures do not blindly retry; Twitch rate limits and transient network failures retry with queue-owned backoff.
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Commands` stores local-only custom chat commands in SQLite, with aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
-- `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live` after Milestone 31; future timers and moderation filters start `off` until tested.
+- `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness plus clear queue health before sending.
+- `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and future moderation filters start `off` until explicitly enabled.
 - `Development Guidelines` live in `docs/development-guidelines.md` and define the project rules for preserving the stable core, local-first behavior, secret redaction, feature gates, audit retention, diagnostics, and release discipline.
 - `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
 - `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.
@@ -329,6 +345,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:giveaway` runs a temp-database giveaway readiness check covering command permissions, entry, close, draw, reroll, delivery, audit logs, recap, outbound history, and the local lifecycle test.
 - `npm run smoke:commands` runs a temp-database custom command check covering reserved names, aliases, placeholders, permissions, cooldowns, disabled commands, preview, import/export, usage history, and audit logs.
 - `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
+- `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
 - `npm run smoke:diagnostics` checks the local diagnostics route, setup assets, database driver, token-refresh readiness flags, and report redaction.

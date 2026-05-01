@@ -131,6 +131,22 @@ export const initializeSchema = (db: DbClient) => {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS timers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      message TEXT NOT NULL,
+      interval_minutes INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+      fire_count INTEGER NOT NULL DEFAULT 0,
+      last_sent_at TEXT NOT NULL DEFAULT '',
+      next_fire_at TEXT NOT NULL DEFAULT '',
+      last_status TEXT NOT NULL DEFAULT 'never',
+      last_error TEXT NOT NULL DEFAULT '',
+      last_outbound_message_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS giveaway_reminder_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
@@ -158,6 +174,8 @@ export const initializeSchema = (db: DbClient) => {
       ON custom_command_invocations(created_at);
     CREATE INDEX IF NOT EXISTS idx_custom_command_invocations_command_id
       ON custom_command_invocations(command_id);
+    CREATE INDEX IF NOT EXISTS idx_timers_enabled_next_fire
+      ON timers(enabled, next_fire_at);
   `);
 
   ensureColumn(db, "outbound_messages", "failure_category", "TEXT NOT NULL DEFAULT 'none'");

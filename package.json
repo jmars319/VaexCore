@@ -27,6 +27,7 @@
     "smoke:setup": "npm run build && node scripts/smoke-setup-ui.mjs",
     "smoke:commands": "npm run build && node scripts/smoke-custom-commands.mjs",
     "smoke:guardrails": "npm run build && tsx scripts/smoke-operational-guardrails.mjs",
+    "smoke:timers": "npm run build && tsx scripts/smoke-timers.mjs",
     "smoke:giveaway": "npm run build && node scripts/smoke-giveaway-readiness.mjs",
     "smoke:token-refresh": "npm run build && node scripts/smoke-token-refresh.mjs",
     "smoke:diagnostics": "npm run build && node scripts/smoke-diagnostics.mjs",

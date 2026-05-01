@@ -1,3 +1,2 @@
-export const timersModule = {
-  name: "timers"
-} as const;
+export { TimersService } from "./timers.service";
+export { TimerScheduler, timerMetadata } from "./timers.runtime";

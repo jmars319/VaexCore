@@ -11,6 +11,7 @@ import { StartupChecklist } from "./startupChecklist";
 import { createDbClient, type DbClient } from "../db/client";
 import { registerCommandsModule } from "../modules/commands/commands.module";
 import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
+import { TimerScheduler, TimersService } from "../modules/timers/timers.module";
 import { createRuntimeStatus, type RuntimeStatus } from "./runtimeStatus";
 import { registerStatusCommands } from "./statusCommands";
 import { validateLiveTwitch } from "../twitch/validate";
@@ -32,6 +33,7 @@ export class VaexCoreBot {
   private readonly startupChecklist: StartupChecklist;
   private readonly db: DbClient;
   private readonly runtimeStatus: RuntimeStatus;
+  private readonly timerScheduler: TimerScheduler;
   private pendingLivePingConfirmation = false;
   private twitchAccessToken: string;
 
@@ -41,6 +43,7 @@ export class VaexCoreBot {
     this.db = createDbClient(options.env.databaseUrl);
     const outboundHistory = createOutboundHistory(this.db);
     const featureGates = createFeatureGateStore(this.db);
+    const timersService = new TimersService(this.db);
 
     const sender = new TwitchChatSender({
       clientId: options.env.twitchClientId,
@@ -74,6 +77,38 @@ export class VaexCoreBot {
       prefix: options.env.commandPrefix,
       logger: options.logger,
       enqueueMessage: (message, metadata) => this.messageQueue.enqueue(message, metadata)
+    });
+    this.timerScheduler = new TimerScheduler({
+      service: timersService,
+      featureGates,
+      logger: options.logger,
+      enqueue: (message, metadata) => this.messageQueue.enqueue(message, metadata),
+      readiness: () => {
+        const queue = this.messageQueue.snapshot();
+        const outbound = outboundHistory.summary();
+
+        if (this.runtimeStatus.mode !== "live") {
+          return { ok: false, reason: "Timers only fire in live mode." };
+        }
+
+        if (!this.runtimeStatus.eventSubConnected || !this.runtimeStatus.chatSubscriptionActive) {
+          return { ok: false, reason: "Timers wait for EventSub chat to be connected." };
+        }
+
+        if (!this.runtimeStatus.liveChatConfirmed) {
+          return { ok: false, reason: "Timers wait for live chat confirmation. Type !ping in chat." };
+        }
+
+        if (!queue.ready || queue.processing || queue.queued > 0 || queue.rateLimitDelayMs > 0 || queue.retryDelayMs > 0) {
+          return { ok: false, reason: "Timers wait for the outbound queue to clear." };
+        }
+
+        if (outbound.failed > 0 || outbound.rateLimited > 0) {
+          return { ok: false, reason: "Timers wait for outbound recovery to clear." };
+        }
+
+        return { ok: true, reason: "Timer can queue." };
+      }
     });
 
     const giveawaysService = registerGiveawaysModule({
@@ -128,6 +163,7 @@ export class VaexCoreBot {
 
     this.messageQueue.start();
     this.runtimeStatus.messageQueueReady = this.messageQueue.isReady();
+    this.timerScheduler.start();
     this.startupChecklist.pass("outbound message queue ready", {
       messagesPerSecond: 1
     });
@@ -142,6 +178,7 @@ export class VaexCoreBot {
   }
 
   async stop() {
+    this.timerScheduler.stop();
     await this.messageQueue.drain(8000);
     this.messageQueue.stop();
     await this.eventSubClient.close();
