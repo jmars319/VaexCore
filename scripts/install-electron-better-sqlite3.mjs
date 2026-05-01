@@ -48,6 +48,7 @@ for (const appPath of apps) {
     { cwd: moduleDir, stdio: "inherit" }
   );
 
+  resignPackagedApp(appPath);
   probePackagedBetterSqlite(appPath);
 }
 
@@ -92,4 +93,19 @@ function probePackagedBetterSqlite(appPath) {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: "inherit"
   });
+}
+
+function resignPackagedApp(appPath) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  execFileSync("codesign", ["--force", "--deep", "--sign", "-", appPath], {
+    stdio: "inherit"
+  });
+  execFileSync(
+    "codesign",
+    ["--verify", "--deep", "--strict", "--verbose=2", appPath],
+    { stdio: "inherit" }
+  );
 }

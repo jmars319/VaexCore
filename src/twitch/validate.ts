@@ -12,6 +12,17 @@ export type TokenValidation = {
   expires_in: number;
 };
 
+export class TwitchTokenValidationError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(message);
+    this.name = "TwitchTokenValidationError";
+  }
+}
+
 type ValidateLiveTwitchOptions = TwitchAuthOptions & {
   broadcasterUserId: string;
   botUserId: string;
@@ -99,8 +110,10 @@ export const validateToken = async (accessToken: string) => {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(
-      `Twitch token validation failed: ${response.status} ${body}. If this is 401, generate a fresh user access token.`
+    throw new TwitchTokenValidationError(
+      `Twitch token validation failed: ${response.status} ${body}. If this is 401, reconnect Twitch to refresh authorization.`,
+      response.status,
+      body
     );
   }
 

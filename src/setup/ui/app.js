@@ -889,10 +889,12 @@ function renderSettings() {
         ["Client ID", config.hasClientId ? "present" : "missing", config.hasClientId],
         ["Client Secret", config.hasClientSecret ? "present" : "missing", config.hasClientSecret],
         ["OAuth Token", config.hasAccessToken ? "present" : "missing", config.hasAccessToken],
+        ["Refresh Token", config.hasRefreshToken ? "available" : "missing", config.hasRefreshToken],
         ["Broadcaster", config.broadcasterLogin || "missing", Boolean(config.broadcasterLogin)],
         ["Bot", config.botLogin || "missing", Boolean(config.botLogin)],
         ["Scopes", (config.scopes || []).join(", ") || "missing", Boolean((config.scopes || []).length)],
-        ["Token", config.token || "not connected", Boolean(config.token)]
+        ["Token", config.token || "not connected", Boolean(config.token)],
+        ["Expires", config.tokenExpiresAt || "unknown", Boolean(config.tokenExpiresAt)]
       ]),
       required.length ? list(required.map((item) => `Missing required config: ${item}`), "warn") : callout("Required config fields are present.", "ok")
     ]),
@@ -1018,10 +1020,12 @@ function renderSetupGuide() {
           ]),
           statusGrid([
             ["Connected", config.hasAccessToken ? "yes" : "no", config.hasAccessToken],
+            ["Refresh token", config.hasRefreshToken ? "available" : "missing", config.hasRefreshToken],
             ["Bot account detected", config.hasBotUserId ? config.botLogin || "yes" : "not yet", config.hasBotUserId],
             ["user:read:chat", hasScope("user:read:chat") ? "granted" : "missing", hasScope("user:read:chat")],
             ["user:write:chat", hasScope("user:write:chat") ? "granted" : "missing", hasScope("user:write:chat")]
           ]),
+          config.hasAccessToken ? callout("VaexCore will refresh expired Twitch access tokens automatically. If refresh fails, disconnect and reconnect Twitch.", "info") : null,
           botLoginReconnectCallout(config),
           state.oauthNotice ? callout(state.oauthNotice.text, state.oauthNotice.tone) : null,
           canConnect ? null : callout("Enter credentials and usernames before connecting Twitch.", "warn")
@@ -1107,6 +1111,7 @@ function renderValidationSummary() {
 
   return statusGrid([
     ["Token valid", state.status?.runtime?.tokenValid ? "yes" : "not validated", state.status?.runtime?.tokenValid],
+    ["Refresh available", config.hasRefreshToken ? "yes" : "missing", config.hasRefreshToken],
     ["Scopes correct", hasRequiredScopes() ? "yes" : "not validated", hasRequiredScopes()],
     ["Bot identity resolved", config.hasBotUserId ? "yes" : "not validated", config.hasBotUserId],
     ["Broadcaster identity resolved", config.hasBroadcasterUserId ? "yes" : "not validated", config.hasBroadcasterUserId]

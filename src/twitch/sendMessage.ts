@@ -6,6 +6,7 @@ import { explainTwitchHttpError } from "./errors";
 type SendMessageOptions = {
   clientId: string;
   accessToken: string;
+  accessTokenProvider?: () => string | Promise<string>;
   broadcasterId: string;
   senderId: string;
   logger: Logger;
@@ -24,12 +25,13 @@ export class TwitchChatSender {
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 10_000);
 
     try {
+      const accessToken = await this.getAccessToken();
       response = await fetch("https://api.twitch.tv/helix/chat/messages", {
         method: "POST",
         signal: controller.signal,
         headers: createTwitchHeaders({
           clientId: this.options.clientId,
-          accessToken: this.options.accessToken
+          accessToken
         }),
         body: JSON.stringify({
           broadcaster_id: this.options.broadcasterId,
@@ -110,6 +112,12 @@ export class TwitchChatSender {
     );
 
     return { status: "sent" };
+  }
+
+  private async getAccessToken() {
+    return this.options.accessTokenProvider
+      ? this.options.accessTokenProvider()
+      : this.options.accessToken;
   }
 }
 

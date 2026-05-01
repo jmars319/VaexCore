@@ -56,6 +56,12 @@ import {
   requiredTwitchScopes,
   validateToken
 } from "../twitch/validate";
+import {
+  getTokenExpiresAt,
+  refreshStoredTwitchToken,
+  type TwitchOAuthTokenResponse,
+  validateStoredTwitchToken
+} from "../twitch/tokenManager";
 
 export type SetupServerHandle = {
   url: string;
@@ -535,6 +541,7 @@ const getSafeConfig = () => {
     hasClientId: Boolean(twitch.clientId),
     hasClientSecret: Boolean(twitch.clientSecret),
     hasAccessToken: Boolean(twitch.accessToken),
+    hasRefreshToken: Boolean(twitch.refreshToken),
     hasBroadcasterUserId: Boolean(twitch.broadcasterUserId),
     hasBotUserId: Boolean(twitch.botUserId),
     broadcasterLogin: twitch.broadcasterLogin ?? "",
@@ -542,6 +549,7 @@ const getSafeConfig = () => {
     redirectUri: twitch.redirectUri ?? defaultRedirectUri,
     requiredScopes: requiredTwitchScopes,
     scopes: twitch.scopes,
+    tokenExpiresAt: twitch.tokenExpiresAt ?? "",
     tokenValidatedAt: twitch.tokenValidatedAt ?? "",
     token: twitch.accessToken ? maskToken(twitch.accessToken) : ""
   };
@@ -661,7 +669,7 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
     redirectUri: twitch.redirectUri ?? defaultRedirectUri
   });
   const validation = await validateToken(tokens.access_token);
-  const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+  const expiresAt = getTokenExpiresAt(tokens.expires_in);
   const tokenLogin = normalizeTwitchLogin(validation.login);
   const configuredBotLogin = twitch.botLogin
     ? normalizeTwitchLogin(twitch.botLogin)
@@ -718,8 +726,42 @@ const validateSetup = async () => {
     return { ok: false, checks };
   }
 
-  const token = await validateToken(twitch.accessToken);
-  pass("Token valid", `Token belongs to ${token.login}.`);
+  let validated: Awaited<ReturnType<typeof validateStoredTwitchToken>>;
+
+  try {
+    validated = await validateStoredTwitchToken({ secrets, logger });
+  } catch (error) {
+    const detail = safeErrorMessage(
+      error,
+      "Twitch token validation failed. Reconnect Twitch and try again."
+    );
+    fail("OAuth token", detail);
+    return { ok: false, checks, error: detail };
+  }
+
+  const activeSecrets = validated.secrets;
+  const activeTwitch = validated.twitch;
+  const token = validated.token;
+  const activeAccessToken = activeTwitch.accessToken;
+  const activeClientId = activeTwitch.clientId ?? twitch.clientId;
+
+  if (!activeClientId || !activeAccessToken) {
+    fail("OAuth token", "Validated Twitch token was not available after refresh.");
+    return { ok: false, checks };
+  }
+
+  pass(
+    validated.refreshed ? "Token refreshed" : "Token valid",
+    validated.refreshed
+      ? `Access token refreshed for ${token.login}.`
+      : `Token belongs to ${token.login}.`
+  );
+
+  if (token.client_id !== activeClientId) {
+    fail("Twitch app", "OAuth token belongs to a different Twitch application.");
+  } else {
+    pass("Twitch app", "OAuth token matches the saved Client ID.");
+  }
 
   const missingScopes = requiredTwitchScopes.filter(
     (scope) => !token.scopes.includes(scope)
@@ -731,16 +773,18 @@ const validateSetup = async () => {
     pass("Required scopes", token.scopes.join(", "));
   }
 
-  const botUser = twitch.botLogin
+  const botLogin = activeTwitch.botLogin ?? twitch.botLogin;
+  const broadcasterLogin = activeTwitch.broadcasterLogin ?? twitch.broadcasterLogin;
+  const botUser = botLogin
     ? await getTwitchUserByLogin(
-        { clientId: twitch.clientId, accessToken: twitch.accessToken },
-        twitch.botLogin
+        { clientId: activeClientId, accessToken: activeAccessToken },
+        botLogin
       )
     : undefined;
-  const broadcasterUser = twitch.broadcasterLogin
+  const broadcasterUser = broadcasterLogin
     ? await getTwitchUserByLogin(
-        { clientId: twitch.clientId, accessToken: twitch.accessToken },
-        twitch.broadcasterLogin
+        { clientId: activeClientId, accessToken: activeAccessToken },
+        broadcasterLogin
       )
     : undefined;
 
@@ -763,7 +807,7 @@ const validateSetup = async () => {
 
   const setupOk = checks.every((check) => check.ok);
   const nextTwitch: LocalSecrets["twitch"] = {
-    ...twitch,
+    ...activeTwitch,
     scopes: token.scopes,
     tokenValidatedAt: setupOk ? new Date().toISOString() : undefined,
     botUserId: undefined,
@@ -781,7 +825,7 @@ const validateSetup = async () => {
   }
 
   writeLocalSecrets({
-    ...secrets,
+    ...activeSecrets,
     twitch: nextTwitch
   });
 
@@ -811,15 +855,7 @@ const sendTestMessage = async () => {
     return { ok: false, error: "Setup is missing resolved Twitch IDs." };
   }
 
-  const sender = new TwitchChatSender({
-    clientId: twitch.clientId,
-    accessToken: twitch.accessToken,
-    broadcasterId: twitch.broadcasterUserId,
-    senderId: twitch.botUserId,
-    logger
-  });
-
-  const result = await sender.send("VaexCore setup test.");
+  const result = await sendConfiguredChatMessage("VaexCore setup test.");
   const structured = typeof result === "string" ? { status: result } : result;
   return {
     ok: structured.status === "sent",
@@ -829,19 +865,25 @@ const sendTestMessage = async () => {
 };
 
 const getOperatorStatus = async () => {
-  const config = getSafeConfig();
+  let config = getSafeConfig();
   let tokenValid = false;
   let requiredScopesPresent = false;
+  let tokenRefreshed = false;
 
   try {
     const secrets = readLocalSecrets();
-    const token = secrets.twitch.accessToken
-      ? await validateToken(secrets.twitch.accessToken)
+    const validation = secrets.twitch.accessToken
+      ? await validateStoredTwitchToken({ secrets, logger })
       : undefined;
+    const token = validation?.token;
+    tokenRefreshed = Boolean(validation?.refreshed);
     tokenValid = Boolean(token);
     requiredScopesPresent = token
       ? requiredTwitchScopes.every((scope) => token.scopes.includes(scope))
       : false;
+    if (tokenRefreshed) {
+      config = getSafeConfig();
+    }
   } catch {
     tokenValid = false;
     requiredScopesPresent = false;
@@ -859,6 +901,7 @@ const getOperatorStatus = async () => {
       botLogin: config.botLogin,
       broadcasterLogin: config.broadcasterLogin,
       tokenValid,
+      tokenRefreshed,
       requiredScopesPresent,
       botProcess: getBotProcessSnapshot(),
       eventSubConnected: botProcess.eventSubConnected,
@@ -1939,15 +1982,54 @@ const sendConfiguredChatMessage = async (message: string) => {
     };
   }
 
-  const sender = new TwitchChatSender({
+  const result = await createSetupChatSender(twitch).send(message);
+  const structured = typeof result === "string" ? { status: result } : result;
+
+  if (structured.status !== "failed" || structured.failureCategory !== "auth") {
+    return result;
+  }
+
+  try {
+    const refreshed = await refreshStoredTwitchToken({
+      secrets,
+      expectedClientId: twitch.clientId,
+      expectedBotUserId: twitch.botUserId,
+      expectedBotLogin: twitch.botLogin,
+      logger
+    });
+
+    logger.warn(
+      { failureCategory: structured.failureCategory },
+      "Outbound chat auth failed; token refreshed and message will be retried once"
+    );
+
+    return createSetupChatSender(refreshed.twitch).send(message);
+  } catch (error) {
+    return {
+      status: "failed" as const,
+      failureCategory: "auth" as const,
+      reason: safeErrorMessage(error, "Twitch token refresh failed. Reconnect Twitch.")
+    };
+  }
+};
+
+const createSetupChatSender = (twitch: LocalSecrets["twitch"]) => {
+  if (
+    !twitch.clientId ||
+    !twitch.accessToken ||
+    !twitch.broadcasterUserId ||
+    !twitch.botUserId
+  ) {
+    throw new Error("Setup is missing resolved Twitch IDs.");
+  }
+
+  return new TwitchChatSender({
     clientId: twitch.clientId,
     accessToken: twitch.accessToken,
     broadcasterId: twitch.broadcasterUserId,
     senderId: twitch.botUserId,
     logger
   });
-
-  return sender.send(message);
 };
 
 const getGiveawayTemplates = () => ({
@@ -2792,7 +2874,7 @@ const exchangeCode = async (input: {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
-}) => {
+}): Promise<TwitchOAuthTokenResponse & { refresh_token: string }> => {
   const params = new URLSearchParams({
     client_id: input.clientId,
     client_secret: input.clientSecret,
@@ -2811,12 +2893,18 @@ const exchangeCode = async (input: {
     throw new Error(`Twitch OAuth exchange failed: ${response.status} ${body}`);
   }
 
-  return (await response.json()) as {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-    scope: string[];
-    token_type: string;
+  const tokens = (await response.json()) as Partial<TwitchOAuthTokenResponse>;
+
+  if (!tokens.access_token || !tokens.refresh_token || !tokens.expires_in) {
+    throw new Error("Twitch OAuth exchange did not return usable access and refresh tokens.");
+  }
+
+  return {
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+    expires_in: tokens.expires_in,
+    scope: tokens.scope ?? [],
+    token_type: tokens.token_type ?? "bearer"
   };
 };
 

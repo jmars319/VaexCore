@@ -12,6 +12,11 @@ import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 import { createRuntimeStatus, type RuntimeStatus } from "./runtimeStatus";
 import { registerStatusCommands } from "./statusCommands";
 import { validateLiveTwitch } from "../twitch/validate";
+import {
+  isInvalidTwitchAccessTokenError,
+  refreshStoredTwitchToken
+} from "../twitch/tokenManager";
+import { redactSecrets } from "./security";
 
 type BotOptions = {
   env: LiveEnv;
@@ -26,8 +31,10 @@ export class VaexCoreBot {
   private readonly db: DbClient;
   private readonly runtimeStatus: RuntimeStatus;
   private pendingLivePingConfirmation = false;
+  private twitchAccessToken: string;
 
   constructor(private readonly options: BotOptions) {
+    this.twitchAccessToken = options.env.twitchUserAccessToken;
     this.runtimeStatus = createRuntimeStatus(options.env.mode);
     this.db = createDbClient(options.env.databaseUrl);
     const outboundHistory = createOutboundHistory(this.db);
@@ -35,6 +42,7 @@ export class VaexCoreBot {
     const sender = new TwitchChatSender({
       clientId: options.env.twitchClientId,
       accessToken: options.env.twitchUserAccessToken,
+      accessTokenProvider: () => this.twitchAccessToken,
       broadcasterId: options.env.twitchBroadcasterUserId,
       senderId: options.env.twitchBotUserId,
       logger: options.logger,
@@ -45,7 +53,7 @@ export class VaexCoreBot {
 
     this.messageQueue = new MessageQueue({
       logger: options.logger,
-      send: (message) => sender.send(message),
+      send: (message) => this.sendChatMessage(sender, message),
       onEvent: (event) => outboundHistory.record({
         ...event,
         source: "bot"
@@ -81,11 +89,13 @@ export class VaexCoreBot {
       eventSubUrl: options.env.twitchEventSubUrl,
       clientId: options.env.twitchClientId,
       accessToken: options.env.twitchUserAccessToken,
+      accessTokenProvider: () => this.twitchAccessToken,
       broadcasterUserId: options.env.twitchBroadcasterUserId,
       botUserId: options.env.twitchBotUserId,
       logger: options.logger,
       debugPayloads: options.env.debug,
       runtimeStatus: this.runtimeStatus,
+      onAuthFailure: () => this.refreshRuntimeAccessToken("eventsub chat subscription"),
       onChatMessage: (event) => this.handleChatMessage(event)
     });
 
@@ -99,13 +109,7 @@ export class VaexCoreBot {
       "VaexCore LIVE MODE -- waiting for chat confirmation (!ping)"
     );
 
-    await validateLiveTwitch({
-      clientId: this.options.env.twitchClientId,
-      accessToken: this.options.env.twitchUserAccessToken,
-      broadcasterUserId: this.options.env.twitchBroadcasterUserId,
-      botUserId: this.options.env.twitchBotUserId,
-      logger: this.options.logger
-    });
+    await this.validateLiveTwitchWithRefresh();
 
     this.startupChecklist.pass("bot user ID present", {
       botUserId: this.options.env.twitchBotUserId
@@ -134,6 +138,84 @@ export class VaexCoreBot {
     this.messageQueue.stop();
     await this.eventSubClient.close();
     this.db.close();
+  }
+
+  private async validateLiveTwitchWithRefresh() {
+    try {
+      await this.validateLiveTwitchWithCurrentToken();
+      return;
+    } catch (error) {
+      if (!isInvalidTwitchAccessTokenError(error)) {
+        throw error;
+      }
+
+      const refreshed = await this.refreshRuntimeAccessToken("startup validation");
+
+      if (!refreshed) {
+        throw error;
+      }
+
+      await this.validateLiveTwitchWithCurrentToken();
+    }
+  }
+
+  private validateLiveTwitchWithCurrentToken() {
+    return validateLiveTwitch({
+      clientId: this.options.env.twitchClientId,
+      accessToken: this.twitchAccessToken,
+      broadcasterUserId: this.options.env.twitchBroadcasterUserId,
+      botUserId: this.options.env.twitchBotUserId,
+      logger: this.options.logger
+    });
+  }
+
+  private async sendChatMessage(sender: TwitchChatSender, message: string) {
+    const result = await sender.send(message);
+    const structured = typeof result === "string" ? { status: result } : result;
+
+    if (structured.status !== "failed" || structured.failureCategory !== "auth") {
+      return result;
+    }
+
+    const refreshed = await this.refreshRuntimeAccessToken("outbound chat send");
+
+    if (!refreshed) {
+      return result;
+    }
+
+    this.options.logger.warn(
+      { failureCategory: structured.failureCategory },
+      "Outbound chat auth failed; token refreshed and message will be retried once"
+    );
+
+    return sender.send(message);
+  }
+
+  private async refreshRuntimeAccessToken(reason: string) {
+    try {
+      const refreshed = await refreshStoredTwitchToken({
+        expectedClientId: this.options.env.twitchClientId,
+        expectedBotUserId: this.options.env.twitchBotUserId,
+        logger: this.options.logger
+      });
+
+      if (!refreshed.twitch.accessToken) {
+        throw new Error("Refreshed Twitch token was not saved.");
+      }
+
+      this.twitchAccessToken = refreshed.twitch.accessToken;
+      this.options.logger.warn(
+        { reason },
+        "Twitch OAuth token refreshed for live bot runtime"
+      );
+      return true;
+    } catch (error) {
+      this.options.logger.error(
+        { error: redactSecrets(error), reason },
+        "Twitch OAuth token refresh failed for live bot runtime"
+      );
+      return false;
+    }
   }
 
   private async handleChatMessage(message: ChatMessage) {

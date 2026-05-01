@@ -15,11 +15,13 @@ type EventSubOptions = {
   eventSubUrl: string;
   clientId: string;
   accessToken: string;
+  accessTokenProvider?: () => string | Promise<string>;
   broadcasterUserId: string;
   botUserId: string;
   logger: Logger;
   debugPayloads: boolean;
   runtimeStatus: RuntimeStatus;
+  onAuthFailure?: () => Promise<boolean>;
   onChatMessage: (message: ChatMessage) => Promise<void> | void;
 };
 
@@ -281,7 +283,7 @@ export class TwitchEventSubClient {
         method: "POST",
         headers: createTwitchHeaders({
           clientId: this.options.clientId,
-          accessToken: this.options.accessToken
+          accessToken: await this.getAccessToken()
         }),
         body: JSON.stringify({
           type: "channel.chat.message",
@@ -303,6 +305,18 @@ export class TwitchEventSubClient {
           "Chat subscription created"
         );
         return;
+      }
+
+      if (response.status === 401 && this.options.onAuthFailure) {
+        const refreshed = await this.options.onAuthFailure();
+
+        if (refreshed) {
+          this.options.logger.warn(
+            { attempt },
+            "EventSub chat subscription auth failed; token refreshed and request will be retried"
+          );
+          continue;
+        }
       }
 
       const error = await explainTwitchHttpError(
@@ -340,6 +354,12 @@ export class TwitchEventSubClient {
       this.reconnectTimer = undefined;
       void this.connect();
     }, delayMs);
+  }
+
+  private async getAccessToken() {
+    return this.options.accessTokenProvider
+      ? this.options.accessTokenProvider()
+      : this.options.accessToken;
   }
 
   private isDuplicate(messageId: string) {

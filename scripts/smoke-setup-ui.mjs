@@ -51,6 +51,8 @@ async function runSmoke() {
   assert(appJs.includes("npm run dev:app-config"), "setup guide points packaged app users at app-config live runtime");
   assert(appJs.includes("Start Bot") && appJs.includes("Stop Bot"), "setup UI exposes bot runtime controls");
   assert(appJs.includes("Saved Client ID and Client Secret are intentionally not shown"), "settings UI explains masked credentials");
+  assert(appJs.includes("Refresh Token"), "settings UI reports refresh-token availability");
+  assert(appJs.includes("refresh expired Twitch access tokens automatically"), "setup guide explains automatic token refresh");
   assert(appJs.includes("giveawayDraft"), "giveaway form uses draft state across refreshes");
   assert(appJs.includes("updateGiveawayDraft"), "giveaway inputs preserve operator edits during polling");
   assert(appJs.includes("Outbound Chat History"), "setup UI exposes outbound chat history");
@@ -108,10 +110,13 @@ async function runSmoke() {
   assert(setupServerJs.includes("retryDelayMs"), "setup server reports retry timing");
   assert(setupServerJs.includes("operator_message_templates"), "setup server stores operator message presets locally");
   assert(setupServerJs.includes("/api/operator-messages/send"), "setup server exposes operator message send route");
+  assert(setupServerJs.includes("Token refreshed"), "setup server reports automatic token refresh during validation");
+  assert(setupServerJs.includes("Twitch token refresh failed"), "setup server can refresh expired Twitch access tokens");
   assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
   assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
   assert(liveBotJs.includes("failureCategory"), "standalone bot logs outbound failure categories");
+  assert(liveBotJs.includes("Twitch OAuth token refreshed for live bot runtime"), "standalone bot can refresh expired access tokens");
   assert(styles.includes(".tab-panel"), "styles asset loaded");
   assert(styles.includes(".setup-step"), "setup guide styles loaded");
   assert(styles.includes(".runtime-log"), "bot runtime log styles loaded");
