@@ -1,6 +1,7 @@
 const tabs = [
   ["dashboard", "Dashboard"],
   ["live-mode", "Live Mode"],
+  ["commands", "Commands"],
   ["giveaways", "Giveaways"],
   ["chat-tools", "Chat Tools"],
   ["testing", "Testing"],
@@ -14,6 +15,10 @@ const state = {
   config: null,
   status: null,
   giveaway: null,
+  commands: [],
+  commandHistory: [],
+  commandSummary: { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 },
+  commandReservedNames: [],
   templates: [],
   operatorMessages: [],
   reminder: null,
@@ -26,11 +31,15 @@ const state = {
   busy: new Set(),
   entrantFilter: "",
   winnerFilter: "all",
+  commandFilter: "",
+  selectedCommandId: null,
   message: { text: "", tone: "muted" },
   testResult: null,
+  commandPreview: null,
   validationChecks: [],
   testMessageSent: false,
   settingsDraft: {},
+  commandDraft: {},
   giveawayDraft: {},
   templateDraft: {},
   operatorTemplateDraft: {},
@@ -98,6 +107,14 @@ const api = {
   saveOperatorMessages: (templates) => api.post("/api/operator-messages", { templates }),
   resetOperatorMessages: () => api.post("/api/operator-messages/reset"),
   sendOperatorMessage: (id, confirmed = false) => api.post("/api/operator-messages/send", { id, confirmed }),
+  commands: () => api.get("/api/commands"),
+  saveCommand: (body) => api.post("/api/commands", body),
+  enableCommand: (id, enabled) => api.post("/api/commands/enable", { id, enabled }),
+  duplicateCommand: (id) => api.post("/api/commands/duplicate", { id }),
+  deleteCommand: (id) => api.post("/api/commands/delete", { id }),
+  exportCommands: () => api.get("/api/commands/export"),
+  importCommands: (body) => api.post("/api/commands/import", body),
+  previewCommand: (body) => api.post("/api/commands/preview", body),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
 };
@@ -199,6 +216,7 @@ function renderTab(id) {
   const body = {
     dashboard: renderDashboard,
     "live-mode": renderLiveMode,
+    commands: renderCommands,
     giveaways: renderGiveaways,
     "chat-tools": renderChatTools,
     testing: renderTesting,
@@ -737,6 +755,119 @@ function renderPostStreamRecapCard() {
       })
     ])
   ]);
+}
+
+function renderCommands() {
+  const commands = filteredCustomCommands();
+  const selected = selectedCustomCommand();
+  const history = state.commandHistory || [];
+  const reservedNames = (state.commandReservedNames || []).map((name) => `!${name}`).join(", ");
+
+  return [
+    sectionHeader("Commands", "Manage local custom chat commands, permissions, cooldowns, and usage history.",
+      h("div", { className: "actions section-actions" }, [
+        actionButton("New command", { id: "newCommand", variant: "secondary", onClick: newCustomCommand }),
+        actionButton("Refresh", { id: "refreshCommands", variant: "secondary", busyKey: "refresh", onClick: refreshAll })
+      ])
+    ),
+    card("Command Library", [
+      statusGrid([
+        ["Total", state.commandSummary.total || 0, true],
+        ["Enabled", state.commandSummary.enabled || 0, true],
+        ["Disabled", state.commandSummary.disabled || 0, Number(state.commandSummary.disabled || 0) === 0],
+        ["Aliases", state.commandSummary.aliases || 0, true],
+        ["Uses", state.commandSummary.uses || 0, true]
+      ]),
+      h("div", { className: "toolbar" }, [
+        formRow("Search commands", h("input", {
+          id: "commandFilter",
+          placeholder: "filter by command or alias",
+          onInput: (event) => {
+            state.commandFilter = event.target.value;
+            render();
+          }
+        })),
+        h("span", { className: "count", text: `${commands.length} of ${(state.commands || []).length} visible` })
+      ]),
+      dataTable(["Command", "State", "Permission", "Cooldowns", "Aliases", "Uses", "Actions"], commands.map((command) => [
+        `!${command.name}`,
+        statusChip(command.enabled ? "enabled" : "disabled"),
+        commandPermissionChip(command.permission),
+        `${command.globalCooldownSeconds}s global / ${command.userCooldownSeconds}s user`,
+        command.aliases.length ? command.aliases.map((alias) => `!${alias}`).join(", ") : "",
+        `${command.useCount || 0}${command.lastUsedAt ? ` last ${command.lastUsedAt}` : ""}`,
+        h("div", { className: "actions inline-actions table-actions" }, [
+          actionButton("Edit", { id: `command-edit-${command.id}`, variant: "secondary", onClick: () => editCustomCommand(command.id) }),
+          actionButton(command.enabled ? "Disable" : "Enable", { id: `command-enable-${command.id}`, variant: "secondary", busyKey: "commandEnable", onClick: () => toggleCustomCommand(command.id, !command.enabled) }),
+          actionButton("Duplicate", { id: `command-duplicate-${command.id}`, variant: "secondary", busyKey: "commandDuplicate", onClick: () => duplicateCustomCommand(command.id) }),
+          actionButton("Delete", { id: `command-delete-${command.id}`, variant: "danger", busyKey: "commandDelete", onClick: () => deleteCustomCommand(command.id, command.name) })
+        ])
+      ])),
+      reservedNames ? callout(`Reserved names: ${reservedNames}`, "muted") : null
+    ]),
+    card("Command Editor", [
+      selected ? callout(`Editing !${selected.name}`, selected.enabled ? "ok" : "warn") : callout("Create a new command or select one from the library.", "muted"),
+      h("div", { className: "grid three" }, [
+        formRow("Command name", h("input", { id: "commandName", placeholder: "discord", onInput: updateCommandDraft })),
+        formRow("Permission", h("select", { id: "commandPermission", onChange: updateCommandDraft }, [
+          option("viewer", "viewer"),
+          option("moderator", "moderator"),
+          option("broadcaster", "broadcaster")
+        ])),
+        h("label", { className: "inline-check editor-check" }, [
+          h("input", { id: "commandEnabled", type: "checkbox", onChange: updateCommandDraft }),
+          "Enabled"
+        ]),
+        formRow("Global cooldown seconds", h("input", { id: "commandGlobalCooldown", type: "number", min: "0", max: "86400", onInput: updateCommandDraft })),
+        formRow("User cooldown seconds", h("input", { id: "commandUserCooldown", type: "number", min: "0", max: "86400", onInput: updateCommandDraft })),
+        formRow("Aliases", h("textarea", { id: "commandAliases", placeholder: "links\nsocials", onInput: updateCommandDraft }))
+      ]),
+      formRow("Response variants", h("textarea", {
+        id: "commandResponses",
+        className: "command-response-editor",
+        placeholder: "Join the Discord: https://example.com\n{user}, Discord is at https://example.com",
+        onInput: updateCommandDraft
+      })),
+      callout("Placeholders: {user}, {displayName}, {login}, {args}, {arg1} through {arg9}, {target}, {count}. Put each random response variant on its own line.", "info"),
+      h("div", { className: "grid three" }, [
+        formRow("Preview actor", h("input", { id: "commandPreviewActor", placeholder: "viewer" })),
+        formRow("Preview role", h("select", { id: "commandPreviewRole" }, [
+          option("viewer", "viewer"),
+          option("mod", "mod"),
+          option("broadcaster", "broadcaster")
+        ])),
+        formRow("Preview args", h("input", { id: "commandPreviewArgs", placeholder: "target extra text" }))
+      ]),
+      h("div", { className: "actions" }, [
+        actionButton("Save command", { id: "saveCommand", onClick: saveCustomCommand }),
+        actionButton("Preview response", { id: "previewCommand", variant: "secondary", onClick: previewCustomCommand }),
+        actionButton("Run test command", { id: "testCustomCommand", variant: "secondary", onClick: testCustomCommand })
+      ]),
+      renderCommandPreview(),
+      renderTestResult()
+    ]),
+    card("Import And Export", [
+      h("div", { className: "actions" }, [
+        actionButton("Export commands JSON", { id: "exportCommands", variant: "secondary", onClick: exportCustomCommands }),
+        actionButton("Import commands JSON", { id: "importCommands", variant: "secondary", onClick: importCustomCommands })
+      ]),
+      formRow("Import JSON", h("textarea", {
+        id: "commandImportJson",
+        className: "command-import",
+        placeholder: "{\"commands\":[...]}"
+      }))
+    ]),
+    card("Recent Command Uses", [
+      dataTable(["Timestamp", "Command", "Alias", "User", "Response"], history.slice(0, 20).map((entry) => [
+        entry.createdAt || "",
+        `!${entry.commandName}`,
+        entry.aliasUsed && entry.aliasUsed !== entry.commandName ? `!${entry.aliasUsed}` : "",
+        entry.userLogin || "",
+        formatMessagePreview(entry.responseText || "")
+      ]))
+    ]),
+    message()
+  ];
 }
 
 function renderGiveaways() {
@@ -1704,15 +1835,53 @@ function winnerStatus(winner) {
   return h("span", {}, chips.map((chip) => h("span", { className: `chip ${chip === "rerolled" ? "warn" : "ok"}`, text: chip })));
 }
 
+function selectedCustomCommand() {
+  return (state.commands || []).find((command) => Number(command.id) === Number(state.selectedCommandId));
+}
+
+function filteredCustomCommands() {
+  const query = state.commandFilter.trim().replace(/^!/, "").toLowerCase();
+  const commands = state.commands || [];
+
+  if (!query) {
+    return commands;
+  }
+
+  return commands.filter((command) =>
+    command.name.includes(query) ||
+    (command.aliases || []).some((alias) => alias.includes(query)) ||
+    command.permission.includes(query)
+  );
+}
+
 function statusChip(status) {
   const tone = ["sent", "resent"].includes(status)
     ? "ok"
     : status === "failed"
       ? "bad"
-      : ["not-reached", "none"].includes(status)
+      : status === "enabled"
+        ? "ok"
+        : status === "disabled"
+          ? "muted"
+          : ["not-reached", "none"].includes(status)
         ? "muted"
         : "warn";
   return h("span", { className: `chip ${tone}`, text: status || "unknown" });
+}
+
+function commandPermissionChip(permission) {
+  const tone = permission === "viewer" ? "ok" : permission === "moderator" ? "warn" : "bad";
+  return h("span", { className: `chip ${tone}`, text: permission || "viewer" });
+}
+
+function renderCommandPreview() {
+  if (!state.commandPreview) {
+    return callout("No command preview has run yet.", "muted");
+  }
+
+  return state.commandPreview.ok
+    ? callout(state.commandPreview.response || "Preview produced no response.", "ok")
+    : callout(state.commandPreview.error || "Preview failed.", "bad");
 }
 
 function shortId(id = "") {
@@ -1935,10 +2104,11 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, templates, operatorMessages, reminder, audit, outbound, diagnostics] = await Promise.all([
+    const [config, status, giveaway, commands, templates, operatorMessages, reminder, audit, outbound, diagnostics] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
+      api.commands(),
       api.templates(),
       api.operatorMessages(),
       api.reminder(),
@@ -1949,6 +2119,7 @@ async function refreshAll() {
     state.config = config;
     state.status = status;
     state.giveaway = giveaway;
+    setCommandState(commands);
     state.templates = templates.templates || [];
     state.operatorMessages = operatorMessages.templates || [];
     state.reminder = reminder.reminder || {};
@@ -1962,9 +2133,10 @@ async function refreshAll() {
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, operatorMessages, reminder, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages()]);
+  const [status, giveaway, commands, operatorMessages, reminder, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages()]);
   state.status = status;
   state.giveaway = giveaway;
+  setCommandState(commands);
   state.operatorMessages = operatorMessages.templates || [];
   state.reminder = reminder.reminder || {};
   state.auditLogs = audit.logs || [];
@@ -1988,6 +2160,18 @@ async function refreshAuditLogs() {
     state.auditLogs = audit.logs || [];
     return { ok: true };
   }, { quiet: true });
+}
+
+function setCommandState(result = {}) {
+  state.commands = result.commands || [];
+  state.commandHistory = result.invocations || [];
+  state.commandSummary = result.summary || { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 };
+  state.commandReservedNames = result.reservedNames || [];
+
+  if (state.selectedCommandId && !state.commands.some((command) => Number(command.id) === Number(state.selectedCommandId))) {
+    state.selectedCommandId = null;
+    state.commandDraft = {};
+  }
 }
 
 async function runAction(key, fn, options = {}) {
@@ -2071,6 +2255,131 @@ async function runLifecycleTest() {
   }, { success: "Lifecycle test completed." });
 }
 
+function newCustomCommand() {
+  state.selectedCommandId = null;
+  state.commandDraft = {
+    commandName: "",
+    commandPermission: "viewer",
+    commandEnabled: true,
+    commandGlobalCooldown: 30,
+    commandUserCooldown: 10,
+    commandAliases: "",
+    commandResponses: ""
+  };
+  state.commandPreview = null;
+  render();
+}
+
+function editCustomCommand(id) {
+  const command = (state.commands || []).find((item) => Number(item.id) === Number(id));
+  if (!command) return;
+  state.selectedCommandId = command.id;
+  state.commandDraft = {};
+  state.commandPreview = null;
+  render();
+  field("commandName")?.focus();
+}
+
+async function saveCustomCommand() {
+  await runAction("saveCommand", async () => {
+    const result = await api.saveCommand(readCommandPayload());
+    setCommandState(result);
+    state.selectedCommandId = result.command?.id ?? state.selectedCommandId;
+    state.commandDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Custom command saved." });
+}
+
+async function toggleCustomCommand(id, enabled) {
+  await runAction("commandEnable", async () => {
+    const result = await api.enableCommand(id, enabled);
+    setCommandState(result);
+    return result;
+  }, { skipRefresh: true, success: enabled ? "Custom command enabled." : "Custom command disabled." });
+}
+
+async function duplicateCustomCommand(id) {
+  await runAction("commandDuplicate", async () => {
+    const result = await api.duplicateCommand(id);
+    setCommandState(result);
+    state.selectedCommandId = result.command?.id ?? null;
+    state.commandDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Custom command duplicated." });
+}
+
+async function deleteCustomCommand(id, name) {
+  if (!confirm(`Delete !${name}? Usage history remains in the audit log, but the command definition will be removed.`)) {
+    return;
+  }
+
+  await runAction("commandDelete", async () => {
+    const result = await api.deleteCommand(id);
+    setCommandState(result);
+    state.selectedCommandId = null;
+    state.commandDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Custom command deleted." });
+}
+
+async function previewCustomCommand() {
+  await runAction("previewCommand", async () => {
+    const payload = readCommandPayload();
+    const result = await api.previewCommand({
+      commandId: payload.id,
+      responseText: splitLines(field("commandResponses")?.value || "")[0] || "",
+      actor: field("commandPreviewActor")?.value || "viewer",
+      role: field("commandPreviewRole")?.value || "viewer",
+      rawArgs: field("commandPreviewArgs")?.value || "target"
+    });
+    state.commandPreview = result;
+    return result;
+  }, { skipRefresh: true, success: "Command preview rendered." });
+}
+
+async function testCustomCommand() {
+  await runAction("testCustomCommand", async () => {
+    const payload = readCommandPayload();
+    const name = String(payload.name || "").replace(/^!/, "");
+    const args = field("commandPreviewArgs")?.value || "";
+    const result = await api.simulateCommand({
+      actor: field("commandPreviewActor")?.value || "viewer",
+      role: field("commandPreviewRole")?.value || "viewer",
+      command: `!${name}${args ? ` ${args}` : ""}`
+    });
+    state.testResult = result;
+    return result;
+  }, { success: "Custom command test completed." });
+}
+
+async function exportCustomCommands() {
+  await runAction("exportCommands", async () => {
+    const exported = await api.exportCommands();
+    downloadTextFile(
+      `vaexcore-custom-commands-${new Date().toISOString().slice(0, 10)}.json`,
+      `${JSON.stringify(exported, null, 2)}\n`,
+      "application/json"
+    );
+    return { ok: true };
+  }, { skipRefresh: true, success: "Custom commands exported." });
+}
+
+async function importCustomCommands() {
+  const raw = field("commandImportJson")?.value || "";
+  if (!raw.trim()) {
+    state.message = { text: "Paste exported command JSON before importing.", tone: "warn" };
+    render();
+    return;
+  }
+
+  await runAction("importCommands", async () => {
+    const result = await api.importCommands(JSON.parse(raw));
+    setCommandState(result);
+    state.commandDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Custom commands imported." });
+}
+
 async function saveSettings() {
   const payload = readSettingsPayload();
 
@@ -2103,6 +2412,11 @@ async function disconnectTwitch() {
 
 function updateSettingsDraft(event) {
   state.settingsDraft[event.target.id] = event.target.value;
+}
+
+function updateCommandDraft(event) {
+  const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  state.commandDraft[event.target.id] = value;
 }
 
 function updateGiveawayDraft(event) {
@@ -2189,6 +2503,20 @@ function readSettingsPayload() {
   };
 }
 
+function readCommandPayload() {
+  const selected = selectedCustomCommand();
+  return {
+    id: selected?.id,
+    name: field("commandName")?.value || "",
+    permission: field("commandPermission")?.value || "viewer",
+    enabled: Boolean(field("commandEnabled")?.checked),
+    globalCooldownSeconds: Number(field("commandGlobalCooldown")?.value || 0),
+    userCooldownSeconds: Number(field("commandUserCooldown")?.value || 0),
+    aliases: splitLinesAndCommas(field("commandAliases")?.value || ""),
+    responses: splitLines(field("commandResponses")?.value || "")
+  };
+}
+
 function readTemplatePayload() {
   const payload = {};
 
@@ -2201,6 +2529,14 @@ function readTemplatePayload() {
   }
 
   return payload;
+}
+
+function splitLines(value) {
+  return value.split(/\n+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function splitLinesAndCommas(value) {
+  return value.split(/[,\n]+/).map((item) => item.trim()).filter(Boolean);
 }
 
 function readOperatorTemplatePayload() {
@@ -2528,12 +2864,23 @@ function fallbackCommandMessage(result) {
 function syncFormValues() {
   const config = state.config || {};
   const summary = state.giveaway?.summary || {};
+  const selectedCommand = selectedCustomCommand();
   setValue("mode", settingsValue("mode", config.mode || "live"));
   setValue("redirectUri", settingsValue("redirectUri", config.redirectUri || defaultRedirectUri));
   setValue("clientId", settingsValue("clientId", config.hasClientId ? savedCredentialMask : ""));
   setValue("clientSecret", settingsValue("clientSecret", config.hasClientSecret ? savedCredentialMask : ""));
   setValue("broadcasterLogin", settingsValue("broadcasterLogin", config.broadcasterLogin || ""));
   setValue("botLogin", settingsValue("botLogin", config.botLogin || ""));
+  setValue("commandName", commandValue("commandName", selectedCommand?.name || ""));
+  setValue("commandPermission", commandValue("commandPermission", selectedCommand?.permission || "viewer"));
+  setChecked("commandEnabled", commandValue("commandEnabled", selectedCommand?.enabled ?? true));
+  setValue("commandGlobalCooldown", commandValue("commandGlobalCooldown", selectedCommand?.globalCooldownSeconds ?? 30));
+  setValue("commandUserCooldown", commandValue("commandUserCooldown", selectedCommand?.userCooldownSeconds ?? 10));
+  setValue("commandAliases", commandValue("commandAliases", (selectedCommand?.aliases || []).join("\n")));
+  setValue("commandResponses", commandValue("commandResponses", (selectedCommand?.responses || []).join("\n")));
+  setValue("commandPreviewActor", field("commandPreviewActor")?.value || "viewer");
+  setValue("commandPreviewRole", field("commandPreviewRole")?.value || "viewer");
+  setValue("commandPreviewArgs", field("commandPreviewArgs")?.value || "target");
   setValue("giveawayTitle", giveawayValue("giveawayTitle", summary.title || "Community Giveaway"));
   setValue("giveawayKeyword", giveawayValue("giveawayKeyword", summary.keyword || "enter"));
   setValue("winnerCount", giveawayValue("winnerCount", summary.winnerCount || 3));
@@ -2556,6 +2903,10 @@ function syncFormValues() {
 
 function settingsValue(id, fallback) {
   return draftValue(state.settingsDraft, id, fallback);
+}
+
+function commandValue(id, fallback) {
+  return draftValue(state.commandDraft, id, fallback);
 }
 
 function giveawayValue(id, fallback) {

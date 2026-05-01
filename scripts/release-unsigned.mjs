@@ -18,6 +18,7 @@ const steps = [
   ["Clean install smoke", ["npm", "run", "smoke:clean-install"]],
   ["Diagnostics smoke", ["npm", "run", "smoke:diagnostics"]],
   ["Setup UI smoke", ["npm", "run", "smoke:setup"]],
+  ["Custom commands smoke", ["npm", "run", "smoke:commands"]],
   ["Token refresh smoke", ["npm", "run", "smoke:token-refresh"]],
   ["Giveaway readiness smoke", ["npm", "run", "smoke:giveaway"]],
   ["CLI env smoke", ["npm", "run", "smoke:cli-env"]],

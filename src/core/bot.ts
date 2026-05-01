@@ -8,6 +8,7 @@ import { TwitchChatSender } from "../twitch/sendMessage";
 import type { ChatMessage } from "./chatMessage";
 import { StartupChecklist } from "./startupChecklist";
 import { createDbClient, type DbClient } from "../db/client";
+import { registerCommandsModule } from "../modules/commands/commands.module";
 import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 import { createRuntimeStatus, type RuntimeStatus } from "./runtimeStatus";
 import { registerStatusCommands } from "./statusCommands";
@@ -83,6 +84,10 @@ export class VaexCoreBot {
       router: this.commandRouter,
       runtimeStatus: this.runtimeStatus,
       giveawaysService
+    });
+    registerCommandsModule({
+      router: this.commandRouter,
+      db: this.db
     });
 
     this.eventSubClient = new TwitchEventSubClient({

@@ -7,6 +7,7 @@ import { CommandRouter } from "../core/commandRouter";
 import { MessageQueue } from "../core/messageQueue";
 import type { ChatMessage } from "../core/chatMessage";
 import { createDbClient } from "../db/client";
+import { registerCommandsModule } from "../modules/commands/commands.module";
 import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 import { createRuntimeStatus } from "../core/runtimeStatus";
 import { registerStatusCommands } from "../core/statusCommands";
@@ -86,6 +87,10 @@ registerStatusCommands({
   runtimeStatus,
   giveawaysService
 });
+registerCommandsModule({
+  router: commandRouter,
+  db
+});
 
 messageQueue.start();
 
@@ -103,7 +108,7 @@ process.on("SIGINT", () => {
 });
 
 console.log("VaexCore local command mode");
-console.log(`Type chat messages and press Enter. Current live commands: ${env.COMMAND_PREFIX}ping, ${env.COMMAND_PREFIX}enter, ${env.COMMAND_PREFIX}g*`);
+console.log(`Type chat messages and press Enter. Current live commands: ${env.COMMAND_PREFIX}ping, ${env.COMMAND_PREFIX}enter, ${env.COMMAND_PREFIX}g*, and local custom commands`);
 console.log("Optional identity prefix: alice: !enter, mod: !gstatus, broadcaster: !gstart codes=6 keyword=enter");
 
 if (input.isTTY) {

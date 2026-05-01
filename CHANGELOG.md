@@ -4,6 +4,7 @@
 
 Current release state: clean-main unsigned tester cut for wider local testing.
 
+- Milestone 31: custom command center with local command definitions, aliases, permissions, cooldowns, response variants, usage history, import/export, audit logging, runtime fallback handling, and smoke coverage.
 - Milestone 30: versioned tester release cut with clean-main release guard, full git SHA manifests, tester handoff notes, and rebuilt unsigned artifacts.
 
 ## 0.1.0 - Local unsigned tester build

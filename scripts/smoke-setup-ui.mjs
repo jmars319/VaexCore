@@ -37,6 +37,11 @@ async function runSmoke() {
   const styles = await text("/ui/styles.css");
   assert(appJs.includes("CommandRouter") === false, "browser UI does not duplicate router logic");
   assert(appJs.includes("Dashboard") && appJs.includes("Giveaways"), "browser UI has tabs");
+  assert(appJs.includes("Command Library"), "browser UI exposes custom command library");
+  assert(appJs.includes("Response variants"), "custom command editor supports response variants");
+  assert(appJs.includes("Export commands JSON"), "custom command UI can export commands");
+  assert(appJs.includes("Import commands JSON"), "custom command UI can import commands");
+  assert(appJs.includes("Preview response"), "custom command UI can preview responses");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");
   assert(appJs.includes("Open Twitch Developer Console"), "setup guide includes Twitch Developer Console link");
   assert(appJs.includes("Twitch authorization failed"), "setup guide surfaces OAuth errors");
@@ -118,10 +123,15 @@ async function runSmoke() {
   assert(setupServerJs.includes("retryDelayMs"), "setup server reports retry timing");
   assert(setupServerJs.includes("operator_message_templates"), "setup server stores operator message presets locally");
   assert(setupServerJs.includes("/api/operator-messages/send"), "setup server exposes operator message send route");
+  assert(setupServerJs.includes("/api/commands"), "setup server exposes custom command routes");
+  assert(setupServerJs.includes("custom_commands"), "setup server persists custom command definitions");
+  assert(setupServerJs.includes("custom_command_invocations"), "setup server persists custom command usage history");
   assert(setupServerJs.includes("Token refreshed"), "setup server reports automatic token refresh during validation");
   assert(setupServerJs.includes("Twitch token refresh failed"), "setup server can refresh expired Twitch access tokens");
   assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
+  assert(liveBotJs.includes("custom_commands"), "standalone bot reads custom commands");
+  assert(liveBotJs.includes("custom_command_invocations"), "standalone bot writes custom command usage history");
   assert(liveBotJs.includes('source: "bot"') || liveBotJs.includes("source:'bot'"), "standalone bot writes bot-sourced outbound history");
   assert(liveBotJs.includes("failureCategory"), "standalone bot logs outbound failure categories");
   assert(liveBotJs.includes("Twitch OAuth token refreshed for live bot runtime"), "standalone bot can refresh expired access tokens");
@@ -137,6 +147,10 @@ async function runSmoke() {
   assert(initialStatus.runtime.queueHealth.status === "clear", "queue health starts clear");
   assert(initialStatus.runtime.queueHealth.nextAction.includes("Outbound queue"), "queue health explains next action");
   assert(initialStatus.runtime.outboundRecovery.needed === false, "outbound recovery starts clear");
+  const initialCommands = await json("/api/commands");
+  assert(initialCommands.ok === true, "custom command route exists");
+  assert(Array.isArray(initialCommands.commands), "custom command route returns commands");
+  assert(initialCommands.reservedNames.includes("ping"), "custom command route returns reserved names");
 
   const invalidBotStart = await json("/api/bot/start", { method: "POST" });
   assert(invalidBotStart.ok === false, "bot start is blocked before validation");

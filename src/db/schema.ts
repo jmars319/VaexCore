@@ -78,6 +78,52 @@ export const initializeSchema = (db: DbClient) => {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS custom_commands (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      permission TEXT NOT NULL CHECK (permission IN ('viewer', 'moderator', 'broadcaster', 'admin')),
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      global_cooldown_seconds INTEGER NOT NULL DEFAULT 30,
+      user_cooldown_seconds INTEGER NOT NULL DEFAULT 10,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      last_used_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS custom_command_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      command_id INTEGER NOT NULL REFERENCES custom_commands(id) ON DELETE CASCADE,
+      alias TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS custom_command_responses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      command_id INTEGER NOT NULL REFERENCES custom_commands(id) ON DELETE CASCADE,
+      response_text TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS custom_command_user_cooldowns (
+      command_id INTEGER NOT NULL REFERENCES custom_commands(id) ON DELETE CASCADE,
+      user_key TEXT NOT NULL,
+      last_used_at TEXT NOT NULL,
+      PRIMARY KEY (command_id, user_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS custom_command_invocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      command_id INTEGER REFERENCES custom_commands(id) ON DELETE SET NULL,
+      command_name TEXT NOT NULL,
+      alias_used TEXT NOT NULL,
+      user_key TEXT NOT NULL,
+      user_login TEXT NOT NULL,
+      response_text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS giveaway_reminder_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
@@ -96,6 +142,14 @@ export const initializeSchema = (db: DbClient) => {
       ON outbound_messages(updated_at);
     CREATE INDEX IF NOT EXISTS idx_outbound_messages_giveaway_id
       ON outbound_messages(giveaway_id);
+    CREATE INDEX IF NOT EXISTS idx_custom_command_aliases_command_id
+      ON custom_command_aliases(command_id);
+    CREATE INDEX IF NOT EXISTS idx_custom_command_responses_command_id
+      ON custom_command_responses(command_id);
+    CREATE INDEX IF NOT EXISTS idx_custom_command_invocations_created_at
+      ON custom_command_invocations(created_at);
+    CREATE INDEX IF NOT EXISTS idx_custom_command_invocations_command_id
+      ON custom_command_invocations(command_id);
   `);
 
   ensureColumn(db, "outbound_messages", "failure_category", "TEXT NOT NULL DEFAULT 'none'");

@@ -89,6 +89,10 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.section-actions { margin-top: 0; }
+.inline-actions { margin-top: 0; }
+.table-actions { gap: 6px; }
+.table-actions button { min-height: 30px; padding: 5px 8px; font-size: 12px; }
 .destructive-actions { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
 .status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .toolbar { display: flex; gap: 10px; align-items: end; justify-content: space-between; margin-bottom: 10px; }
@@ -175,6 +179,9 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
   font-size: 12px;
   line-height: 1.45;
 }
+.command-response-editor { min-height: 130px; }
+.command-import { min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.editor-check { align-self: end; min-height: 38px; }
 .needs-attention { border-color: var(--warn); }
 .pill, .chip {
   border: 1px solid var(--line);

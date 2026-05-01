@@ -25,8 +25,14 @@ import {
   type OutboundMessageRecord
 } from "../core/outboundHistory";
 import { createRuntimeStatus } from "../core/runtimeStatus";
+import { registerCommandsModule } from "../modules/commands/commands.module";
+import {
+  CustomCommandsService,
+  getReservedCustomCommandNames
+} from "../modules/commands/commands.service";
 import {
   limits,
+  normalizeCommandName,
   normalizeKeyword,
   normalizeLogin as normalizeTwitchLogin,
   parseSafeInteger,
@@ -76,6 +82,7 @@ const logger = createLogger("info");
 const oauthStates = new Map<string, number>();
 const db = createDbClient(databaseUrl);
 const giveawaysService = new GiveawaysService({ db, logger });
+const customCommandsService = new CustomCommandsService(db);
 const giveawayTemplates = createGiveawayTemplateStore(db);
 const operatorMessages = createOperatorMessageTemplateStore(db);
 const setupRuntimeStatus = createRuntimeStatus("local");
@@ -256,6 +263,52 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "POST" && url.pathname === "/api/operator-messages/send") {
     const body = (await readJson(request)) as { id?: string; confirmed?: boolean };
     sendJson(response, 200, await sendOperatorMessage(body));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/commands") {
+    sendJson(response, 200, getCustomCommands());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/commands") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveCustomCommand(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/commands/enable") {
+    const body = (await readJson(request)) as { id?: number; enabled?: boolean };
+    sendJson(response, 200, setCustomCommandEnabled(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/commands/duplicate") {
+    const body = (await readJson(request)) as { id?: number };
+    sendJson(response, 200, duplicateCustomCommand(body.id));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/commands/delete") {
+    const body = (await readJson(request)) as { id?: number };
+    sendJson(response, 200, deleteCustomCommand(body.id));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/commands/export") {
+    sendJson(response, 200, customCommandsService.exportCommands());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/commands/import") {
+    const body = await readJson(request);
+    sendJson(response, 200, importCustomCommands(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/commands/preview") {
+    const body = await readJson(request);
+    sendJson(response, 200, previewCustomCommand(body));
     return;
   }
 
@@ -1021,6 +1074,7 @@ const getDiagnosticsReport = () => {
   const outbound = outboundHistory.summary();
   const giveaway = giveawaysService.getOperatorState();
   const giveawayState = getGiveawayState();
+  const commands = customCommandsService.listCommands();
   const queueHealth = summarizeQueueHealth(queue, outbound);
   const setupUi = getSetupUiDiagnostics();
   const botSnapshot = getBotProcessSnapshot();
@@ -1072,6 +1126,13 @@ const getDiagnosticsReport = () => {
       outboundChat: outbound
     },
     giveaway: summarizeGiveawayState(giveaway),
+    customCommands: {
+      total: commands.length,
+      enabled: commands.filter((command) => command.enabled).length,
+      disabled: commands.filter((command) => !command.enabled).length,
+      aliases: commands.reduce((total, command) => total + command.aliases.length, 0),
+      uses: commands.reduce((total, command) => total + command.useCount, 0)
+    },
     readiness: {
       status: blockers.length > 0 ? "not_ready" : warnings.length > 0 ? "attention" : "ready",
       blockers: blockers.map((check) => `${check.name}: ${check.detail}`),
@@ -1110,6 +1171,14 @@ const getSupportBundle = () => {
     createdAt: log.created_at,
     metadata: safeAuditMetadata(log.metadata_json)
   }));
+  const customCommandInvocations = customCommandsService.getRecentInvocations(50).map((entry) => ({
+    id: entry.id,
+    commandName: entry.commandName,
+    aliasUsed: entry.aliasUsed,
+    userLogin: entry.userLogin,
+    createdAt: entry.createdAt,
+    responsePreview: safeSupportText(entry.responseText).slice(0, 180)
+  }));
   const botLogs = getBotProcessSnapshot().recentLogs.slice(-40).map(safeSupportText);
 
   return {
@@ -1121,7 +1190,8 @@ const getSupportBundle = () => {
     recent: {
       botLogs,
       outbound,
-      audit
+      audit,
+      customCommandInvocations
     },
     recovery: diagnostics.firstRun.recoverySteps
   };
@@ -2279,6 +2349,164 @@ const sendOperatorMessage = async (body: { id?: string; confirmed?: boolean }) =
   };
 };
 
+const getCustomCommands = () => {
+  const commands = customCommandsService.listCommands();
+  const invocations = customCommandsService.getRecentInvocations(50);
+
+  return {
+    ok: true,
+    commands,
+    invocations,
+    reservedNames: getCustomCommandReservedNames(),
+    summary: {
+      total: commands.length,
+      enabled: commands.filter((command) => command.enabled).length,
+      disabled: commands.filter((command) => !command.enabled).length,
+      aliases: commands.reduce((total, command) => total + command.aliases.length, 0),
+      uses: commands.reduce((total, command) => total + command.useCount, 0)
+    }
+  };
+};
+
+const saveCustomCommand = (body: unknown) => {
+  try {
+    const command = customCommandsService.saveCommand(body as Record<string, unknown>, localUiActor, {
+      reservedNames: getCustomCommandReservedNames()
+    });
+    return {
+      ...getCustomCommands(),
+      ok: true,
+      command
+    };
+  } catch (error) {
+    return {
+      ...getCustomCommands(),
+      ok: false,
+      error: safeErrorMessage(error, "Custom command save failed")
+    };
+  }
+};
+
+const setCustomCommandEnabled = (body: { id?: number; enabled?: boolean }) => {
+  try {
+    const command = customCommandsService.setEnabled(
+      parseSafeInteger(body.id, { field: "Command ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      Boolean(body.enabled),
+      localUiActor
+    );
+    return {
+      ...getCustomCommands(),
+      ok: true,
+      command
+    };
+  } catch (error) {
+    return {
+      ...getCustomCommands(),
+      ok: false,
+      error: safeErrorMessage(error, "Custom command update failed")
+    };
+  }
+};
+
+const duplicateCustomCommand = (id: number | undefined) => {
+  try {
+    const command = customCommandsService.duplicateCommand(
+      parseSafeInteger(id, { field: "Command ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      localUiActor
+    );
+    return {
+      ...getCustomCommands(),
+      ok: true,
+      command
+    };
+  } catch (error) {
+    return {
+      ...getCustomCommands(),
+      ok: false,
+      error: safeErrorMessage(error, "Custom command duplicate failed")
+    };
+  }
+};
+
+const deleteCustomCommand = (id: number | undefined) => {
+  try {
+    const deleted = customCommandsService.deleteCommand(
+      parseSafeInteger(id, { field: "Command ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      localUiActor
+    );
+    return {
+      ...getCustomCommands(),
+      ok: true,
+      deleted
+    };
+  } catch (error) {
+    return {
+      ...getCustomCommands(),
+      ok: false,
+      error: safeErrorMessage(error, "Custom command delete failed")
+    };
+  }
+};
+
+const importCustomCommands = (body: unknown) => {
+  try {
+    const commands = customCommandsService.importCommands(body, localUiActor);
+    return {
+      ...getCustomCommands(),
+      ok: true,
+      imported: commands.length
+    };
+  } catch (error) {
+    return {
+      ...getCustomCommands(),
+      ok: false,
+      error: safeErrorMessage(error, "Custom command import failed")
+    };
+  }
+};
+
+const previewCustomCommand = (body: unknown) => {
+  try {
+    const input = body as {
+      commandId?: number;
+      responseText?: unknown;
+      actor?: string;
+      role?: "viewer" | "mod" | "broadcaster";
+      rawArgs?: unknown;
+    };
+    const actor = createLocalChatMessage({
+      login: input.actor || "viewer",
+      role: input.role ?? "viewer",
+      text: "!preview"
+    });
+    return {
+      ok: true,
+      response: customCommandsService.preview({
+        commandId: input.commandId,
+        responseText: input.responseText,
+        actor,
+        rawArgs: input.rawArgs
+      })
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: safeErrorMessage(error, "Custom command preview failed")
+    };
+  }
+};
+
+const getCustomCommandReservedNames = () => {
+  const names = new Set(getReservedCustomCommandNames());
+  const active = giveawaysService.status()?.giveaway.keyword;
+
+  if (active) {
+    names.add(normalizeCommandName(active));
+  }
+
+  return [...names].sort();
+};
+
 const getOutboundMessages = () => ({
   ok: true,
   summary: outboundHistory.summary(),
@@ -3265,6 +3493,10 @@ const simulateCommand = async (body: {
     service: giveawaysService,
     runtimeStatus: setupRuntimeStatus,
     messages: giveawayTemplates
+  });
+  registerCommandsModule({
+    router,
+    db
   });
 
   try {

@@ -1,10 +1,14 @@
 export const limits = {
   chatMessageLength: 450,
   commandLength: 450,
+  commandNameLength: 32,
   giveawayTitleLength: 80,
   keywordLength: 24,
   loginLength: 25,
   displayNameLength: 50,
+  customCommandResponsesMax: 8,
+  customCommandAliasesMax: 8,
+  customCommandCooldownMaxSeconds: 86_400,
   auditMetadataLength: 2000,
   winnerCountMax: 100,
   requestBodyBytes: 64 * 1024
@@ -12,6 +16,7 @@ export const limits = {
 
 const twitchLoginPattern = /^[a-z0-9_]{1,25}$/;
 const keywordPattern = /^[a-z0-9_]{1,24}$/;
+const commandNamePattern = /^[a-z0-9_]{1,32}$/;
 const controlCharacters = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 const invisibleCharacters = /[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
 const secretKeys = /token|secret|authorization|clientSecret|code|refresh/i;
@@ -102,6 +107,22 @@ export const normalizeKeyword = (value: unknown, fallback = "enter") => {
   }
 
   return keyword;
+};
+
+export const normalizeCommandName = (value: unknown, field = "Command name") => {
+  const name = sanitizeText(value, {
+    field,
+    maxLength: limits.commandNameLength,
+    required: true
+  })
+    .replace(/^!/, "")
+    .toLowerCase();
+
+  if (!commandNamePattern.test(name)) {
+    throw new SafeInputError(`${field} must use only letters, numbers, or underscores.`);
+  }
+
+  return name;
 };
 
 export const normalizeLogin = (value: unknown, field = "Username") => {
