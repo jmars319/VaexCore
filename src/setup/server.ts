@@ -24,6 +24,12 @@ import {
   isPendingOutboundStatus,
   type OutboundMessageRecord
 } from "../core/outboundHistory";
+import {
+  createFeatureGateStore,
+  type FeatureGateState,
+  type FeatureGateMode,
+  type FeatureKey
+} from "../core/featureGates";
 import { createRuntimeStatus } from "../core/runtimeStatus";
 import { registerCommandsModule } from "../modules/commands/commands.module";
 import {
@@ -37,6 +43,7 @@ import {
   normalizeLogin as normalizeTwitchLogin,
   parseSafeInteger,
   redactSecrets,
+  redactSecretText,
   safeErrorMessage,
   sanitizeChatMessage,
   sanitizeCommandText,
@@ -82,7 +89,8 @@ const logger = createLogger("info");
 const oauthStates = new Map<string, number>();
 const db = createDbClient(databaseUrl);
 const giveawaysService = new GiveawaysService({ db, logger });
-const customCommandsService = new CustomCommandsService(db);
+const featureGates = createFeatureGateStore(db);
+const customCommandsService = new CustomCommandsService(db, { featureGates });
 const giveawayTemplates = createGiveawayTemplateStore(db);
 const operatorMessages = createOperatorMessageTemplateStore(db);
 const setupRuntimeStatus = createRuntimeStatus("local");
@@ -219,6 +227,17 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
 
   if (request.method === "GET" && url.pathname === "/api/support-bundle") {
     sendJson(response, 200, getSupportBundle());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/feature-gates") {
+    sendJson(response, 200, getFeatureGates());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/feature-gates") {
+    const body = (await readJson(request)) as { key?: FeatureKey; mode?: FeatureGateMode };
+    sendJson(response, 200, setFeatureGate(body));
     return;
   }
 
@@ -956,6 +975,7 @@ const getOperatorStatus = async () => {
   const giveaway = giveawaysService.getOperatorState();
   const queue = chatQueue.snapshot();
   const outbound = outboundHistory.summary();
+  const featureGateStates = featureGates.list();
 
   return {
     ok: true,
@@ -980,6 +1000,7 @@ const getOperatorStatus = async () => {
         ? "Live bot runtime is managed by this setup console."
         : "Start the live bot runtime from Dashboard or Settings to receive chat commands."
     },
+    featureGates: featureGateStates,
     giveaway: summarizeGiveawayState(giveaway)
   };
 };
@@ -1075,6 +1096,7 @@ const getDiagnosticsReport = () => {
   const giveaway = giveawaysService.getOperatorState();
   const giveawayState = getGiveawayState();
   const commands = customCommandsService.listCommands();
+  const featureGateStates = featureGates.list();
   const queueHealth = summarizeQueueHealth(queue, outbound);
   const setupUi = getSetupUiDiagnostics();
   const botSnapshot = getBotProcessSnapshot();
@@ -1087,7 +1109,8 @@ const getDiagnosticsReport = () => {
     queueHealth,
     outbound,
     giveawayState,
-    botSnapshot
+    botSnapshot,
+    featureGates: featureGateStates
   });
   const blockers = checks.filter((check) => !check.ok && check.severity === "blocker");
   const warnings = checks.filter((check) => !check.ok && check.severity === "warning");
@@ -1127,12 +1150,14 @@ const getDiagnosticsReport = () => {
     },
     giveaway: summarizeGiveawayState(giveaway),
     customCommands: {
+      featureGate: featureGates.get("custom_commands"),
       total: commands.length,
       enabled: commands.filter((command) => command.enabled).length,
       disabled: commands.filter((command) => !command.enabled).length,
       aliases: commands.reduce((total, command) => total + command.aliases.length, 0),
       uses: commands.reduce((total, command) => total + command.useCount, 0)
     },
+    featureGates: featureGateStates,
     readiness: {
       status: blockers.length > 0 ? "not_ready" : warnings.length > 0 ? "attention" : "ready",
       blockers: blockers.map((check) => `${check.name}: ${check.detail}`),
@@ -1187,6 +1212,7 @@ const getSupportBundle = () => {
     generatedAt: new Date().toISOString(),
     note: "Secret-safe local support bundle. Twitch client secrets, access tokens, and refresh tokens are not included.",
     diagnostics,
+    featureGates: featureGates.list(),
     recent: {
       botLogs,
       outbound,
@@ -1206,6 +1232,7 @@ const getDiagnosticChecks = (input: {
   outbound: ReturnType<typeof outboundHistory.summary>;
   giveawayState: ReturnType<typeof getGiveawayState>;
   botSnapshot: ReturnType<typeof getBotProcessSnapshot>;
+  featureGates: FeatureGateState[];
 }): DiagnosticCheck[] => [
   {
     name: "Setup UI assets",
@@ -1286,6 +1313,14 @@ const getDiagnosticChecks = (input: {
     detail: botProcess.liveChatConfirmed
       ? "Live chat confirmation has been observed."
       : "Type !ping in chat after starting the bot."
+  },
+  {
+    name: "Feature gates",
+    ok: true,
+    severity: "info",
+    detail: input.featureGates
+      .map((gate) => `${gate.label}: ${gate.mode}`)
+      .join("; ")
   }
 ];
 
@@ -1494,10 +1529,7 @@ const safeAuditMetadata = (raw: string) => {
 };
 
 const safeSupportText = (value: unknown) =>
-  String(value ?? "")
-    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
-    .replace(/(client_secret|access_token|refresh_token|authorization)=([^&\s]+)/gi, "$1=[redacted]")
-    .replace(/"(clientSecret|accessToken|refreshToken|authorization)"\s*:\s*"[^"]*"/gi, "\"$1\":\"[redacted]\"");
+  redactSecretText(String(value ?? ""));
 
 const summarizeQueueHealth = (
   queue: ReturnType<MessageQueue["snapshot"]>,
@@ -2185,7 +2217,7 @@ const processBotLog = (stream: "stdout" | "stderr" | "system" | "error", rawLine
 };
 
 const appendBotLog = (stream: string, line: string) => {
-  const safeLine = line.replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+  const safeLine = redactSecretText(line);
   botProcess.recentLogs.push(`${new Date().toISOString()} ${stream}: ${safeLine}`);
 
   if (botProcess.recentLogs.length > 100) {
@@ -2349,6 +2381,29 @@ const sendOperatorMessage = async (body: { id?: string; confirmed?: boolean }) =
   };
 };
 
+const getFeatureGates = () => ({
+  ok: true,
+  featureGates: featureGates.list()
+});
+
+const setFeatureGate = (body: { key?: FeatureKey; mode?: FeatureGateMode }) => {
+  try {
+    const featureGate = featureGates.setMode(body.key, body.mode, localUiActor);
+
+    return {
+      ...getFeatureGates(),
+      ok: true,
+      featureGate
+    };
+  } catch (error) {
+    return {
+      ...getFeatureGates(),
+      ok: false,
+      error: safeErrorMessage(error, "Feature gate update failed")
+    };
+  }
+};
+
 const getCustomCommands = () => {
   const commands = customCommandsService.listCommands();
   const invocations = customCommandsService.getRecentInvocations(50);
@@ -2358,6 +2413,7 @@ const getCustomCommands = () => {
     commands,
     invocations,
     reservedNames: getCustomCommandReservedNames(),
+    featureGate: featureGates.get("custom_commands"),
     summary: {
       total: commands.length,
       enabled: commands.filter((command) => command.enabled).length,
@@ -2450,7 +2506,9 @@ const deleteCustomCommand = (id: number | undefined) => {
 
 const importCustomCommands = (body: unknown) => {
   try {
-    const commands = customCommandsService.importCommands(body, localUiActor);
+    const commands = customCommandsService.importCommands(body, localUiActor, {
+      reservedNames: getCustomCommandReservedNames()
+    });
     return {
       ...getCustomCommands(),
       ok: true,
@@ -3496,7 +3554,8 @@ const simulateCommand = async (body: {
   });
   registerCommandsModule({
     router,
-    db
+    db,
+    featureGates
   });
 
   try {

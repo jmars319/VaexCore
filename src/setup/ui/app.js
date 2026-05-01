@@ -19,6 +19,8 @@ const state = {
   commandHistory: [],
   commandSummary: { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 },
   commandReservedNames: [],
+  commandFeatureGate: null,
+  featureGates: [],
   templates: [],
   operatorMessages: [],
   reminder: null,
@@ -86,6 +88,8 @@ const api = {
   status: () => api.get("/api/status"),
   diagnostics: () => api.get("/api/diagnostics"),
   supportBundle: () => api.get("/api/support-bundle"),
+  featureGates: () => api.get("/api/feature-gates"),
+  setFeatureGate: (key, mode) => api.post("/api/feature-gates", { key, mode }),
   preflight: () => api.post("/api/preflight"),
   botStart: () => api.post("/api/bot/start"),
   botStop: () => api.post("/api/bot/stop"),
@@ -757,6 +761,46 @@ function renderPostStreamRecapCard() {
   ]);
 }
 
+function renderFeatureGateCard(key) {
+  const gate = featureGate(key);
+  const mode = gate.mode || "off";
+  const isLive = mode === "live";
+  const isTest = mode === "test";
+
+  return card("Feature Gate", [
+    statusGrid([
+      ["Mode", mode, isLive],
+      ["Local tests", gate.testAllowed ? "allowed" : "blocked", gate.testAllowed],
+      ["Twitch chat", gate.liveAllowed ? "allowed" : "blocked", gate.liveAllowed],
+      ["Updated", gate.updatedAt || "default", true]
+    ]),
+    h("div", { className: "actions segmented-actions" }, [
+      actionButton("Off", {
+        id: `${key}-gate-off`,
+        variant: mode === "off" ? "" : "secondary",
+        busyKey: "featureGate",
+        disabled: mode === "off",
+        onClick: () => setFeatureGate(key, "off")
+      }),
+      actionButton("Test", {
+        id: `${key}-gate-test`,
+        variant: isTest ? "" : "secondary",
+        busyKey: "featureGate",
+        disabled: isTest,
+        onClick: () => setFeatureGate(key, "test")
+      }),
+      actionButton("Live", {
+        id: `${key}-gate-live`,
+        variant: isLive ? "" : "secondary",
+        busyKey: "featureGate",
+        disabled: isLive,
+        onClick: () => setFeatureGate(key, "live")
+      })
+    ]),
+    callout(featureGateSummary(gate), isLive ? "ok" : isTest ? "info" : "warn")
+  ]);
+}
+
 function renderCommands() {
   const commands = filteredCustomCommands();
   const selected = selectedCustomCommand();
@@ -770,6 +814,7 @@ function renderCommands() {
         actionButton("Refresh", { id: "refreshCommands", variant: "secondary", busyKey: "refresh", onClick: refreshAll })
       ])
     ),
+    renderFeatureGateCard("custom_commands"),
     card("Command Library", [
       statusGrid([
         ["Total", state.commandSummary.total || 0, true],
@@ -1835,6 +1880,24 @@ function winnerStatus(winner) {
   return h("span", {}, chips.map((chip) => h("span", { className: `chip ${chip === "rerolled" ? "warn" : "ok"}`, text: chip })));
 }
 
+function featureGate(key) {
+  return (state.featureGates || []).find((gate) => gate.key === key) ||
+    (key === "custom_commands" ? state.commandFeatureGate : null) ||
+    { key, label: key, mode: "off", liveAllowed: false, testAllowed: false };
+}
+
+function featureGateSummary(gate = {}) {
+  if (gate.mode === "live") {
+    return `${gate.label || "Feature"} is enabled for Twitch chat and local simulation.`;
+  }
+
+  if (gate.mode === "test") {
+    return `${gate.label || "Feature"} is available for local simulation only. Twitch chat will not trigger it.`;
+  }
+
+  return `${gate.label || "Feature"} is off. Use Test for local validation or Live when ready for Twitch chat.`;
+}
+
 function selectedCustomCommand() {
   return (state.commands || []).find((command) => Number(command.id) === Number(state.selectedCommandId));
 }
@@ -2104,7 +2167,7 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, commands, templates, operatorMessages, reminder, audit, outbound, diagnostics] = await Promise.all([
+    const [config, status, giveaway, commands, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
@@ -2114,7 +2177,8 @@ async function refreshAll() {
       api.reminder(),
       api.auditLogs(),
       api.outboundMessages(),
-      api.diagnostics()
+      api.diagnostics(),
+      api.featureGates()
     ]);
     state.config = config;
     state.status = status;
@@ -2127,13 +2191,14 @@ async function refreshAll() {
     state.outboundMessages = outbound.messages || [];
     state.outboundSummary = outbound.summary || {};
     state.diagnostics = diagnostics;
+    state.featureGates = featureGateResult.featureGates || [];
     state.validSetup = isValidationPassed();
     return { ok: true };
   }, { quiet: true });
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, commands, operatorMessages, reminder, audit, outbound] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages()]);
+  const [status, giveaway, commands, operatorMessages, reminder, audit, outbound, featureGateResult] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates()]);
   state.status = status;
   state.giveaway = giveaway;
   setCommandState(commands);
@@ -2142,6 +2207,7 @@ async function refreshAfterAction() {
   state.auditLogs = audit.logs || [];
   state.outboundMessages = outbound.messages || [];
   state.outboundSummary = outbound.summary || {};
+  state.featureGates = featureGateResult.featureGates || [];
   state.validSetup = isValidationPassed();
 }
 
@@ -2167,6 +2233,7 @@ function setCommandState(result = {}) {
   state.commandHistory = result.invocations || [];
   state.commandSummary = result.summary || { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 };
   state.commandReservedNames = result.reservedNames || [];
+  state.commandFeatureGate = result.featureGate || state.commandFeatureGate;
 
   if (state.selectedCommandId && !state.commands.some((command) => Number(command.id) === Number(state.selectedCommandId))) {
     state.selectedCommandId = null;
@@ -2253,6 +2320,16 @@ async function runLifecycleTest() {
     state.testResult = result;
     return result;
   }, { success: "Lifecycle test completed." });
+}
+
+async function setFeatureGate(key, mode) {
+  if (mode === "live" && !confirm("Enable this feature for live Twitch chat? Run local tests first if this is a new workflow.")) {
+    return;
+  }
+
+  await runAction("featureGate", () => api.setFeatureGate(key, mode), {
+    success: "Feature gate updated."
+  });
 }
 
 function newCustomCommand() {

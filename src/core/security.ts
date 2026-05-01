@@ -20,6 +20,12 @@ const commandNamePattern = /^[a-z0-9_]{1,32}$/;
 const controlCharacters = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 const invisibleCharacters = /[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
 const secretKeys = /token|secret|authorization|clientSecret|code|refresh/i;
+const secretTextPatterns = [
+  /Bearer\s+[A-Za-z0-9._~+/=-]+/gi,
+  /oauth:[A-Za-z0-9._~+/=-]+/gi,
+  /\b(client_secret|clientSecret|access_token|accessToken|refresh_token|refreshToken|authorization)\b["']?\s*[:=]\s*["']?[^"'\s,}&]+/gi,
+  /\bTWITCH_(USER_ACCESS_TOKEN|REFRESH_TOKEN|CLIENT_SECRET)\b/gi
+];
 
 export class SafeInputError extends Error {
   constructor(message: string) {
@@ -192,11 +198,42 @@ export const redactSecrets = (value: unknown): unknown => {
     );
   }
 
-  if (typeof value === "string" && value.length > 120) {
-    return `${value.slice(0, 120)}...`;
+  if (typeof value === "string") {
+    const redacted = redactSecretText(value);
+    return redacted.length > 120 ? `${redacted.slice(0, 120)}...` : redacted;
   }
 
   return value;
+};
+
+export const redactSecretText = (value: string) => {
+  let redacted = value;
+
+  for (const pattern of secretTextPatterns) {
+    redacted = redacted.replace(pattern, (match) => {
+      const separator = match.match(/[:=]/)?.[0];
+
+      if (!separator) {
+        return match.startsWith("Bearer") ? "Bearer [redacted]" : "[redacted]";
+      }
+
+      return `${match.slice(0, match.indexOf(separator) + 1)}[redacted]`;
+    });
+  }
+
+  return redacted;
+};
+
+export const containsSecretLikeContent = (value: string) =>
+  secretTextPatterns.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(value);
+  });
+
+export const assertNoSecretLikeContent = (value: string, field: string) => {
+  if (containsSecretLikeContent(value)) {
+    throw new SafeInputError(`${field} appears to contain a token, secret, OAuth value, or authorization header.`);
+  }
 };
 
 export const safeJsonStringify = (metadata: Record<string, unknown>) => {
@@ -218,7 +255,7 @@ export const safeErrorMessage = (error: unknown, fallback = "Request failed") =>
   }
 
   if (error instanceof Error) {
-    return error.message.replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+    return redactSecretText(error.message);
   }
 
   return fallback;

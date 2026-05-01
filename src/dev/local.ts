@@ -11,6 +11,7 @@ import { registerCommandsModule } from "../modules/commands/commands.module";
 import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 import { createRuntimeStatus } from "../core/runtimeStatus";
 import { registerStatusCommands } from "../core/statusCommands";
+import { createFeatureGateStore } from "../core/featureGates";
 import { normalizeLogin, sanitizeCommandText, sanitizeDisplayName } from "../core/security";
 
 const localEnvSchema = z.object({
@@ -76,6 +77,7 @@ const commandRouter = new CommandRouter({
 });
 
 const db = createDbClient(env.LOCAL_DATABASE_URL);
+const featureGates = createFeatureGateStore(db);
 const giveawaysService = registerGiveawaysModule({
   router: commandRouter,
   db,
@@ -89,7 +91,8 @@ registerStatusCommands({
 });
 registerCommandsModule({
   router: commandRouter,
-  db
+  db,
+  featureGates
 });
 
 messageQueue.start();

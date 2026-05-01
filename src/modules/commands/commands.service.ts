@@ -7,27 +7,15 @@ import {
 } from "../../core/permissions";
 import {
   limits,
+  assertNoSecretLikeContent,
   normalizeCommandName,
   parseSafeInteger,
-  safeJsonStringify,
   sanitizeChatMessage
 } from "../../core/security";
 import type { DbClient } from "../../db/client";
-
-const reservedCommandNames = new Set([
-  "ping",
-  "vcstatus",
-  "enter",
-  "ghelp",
-  "gstart",
-  "gstatus",
-  "gclose",
-  "gdraw",
-  "greroll",
-  "gclaim",
-  "gdeliver",
-  "gend"
-]);
+import { getProtectedCommandNames } from "../../core/protectedCommands";
+import { writeAuditLog } from "../../core/auditLog";
+import type { FeatureGateStore } from "../../core/featureGates";
 
 const permissionValues = new Set(Object.values(PermissionLevel));
 
@@ -102,7 +90,10 @@ export type CustomCommandContext = {
 };
 
 export class CustomCommandsService {
-  constructor(private readonly db: DbClient) {}
+  constructor(
+    private readonly db: DbClient,
+    private readonly options: { featureGates?: FeatureGateStore } = {}
+  ) {}
 
   listCommands(): CustomCommandDefinition[] {
     const rows = this.db
@@ -341,7 +332,11 @@ export class CustomCommandsService {
     };
   }
 
-  importCommands(body: unknown, actor: ChatMessage) {
+  importCommands(
+    body: unknown,
+    actor: ChatMessage,
+    options: { reservedNames?: string[] } = {}
+  ) {
     const payload = body as { commands?: unknown[] };
     const commands = Array.isArray(payload.commands) ? payload.commands : [];
 
@@ -353,7 +348,7 @@ export class CustomCommandsService {
       const input = entry as CustomCommandSaveInput;
       const name = normalizeCommandName(input.name, "Command name");
       const existing = this.findCommandByName(name);
-      return this.saveCommand({ ...input, id: existing?.id }, actor);
+      return this.saveCommand({ ...input, id: existing?.id }, actor, options);
     });
 
     this.audit(actor, "custom_command.import", "custom_commands", {
@@ -389,6 +384,12 @@ export class CustomCommandsService {
 
     if (!lookup) {
       return false;
+    }
+
+    const gate = this.options.featureGates?.describeAccess("custom_commands", context.message.source);
+
+    if (gate && !gate.allowed) {
+      return true;
     }
 
     if (!hasPermission(context.message, lookup.command.permission)) {
@@ -545,7 +546,7 @@ export class CustomCommandsService {
     extraReservedNames: string[] = []
   ) {
     const reserved = new Set([
-      ...reservedCommandNames,
+      ...getProtectedCommandNames(),
       ...extraReservedNames.map((item) => normalizeCommandName(item))
     ]);
 
@@ -585,7 +586,7 @@ export class CustomCommandsService {
       const base = name.slice(0, Math.max(1, limits.commandNameLength - suffix.length));
       const candidate = normalizeCommandName(`${base}${suffix}`);
 
-      if (!this.findCommandByName(candidate) && !this.findAlias(candidate) && !reservedCommandNames.has(candidate)) {
+      if (!this.findCommandByName(candidate) && !this.findAlias(candidate) && !getProtectedCommandNames().includes(candidate)) {
         return candidate;
       }
     }
@@ -727,30 +728,11 @@ export class CustomCommandsService {
     metadata: Record<string, unknown>,
     createdAt = timestamp()
   ) {
-    this.db
-      .prepare(
-        `
-          INSERT INTO audit_logs
-            (actor_twitch_user_id, action, target, metadata_json, created_at)
-          VALUES
-            (@actorTwitchUserId, @action, @target, @metadataJson, @createdAt)
-        `
-      )
-      .run({
-        actorTwitchUserId: actor.userId || actor.userLogin,
-        action,
-        target,
-        metadataJson: safeJsonStringify({
-          actionType: action,
-          actorLogin: actor.userLogin,
-          ...metadata
-        }),
-        createdAt
-      });
+    writeAuditLog(this.db, actor, action, target, metadata, { createdAt });
   }
 }
 
-export const getReservedCustomCommandNames = () => [...reservedCommandNames].sort();
+export const getReservedCustomCommandNames = () => getProtectedCommandNames();
 
 const normalizePermission = (value: unknown) => {
   const permission = typeof value === "string" ? value : PermissionLevel.Viewer;
@@ -799,7 +781,11 @@ const normalizeResponseList = (value: unknown) => {
   const responses = raw
     .map((item) => String(item ?? "").trim())
     .filter(Boolean)
-    .map((item) => sanitizeChatMessage(item))
+    .map((item) => {
+      const response = sanitizeChatMessage(item);
+      assertNoSecretLikeContent(response, "Custom command response");
+      return response;
+    })
     .filter(Boolean);
 
   if (responses.length === 0) {

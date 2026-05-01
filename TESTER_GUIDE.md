@@ -15,7 +15,7 @@ You need:
 
 This build is unsigned and not notarized. macOS may warn that the developer cannot be verified. Only run a build that came directly from the maintainer.
 
-Before sharing the zip, the maintainer should have run the tester artifact dry run and tester update preservation check. Those dry runs launch the extracted app from the zip, check the local setup UI, confirm Diagnostics and support bundle redaction, verify packaged SQLite reports `better-sqlite3`, and prove an existing local setup survives app replacement.
+Before sharing the zip, the maintainer should have run the tester artifact dry run, tester update preservation check, and operational guardrails smoke. Those dry runs launch the extracted app from the zip, check the local setup UI, confirm Diagnostics and support bundle redaction, verify packaged SQLite reports `better-sqlite3`, prove an existing local setup survives app replacement, and confirm protected commands, feature gates, and audit redaction behave safely.
 
 ## Install
 

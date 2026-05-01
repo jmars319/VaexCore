@@ -12,6 +12,7 @@ assert(
   "package.json version must be semver-like"
 );
 assert(changelog.includes(`## ${version}`), `CHANGELOG.md must contain a section for ${version}`);
+assert(changelog.includes("Milestone 32"), "CHANGELOG.md must mention Milestone 32");
 assert(changelog.includes("Milestone 31"), "CHANGELOG.md must mention Milestone 31");
 assert(changelog.includes("Milestone 30"), "CHANGELOG.md must mention Milestone 30");
 assert(changelog.includes("Milestone 29"), "CHANGELOG.md must mention Milestone 29");
@@ -29,6 +30,8 @@ assert(testerGuide.includes("Copy support bundle"), "tester guide must explain s
 assert(readme.includes("smoke:tester-artifact"), "README must document tester artifact smoke");
 assert(readme.includes("smoke:tester-update"), "README must document tester update smoke");
 assert(readme.includes("smoke:commands"), "README must document custom command smoke");
+assert(readme.includes("smoke:guardrails"), "README must document operational guardrails smoke");
+assert(readme.includes("development-guidelines.md"), "README must link to development guidelines");
 assert(testerGuide.includes("tester artifact dry run"), "tester guide must mention tester artifact dry run");
 assert(testerGuide.includes("Updating VaexCore"), "tester guide must explain manual updates");
 assert(packageJson.scripts?.["release:unsigned"], "package.json must define release:unsigned");
@@ -39,6 +42,7 @@ assert(packageJson.scripts?.["smoke:tester-guide"], "package.json must define sm
 assert(packageJson.scripts?.["smoke:tester-artifact"], "package.json must define smoke:tester-artifact");
 assert(packageJson.scripts?.["smoke:tester-update"], "package.json must define smoke:tester-update");
 assert(packageJson.scripts?.["smoke:commands"], "package.json must define smoke:commands");
+assert(packageJson.scripts?.["smoke:guardrails"], "package.json must define smoke:guardrails");
 
 console.log(`release metadata ok for ${packageJson.name}@${version}`);
 

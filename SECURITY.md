@@ -13,6 +13,13 @@ VaexCore is designed as a local-first Twitch bot. The setup/operator console mus
 - The setup server rejects non-local socket addresses and non-localhost `Host` headers.
 - Browser responses include basic hardening headers and disable caching.
 - Keep `Echo command to chat` off unless you intentionally want the UI action mirrored in Twitch chat.
+- Keep new major modules in `test` until they behave correctly in local simulation. `test` mode must not respond to Twitch chat.
+
+## Audit And Diagnostics
+
+- Audit metadata is redacted before storage and redacted again before diagnostics or support exports.
+- VaexCore keeps the latest 1,000 audit rows for up to 90 days by default.
+- Diagnostics and support bundles should explain state and next action without exposing local secrets.
 
 ## Twitch Chat Threat Model
 

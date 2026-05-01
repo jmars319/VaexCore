@@ -91,6 +91,8 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
 .section-actions { margin-top: 0; }
 .inline-actions { margin-top: 0; }
+.segmented-actions { gap: 6px; }
+.segmented-actions button { min-width: 88px; }
 .table-actions { gap: 6px; }
 .table-actions button { min-height: 30px; padding: 5px 8px; font-size: 12px; }
 .destructive-actions { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }

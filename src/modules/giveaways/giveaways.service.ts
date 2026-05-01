@@ -6,10 +6,13 @@ import {
   normalizeKeyword,
   normalizeLogin,
   parseSafeInteger,
-  safeJsonStringify,
   sanitizeDisplayName,
   sanitizeGiveawayTitle
 } from "../../core/security";
+import {
+  getRecentAuditLogs,
+  writeAuditLog
+} from "../../core/auditLog";
 import type { Giveaway, GiveawayEntry, GiveawayWinner } from "./giveaways.types";
 
 type StartGiveawayInput = {
@@ -570,23 +573,7 @@ export class GiveawaysService {
   }
 
   getRecentAuditLogs(limit = 100) {
-    return this.db
-      .prepare(
-        `
-          SELECT *
-          FROM audit_logs
-          ORDER BY created_at DESC
-          LIMIT ?
-        `
-      )
-      .all(limit) as Array<{
-      id: number;
-      actor_twitch_user_id: string;
-      action: string;
-      target: string | null;
-      metadata_json: string;
-      created_at: string;
-    }>;
+    return getRecentAuditLogs(this.db, limit);
   }
 
   countEntriesForGiveaway(giveawayId: number) {
@@ -782,26 +769,7 @@ export class GiveawaysService {
     target: string,
     metadata: Record<string, unknown>
   ) {
-    this.db
-      .prepare(
-        `
-          INSERT INTO audit_logs
-            (actor_twitch_user_id, action, target, metadata_json, created_at)
-          VALUES
-            (@actorTwitchUserId, @action, @target, @metadataJson, @createdAt)
-        `
-      )
-      .run({
-        actorTwitchUserId: actor.userId,
-        action,
-        target,
-        metadataJson: safeJsonStringify({
-          actionType: action,
-          actorLogin: actor.userLogin,
-          ...metadata
-        }),
-        createdAt: timestamp()
-      });
+    writeAuditLog(this.db, actor, action, target, metadata);
   }
 }
 

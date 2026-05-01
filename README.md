@@ -188,6 +188,8 @@ The console is organized into durable sections:
 
 Direct UI actions call the local service layer first. Optional chat echo is visibility only; if enabled, VaexCore queues the equivalent chat command after the local action succeeds.
 
+Major optional modules use local feature gates with `off`, `test`, and `live` modes. `test` allows local simulation without responding to Twitch chat, which makes new workflows safer to validate during a stream.
+
 ## Custom Chat Commands
 
 Open `Commands` to manage local command definitions stored in SQLite. Custom commands support:
@@ -202,7 +204,9 @@ Open `Commands` to manage local command definitions stored in SQLite. Custom com
 - JSON import/export for backup or moving setup between machines
 - use counts, last-used timestamps, recent invocation history, and audit entries
 
-Built-in names such as `!ping`, `!vcstatus`, and giveaway commands are reserved. While a giveaway is active, its entry keyword is also reserved in the setup UI. At runtime, built-in commands and active giveaway keywords are checked before custom command fallback, so giveaway entry behavior stays predictable.
+Built-in names such as `!ping`, `!vcstatus`, and giveaway commands are reserved through the protected command registry. While a giveaway is active, its entry keyword is also reserved in the setup UI. At runtime, built-in commands and active giveaway keywords are checked before custom command fallback, so giveaway entry behavior stays predictable.
+
+The `Commands` tab includes a feature gate for custom commands. `Live` responds in Twitch chat, `Test` responds only to local simulations, and `Off` disables custom command replies while keeping definitions available.
 
 ## First-Time Setup (No Twitch Experience Required)
 
@@ -283,6 +287,8 @@ VaexCore treats Twitch chat and local UI input as untrusted. Commands, custom co
 
 The setup/operator console binds only to `127.0.0.1`, rejects non-localhost host headers, sends basic browser security headers, and disables caching for API/UI responses. API routes return safe status only; tokens, refresh tokens, client secrets, OAuth authorization values, and local secrets are never returned.
 
+Audit entries are redacted and bounded. VaexCore keeps the latest 1,000 audit rows for up to 90 days by default, and diagnostics/support exports read audit metadata through the same redaction path.
+
 See [SECURITY.md](SECURITY.md) for local data paths and reset notes.
 
 ## Running Giveaways
@@ -315,11 +321,14 @@ The `Giveaways` tab also includes stream-night controls:
 - `Queue Health` and `Recovery Checklist` show pending queue age, retry delay, send throttle delay, failure category, latest failed action, resend safety, and concrete recovery steps before an operator retries a critical message. Auth/config failures do not blindly retry; Twitch rate limits and transient network failures retry with queue-owned backoff.
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Commands` stores local-only custom chat commands in SQLite, with aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
+- `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live` after Milestone 31; future timers and moderation filters start `off` until tested.
+- `Development Guidelines` live in `docs/development-guidelines.md` and define the project rules for preserving the stable core, local-first behavior, secret redaction, feature gates, audit retention, diagnostics, and release discipline.
 - `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
 - `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.
 - Critical giveaway guardrails treat queued, sending, retrying, missing, and failed required chat announcements as blocking until the outbound queue confirms `sent` or `resent`. Phase rows show queue status, queue ID, retry timing, failure category, and the next recovery action.
 - `npm run smoke:giveaway` runs a temp-database giveaway readiness check covering command permissions, entry, close, draw, reroll, delivery, audit logs, recap, outbound history, and the local lifecycle test.
 - `npm run smoke:commands` runs a temp-database custom command check covering reserved names, aliases, placeholders, permissions, cooldowns, disabled commands, preview, import/export, usage history, and audit logs.
+- `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
 - `npm run smoke:diagnostics` checks the local diagnostics route, setup assets, database driver, token-refresh readiness flags, and report redaction.

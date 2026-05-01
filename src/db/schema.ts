@@ -46,6 +46,13 @@ export const initializeSchema = (db: DbClient) => {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS feature_gates (
+      feature_key TEXT PRIMARY KEY,
+      mode TEXT NOT NULL CHECK (mode IN ('off', 'test', 'live')),
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS outbound_messages (
       id TEXT PRIMARY KEY,
       source TEXT NOT NULL CHECK (source IN ('setup', 'bot')),
@@ -138,6 +145,7 @@ export const initializeSchema = (db: DbClient) => {
     CREATE INDEX IF NOT EXISTS idx_giveaway_winners_giveaway_id
       ON giveaway_winners(giveaway_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_feature_gates_mode ON feature_gates(mode);
     CREATE INDEX IF NOT EXISTS idx_outbound_messages_updated_at
       ON outbound_messages(updated_at);
     CREATE INDEX IF NOT EXISTS idx_outbound_messages_giveaway_id

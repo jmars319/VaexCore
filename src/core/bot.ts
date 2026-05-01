@@ -3,6 +3,7 @@ import type { Logger } from "./logger";
 import { CommandRouter } from "./commandRouter";
 import { MessageQueue } from "./messageQueue";
 import { createOutboundHistory } from "./outboundHistory";
+import { createFeatureGateStore } from "./featureGates";
 import { TwitchEventSubClient } from "../twitch/eventsub";
 import { TwitchChatSender } from "../twitch/sendMessage";
 import type { ChatMessage } from "./chatMessage";
@@ -39,6 +40,7 @@ export class VaexCoreBot {
     this.runtimeStatus = createRuntimeStatus(options.env.mode);
     this.db = createDbClient(options.env.databaseUrl);
     const outboundHistory = createOutboundHistory(this.db);
+    const featureGates = createFeatureGateStore(this.db);
 
     const sender = new TwitchChatSender({
       clientId: options.env.twitchClientId,
@@ -87,7 +89,8 @@ export class VaexCoreBot {
     });
     registerCommandsModule({
       router: this.commandRouter,
-      db: this.db
+      db: this.db,
+      featureGates
     });
 
     this.eventSubClient = new TwitchEventSubClient({
