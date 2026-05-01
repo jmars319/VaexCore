@@ -42,7 +42,10 @@ const createWindow = async (url) => {
 };
 
 const startApp = async () => {
-  const userData = app.getPath("userData");
+  const userData = process.env.VAEXCORE_APP_USER_DATA || app.getPath("userData");
+  if (process.env.VAEXCORE_APP_USER_DATA) {
+    app.setPath("userData", userData);
+  }
   process.env.VAEXCORE_CONFIG_DIR = userData;
   process.env.DATABASE_URL = `file:${join(userData, "data/vaexcore.sqlite")}`;
 

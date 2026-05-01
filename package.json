@@ -19,6 +19,7 @@
     "release:check": "node scripts/verify-release-metadata.mjs",
     "release:unsigned": "node scripts/release-unsigned.mjs",
     "smoke:tester-guide": "node scripts/smoke-tester-guide.mjs",
+    "smoke:tester-artifact": "node scripts/smoke-tester-artifact.mjs",
     "smoke:queue": "tsx scripts/smoke-message-queue.mjs",
     "smoke:setup": "npm run build && node scripts/smoke-setup-ui.mjs",
     "smoke:giveaway": "npm run build && node scripts/smoke-giveaway-readiness.mjs",

@@ -20,7 +20,8 @@ const steps = [
   ["Giveaway readiness smoke", ["npm", "run", "smoke:giveaway"]],
   ["CLI env smoke", ["npm", "run", "smoke:cli-env"]],
   ["Message queue smoke", ["npm", "run", "smoke:queue"]],
-  ["Unsigned release artifact smoke", ["npm", "run", "smoke:unsigned-release"]]
+  ["Unsigned release artifact smoke", ["npm", "run", "smoke:unsigned-release"]],
+  ["Tester artifact dry run", ["npm", "run", "smoke:tester-artifact"]]
 ];
 
 for (const [label, command] of steps) {

@@ -401,6 +401,7 @@ Create an unsigned tester zip:
 ```bash
 npm run app:zip
 npm run smoke:unsigned-release
+npm run smoke:tester-artifact
 ```
 
 Run the full unsigned release checklist:
@@ -416,6 +417,8 @@ release/
 ```
 
 The `.app` bundle can be copied into `/Applications`. The DMG, when built, can be opened and installed normally. The unsigned tester zip writes a `.zip`, `.zip.sha256`, and `.json` manifest under `release/`.
+
+`npm run smoke:tester-artifact` extracts that zip into a temporary folder, launches the extracted `VaexCore.app` with isolated app data, and verifies the setup UI, Diagnostics, support bundle redaction, and packaged `better-sqlite3` path.
 
 App-local data is stored under:
 
@@ -473,8 +476,9 @@ Before sharing a tester build:
 1. Update `package.json` version when the artifact should have a new filename.
 2. Add or update the matching section in `CHANGELOG.md`.
 3. Run `npm run release:unsigned`.
-4. Share all three generated files from `release/`: `.zip`, `.zip.sha256`, and `.json`.
-5. Tell testers the build is unsigned, ad-hoc signed, and not notarized.
+4. Confirm the tester artifact dry run passed.
+5. Share all three generated files from `release/`: `.zip`, `.zip.sha256`, and `.json`.
+6. Tell testers the build is unsigned, ad-hoc signed, and not notarized.
 
 ### Known Limitations
 
