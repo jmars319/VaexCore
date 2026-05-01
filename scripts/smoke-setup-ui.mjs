@@ -46,6 +46,8 @@ async function runSmoke() {
   assert(appJs.includes("setFeatureGate"), "browser UI can update feature gates");
   assert(appJs.includes("Schedule local stream messages"), "browser UI exposes timers");
   assert(appJs.includes("Save timer"), "browser UI can save timers");
+  assert(appJs.includes("Lightweight local filters"), "browser UI exposes moderation filters");
+  assert(appJs.includes("Run moderation test"), "browser UI can test moderation filters");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");
   assert(appJs.includes("Open Twitch Developer Console"), "setup guide includes Twitch Developer Console link");
   assert(appJs.includes("Twitch authorization failed"), "setup guide surfaces OAuth errors");
@@ -132,6 +134,8 @@ async function runSmoke() {
   assert(setupServerJs.includes("feature_gates"), "setup server persists feature gates locally");
   assert(setupServerJs.includes("/api/timers"), "setup server exposes timer routes");
   assert(setupServerJs.includes("timers"), "setup server persists timers locally");
+  assert(setupServerJs.includes("/api/moderation"), "setup server exposes moderation routes");
+  assert(setupServerJs.includes("moderation_hits"), "setup server persists moderation hits locally");
   assert(setupServerJs.includes("custom_commands"), "setup server persists custom command definitions");
   assert(setupServerJs.includes("custom_command_invocations"), "setup server persists custom command usage history");
   assert(setupServerJs.includes("Token refreshed"), "setup server reports automatic token refresh during validation");
@@ -166,6 +170,10 @@ async function runSmoke() {
   const initialTimers = await json("/api/timers");
   assert(initialTimers.ok === true, "timer route exists");
   assert(initialTimers.featureGate.mode === "off", "timer route returns feature gate");
+  const initialModeration = await json("/api/moderation");
+  assert(initialModeration.ok === true, "moderation route exists");
+  assert(initialModeration.featureGate.mode === "off", "moderation route returns feature gate");
+  assert(initialModeration.summary.filtersEnabled === 0, "moderation filters default off");
 
   const invalidBotStart = await json("/api/bot/start", { method: "POST" });
   assert(invalidBotStart.ok === false, "bot start is blocked before validation");

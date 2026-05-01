@@ -180,6 +180,7 @@ The console is organized into durable sections:
 - `Live Mode`: compact stream-night state, live runbook, status-to-chat, panic resend, outbound failure logs, and recap copy.
 - `Commands`: create, edit, test, import, export, and audit local custom chat commands.
 - `Timers`: create, enable, disable, and monitor scheduled chat messages behind live readiness and queue guardrails.
+- `Moderation`: configure lightweight warn-only filters, blocked phrases, local simulations, and recent moderation hits.
 - `Giveaways`: start, close, draw, reroll, claim, deliver, end giveaways, manage reminder timing, edit giveaway chat templates, and review the latest recap.
 - `Chat Tools`: send chat messages, send test messages, edit local operator message presets, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
@@ -222,6 +223,24 @@ Open `Timers` to manage scheduled chat messages stored locally in SQLite. Timers
 - audit entries for create, update, delete, enable, and disable actions
 
 Automatic timer delivery runs in the live bot runtime and uses the same outbound message queue, retry handling, rate-limit behavior, and outbound history as other VaexCore chat sends. Timers do not fire while the Timers feature gate is `off` or `test`, before live chat confirmation, or while the outbound queue is degraded.
+
+## Basic Moderation Filters
+
+Open `Moderation` to configure lightweight local filters. Moderation filters support:
+
+- feature-gated rollout with `off`, `test`, and `live` modes
+- blocked phrases/words
+- link detection
+- excessive caps detection
+- repeated message detection
+- excessive symbol spam detection
+- warn-only action using the outbound queue
+- local simulation before going live
+- recent moderation hit history and audit entries
+
+All moderation filters default off, and the `moderation_filters` feature gate defaults off. VaexCore does not ban automatically and does not use ML moderation or public blocklists. Protected bot commands and the active giveaway entry keyword are exempt so `!enter`, giveaway controls, and core commands stay predictable.
+
+Delete/timeout enforcement is intentionally not enabled yet because VaexCore does not currently have a properly scoped Twitch moderation API client. Current moderation responses are warnings only, and every warning uses the approved outbound queue.
 
 ## First-Time Setup (No Twitch Experience Required)
 
@@ -337,7 +356,8 @@ The `Giveaways` tab also includes stream-night controls:
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Commands` stores local-only custom chat commands in SQLite, with aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
 - `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness plus clear queue health before sending.
-- `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and future moderation filters start `off` until explicitly enabled.
+- `Moderation` stores local-only warn-only filter settings, blocked phrases, and recent hits in SQLite. Moderation is feature-gated, fails open, and exempts protected commands plus active giveaway entry commands.
+- `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and moderation filters start `off` until explicitly enabled.
 - `Development Guidelines` live in `docs/development-guidelines.md` and define the project rules for preserving the stable core, local-first behavior, secret redaction, feature gates, audit retention, diagnostics, and release discipline.
 - `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
 - `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.
@@ -346,6 +366,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:commands` runs a temp-database custom command check covering reserved names, aliases, placeholders, permissions, cooldowns, disabled commands, preview, import/export, usage history, and audit logs.
 - `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
 - `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
+- `npm run smoke:moderation` checks moderation feature-gate behavior, disabled-by-default filters, blocked phrases, links, caps, repeat and symbol detection, protected command exemptions, recent hits, and audit logging.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
 - `npm run smoke:diagnostics` checks the local diagnostics route, setup assets, database driver, token-refresh readiness flags, and report redaction.

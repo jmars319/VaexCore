@@ -25,6 +25,8 @@ VaexCore is designed as a local-first Twitch bot. The setup/operator console mus
 
 VaexCore treats chat input as untrusted. Commands are bounded, normalized, permission checked, and rate limited. Unknown commands are ignored. Denied commands do not return sensitive details.
 
+Moderation filters are feature-gated, local, and warn-only. They do not ban users, do not use public blocklists, and do not call Twitch moderation APIs. Protected commands and active giveaway entry commands are exempt so core operations continue even if a filter is configured too aggressively.
+
 ## Resetting Local State
 
 Development mode stores local secrets in:

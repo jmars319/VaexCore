@@ -56,6 +56,7 @@ import { registerGiveawayCommands } from "../modules/giveaways/giveaways.command
 import { formatWinnerNames } from "../modules/giveaways/giveaways.messages";
 import { GiveawaysService } from "../modules/giveaways/giveaways.service";
 import { createGiveawayTemplateStore } from "../modules/giveaways/giveaways.templates";
+import { ModerationService } from "../modules/moderation/moderation.module";
 import {
   TimersService,
   timerMetadata
@@ -96,6 +97,14 @@ const giveawaysService = new GiveawaysService({ db, logger });
 const featureGates = createFeatureGateStore(db);
 const customCommandsService = new CustomCommandsService(db, { featureGates });
 const timersService = new TimersService(db);
+const moderationService = new ModerationService(db, {
+  featureGates,
+  commandPrefix: "!",
+  exemptCommandNames: () => {
+    const active = giveawaysService.status()?.giveaway.keyword;
+    return active ? [active] : [];
+  }
+});
 const giveawayTemplates = createGiveawayTemplateStore(db);
 const operatorMessages = createOperatorMessageTemplateStore(db);
 const setupRuntimeStatus = createRuntimeStatus("local");
@@ -272,6 +281,45 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "POST" && url.pathname === "/api/timers/send-now") {
     const body = (await readJson(request)) as { id?: number };
     sendJson(response, 200, await sendTimerNow(body.id));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/moderation") {
+    sendJson(response, 200, getModerationState());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/settings") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveModerationSettings(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/terms") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveModerationTerm(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/terms/enable") {
+    const body = (await readJson(request)) as { id?: number; enabled?: boolean };
+    sendJson(response, 200, setModerationTermEnabled(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/terms/delete") {
+    const body = (await readJson(request)) as { id?: number };
+    sendJson(response, 200, deleteModerationTerm(body.id));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/simulate") {
+    const body = (await readJson(request)) as {
+      actor?: string;
+      role?: "viewer" | "mod" | "broadcaster";
+      text?: string;
+    };
+    sendJson(response, 200, simulateModeration(body));
     return;
   }
 
@@ -1011,6 +1059,7 @@ const getOperatorStatus = async () => {
   const outbound = outboundHistory.summary();
   const featureGateStates = featureGates.list();
   const timers = timersService.listTimers();
+  const moderation = moderationService.getState();
 
   return {
     ok: true,
@@ -1037,6 +1086,7 @@ const getOperatorStatus = async () => {
     },
     featureGates: featureGateStates,
     timers: summarizeTimers(timers),
+    moderation: moderation.summary,
     giveaway: summarizeGiveawayState(giveaway)
   };
 };
@@ -1134,6 +1184,7 @@ const getDiagnosticsReport = () => {
   const commands = customCommandsService.listCommands();
   const featureGateStates = featureGates.list();
   const timers = timersService.listTimers();
+  const moderation = moderationService.getState();
   const queueHealth = summarizeQueueHealth(queue, outbound);
   const setupUi = getSetupUiDiagnostics();
   const botSnapshot = getBotProcessSnapshot();
@@ -1195,6 +1246,7 @@ const getDiagnosticsReport = () => {
       uses: commands.reduce((total, command) => total + command.useCount, 0)
     },
     timers: summarizeTimers(timers),
+    moderation: moderation.summary,
     featureGates: featureGateStates,
     readiness: {
       status: blockers.length > 0 ? "not_ready" : warnings.length > 0 ? "attention" : "ready",
@@ -1254,6 +1306,7 @@ const getSupportBundle = () => {
     lastError: safeSupportText(timer.lastError),
     messagePreview: safeSupportText(timer.message).slice(0, 180)
   }));
+  const moderation = moderationService.getState();
   const botLogs = getBotProcessSnapshot().recentLogs.slice(-40).map(safeSupportText);
 
   return {
@@ -1268,7 +1321,16 @@ const getSupportBundle = () => {
       outbound,
       audit,
       customCommandInvocations,
-      timers
+      timers,
+      moderationHits: moderation.hits.map((hit) => ({
+        id: hit.id,
+        filterType: hit.filterType,
+        action: hit.action,
+        userLogin: hit.userLogin,
+        detail: safeSupportText(hit.detail),
+        messagePreview: safeSupportText(hit.messagePreview),
+        createdAt: hit.createdAt
+      }))
     },
     recovery: diagnostics.firstRun.recoverySteps
   };
@@ -2605,6 +2667,90 @@ const sendTimerNow = async (id: number | undefined) => {
   }
 };
 
+const getModerationState = () => moderationService.getState();
+
+const saveModerationSettings = (body: unknown) => {
+  try {
+    return moderationService.saveSettings(body, localUiActor);
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Moderation settings save failed")
+    };
+  }
+};
+
+const saveModerationTerm = (body: unknown) => {
+  try {
+    return moderationService.saveTerm(body, localUiActor);
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Blocked phrase save failed")
+    };
+  }
+};
+
+const setModerationTermEnabled = (body: { id?: number; enabled?: boolean }) => {
+  try {
+    return moderationService.setTermEnabled(
+      parseSafeInteger(body.id, { field: "Blocked phrase ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      Boolean(body.enabled),
+      localUiActor
+    );
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Blocked phrase update failed")
+    };
+  }
+};
+
+const deleteModerationTerm = (id: number | undefined) => {
+  try {
+    return moderationService.deleteTerm(
+      parseSafeInteger(id, { field: "Blocked phrase ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      localUiActor
+    );
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Blocked phrase delete failed")
+    };
+  }
+};
+
+const simulateModeration = (body: {
+  actor?: string;
+  role?: "viewer" | "mod" | "broadcaster";
+  text?: string;
+}) => {
+  try {
+    const actor = createLocalChatMessage({
+      login: body.actor || "viewer",
+      role: body.role ?? "viewer",
+      text: body.text || ""
+    });
+    const result = moderationService.evaluate(actor);
+
+    return {
+      ...getModerationState(),
+      ok: true,
+      result
+    };
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Moderation simulation failed")
+    };
+  }
+};
+
 const getTimerSendReadiness = () => {
   const gate = featureGates.get("timers");
 
@@ -3814,6 +3960,19 @@ const simulateCommand = async (body: {
       role: body.role ?? "viewer",
       text: command
     });
+    let moderation: ReturnType<ModerationService["evaluate"]> | undefined;
+
+    try {
+      moderation = moderationService.evaluate(actor);
+      if (moderation.hit) {
+        replies.push(moderation.hit.warningMessage);
+      }
+    } catch (error) {
+      logger.warn(
+        { error: redactSecrets(error), command },
+        "Moderation simulation failed open"
+      );
+    }
 
     const routerResult = await router.handle(actor);
     const echoQueued = routerResult === "handled"
@@ -3823,6 +3982,7 @@ const simulateCommand = async (body: {
     return {
       ok: true,
       replies,
+      moderation,
       routerResult,
       echoQueued,
       state: getGiveawayState()

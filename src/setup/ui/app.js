@@ -3,6 +3,7 @@ const tabs = [
   ["live-mode", "Live Mode"],
   ["commands", "Commands"],
   ["timers", "Timers"],
+  ["moderation", "Moderation"],
   ["giveaways", "Giveaways"],
   ["chat-tools", "Chat Tools"],
   ["testing", "Testing"],
@@ -25,6 +26,11 @@ const state = {
   timerSummary: { total: 0, enabled: 0, disabled: 0, sent: 0 },
   timerFeatureGate: null,
   timerReadiness: { ok: false, reason: "" },
+  moderation: null,
+  moderationTerms: [],
+  moderationHits: [],
+  moderationSummary: { terms: 0, enabledTerms: 0, filtersEnabled: 0, hits: 0 },
+  moderationFeatureGate: null,
   featureGates: [],
   templates: [],
   operatorMessages: [],
@@ -49,6 +55,9 @@ const state = {
   settingsDraft: {},
   commandDraft: {},
   timerDraft: {},
+  moderationDraft: {},
+  moderationTermDraft: {},
+  moderationTestResult: null,
   giveawayDraft: {},
   templateDraft: {},
   operatorTemplateDraft: {},
@@ -131,6 +140,12 @@ const api = {
   enableTimer: (id, enabled) => api.post("/api/timers/enable", { id, enabled }),
   deleteTimer: (id) => api.post("/api/timers/delete", { id }),
   sendTimerNow: (id) => api.post("/api/timers/send-now", { id }),
+  moderation: () => api.get("/api/moderation"),
+  saveModerationSettings: (body) => api.post("/api/moderation/settings", body),
+  saveModerationTerm: (body) => api.post("/api/moderation/terms", body),
+  enableModerationTerm: (id, enabled) => api.post("/api/moderation/terms/enable", { id, enabled }),
+  deleteModerationTerm: (id) => api.post("/api/moderation/terms/delete", { id }),
+  simulateModeration: (body) => api.post("/api/moderation/simulate", body),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
 };
@@ -234,6 +249,7 @@ function renderTab(id) {
     "live-mode": renderLiveMode,
     commands: renderCommands,
     timers: renderTimers,
+    moderation: renderModeration,
     giveaways: renderGiveaways,
     "chat-tools": renderChatTools,
     testing: renderTesting,
@@ -988,6 +1004,114 @@ function renderTimers() {
         actionButton("Save timer", { id: "saveTimer", onClick: saveTimer }),
         selected ? actionButton("Send now", { id: "sendSelectedTimer", variant: "secondary", busyKey: "timerSend", disabled: !selected.enabled || !readiness.ok, onClick: () => sendTimerNow(selected.id) }) : null
       ])
+    ]),
+    message()
+  ];
+}
+
+function renderModeration() {
+  const settings = state.moderation?.settings || {};
+  const hits = state.moderationHits || [];
+  const terms = state.moderationTerms || [];
+
+  return [
+    sectionHeader("Moderation", "Lightweight local filters with warn-only actions and protected command exemptions.",
+      h("div", { className: "actions section-actions" }, [
+        actionButton("Refresh", { id: "refreshModeration", variant: "secondary", busyKey: "refresh", onClick: refreshAll })
+      ])
+    ),
+    renderFeatureGateCard("moderation_filters"),
+    card("Filter Settings", [
+      statusGrid([
+        ["Filters enabled", state.moderationSummary.filtersEnabled || 0, Number(state.moderationSummary.filtersEnabled || 0) > 0],
+        ["Blocked phrases", `${state.moderationSummary.enabledTerms || 0}/${state.moderationSummary.terms || 0}`, true],
+        ["Action", "warn only", true],
+        ["Recent hits", state.moderationSummary.hits || 0, true]
+      ]),
+      h("div", { className: "grid three" }, [
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "blockedTermsEnabled", type: "checkbox", onChange: updateModerationDraft }),
+          "Blocked phrases"
+        ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "linkFilterEnabled", type: "checkbox", onChange: updateModerationDraft }),
+          "Links"
+        ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "capsFilterEnabled", type: "checkbox", onChange: updateModerationDraft }),
+          "Excessive caps"
+        ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "repeatFilterEnabled", type: "checkbox", onChange: updateModerationDraft }),
+          "Repeated messages"
+        ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "symbolFilterEnabled", type: "checkbox", onChange: updateModerationDraft }),
+          "Symbol spam"
+        ]),
+        formRow("Warning message", h("input", {
+          id: "moderationWarningMessage",
+          placeholder: "@{user}, please keep chat within channel guidelines.",
+          onInput: updateModerationDraft
+        }))
+      ]),
+      h("div", { className: "grid three" }, [
+        formRow("Caps min length", h("input", { id: "capsMinLength", type: "number", min: "5", max: "450", onInput: updateModerationDraft })),
+        formRow("Caps ratio", h("input", { id: "capsRatio", type: "number", min: "0.1", max: "1", step: "0.05", onInput: updateModerationDraft })),
+        formRow("Repeat limit", h("input", { id: "repeatLimit", type: "number", min: "2", max: "20", onInput: updateModerationDraft })),
+        formRow("Repeat window seconds", h("input", { id: "repeatWindowSeconds", type: "number", min: "5", max: "600", onInput: updateModerationDraft })),
+        formRow("Symbol min length", h("input", { id: "symbolMinLength", type: "number", min: "5", max: "450", onInput: updateModerationDraft })),
+        formRow("Symbol ratio", h("input", { id: "symbolRatio", type: "number", min: "0.1", max: "1", step: "0.05", onInput: updateModerationDraft }))
+      ]),
+      callout("Moderation filters fail open and do not ban. Protected bot commands and active giveaway entry commands are exempt.", "info"),
+      h("div", { className: "actions" }, [
+        actionButton("Save moderation settings", { id: "saveModerationSettings", onClick: saveModerationSettings })
+      ])
+    ]),
+    card("Blocked Phrases", [
+      h("div", { className: "grid" }, [
+        formRow("Phrase or word", h("input", { id: "moderationTerm", placeholder: "phrase", onInput: updateModerationTermDraft })),
+        h("label", { className: "inline-check editor-check" }, [
+          h("input", { id: "moderationTermEnabled", type: "checkbox", onChange: updateModerationTermDraft }),
+          "Enabled"
+        ])
+      ]),
+      h("div", { className: "actions" }, [
+        actionButton("Save phrase", { id: "saveModerationTerm", variant: "secondary", onClick: saveModerationTerm })
+      ]),
+      dataTable(["Phrase", "State", "Actions"], terms.map((term) => [
+        term.term,
+        statusChip(term.enabled ? "enabled" : "disabled"),
+        h("div", { className: "actions inline-actions table-actions" }, [
+          actionButton(term.enabled ? "Disable" : "Enable", { id: `moderation-term-enable-${term.id}`, variant: "secondary", busyKey: "moderationTermEnable", onClick: () => toggleModerationTerm(term.id, !term.enabled) }),
+          actionButton("Delete", { id: `moderation-term-delete-${term.id}`, variant: "danger", busyKey: "moderationTermDelete", onClick: () => deleteModerationTerm(term.id, term.term) })
+        ])
+      ]))
+    ]),
+    card("Local Test", [
+      h("div", { className: "grid three" }, [
+        formRow("Actor", h("input", { id: "moderationTestActor", placeholder: "viewer" })),
+        formRow("Role", h("select", { id: "moderationTestRole" }, [
+          option("viewer", "viewer"),
+          option("mod", "mod"),
+          option("broadcaster", "broadcaster")
+        ])),
+        formRow("Message", h("input", { id: "moderationTestText", placeholder: "test chat message" }))
+      ]),
+      h("div", { className: "actions" }, [
+        actionButton("Run moderation test", { id: "runModerationTest", variant: "secondary", onClick: runModerationTest })
+      ]),
+      renderModerationTestResult()
+    ]),
+    card("Recent Hits", [
+      dataTable(["Timestamp", "Filter", "User", "Action", "Detail", "Message"], hits.slice(0, 25).map((hit) => [
+        hit.createdAt || "",
+        hit.filterType || "",
+        hit.userLogin || "",
+        hit.action || "warn",
+        hit.detail || "",
+        formatMessagePreview(hit.messagePreview || "")
+      ]))
     ]),
     message()
   ];
@@ -1962,6 +2086,7 @@ function featureGate(key) {
   return (state.featureGates || []).find((gate) => gate.key === key) ||
     (key === "custom_commands" ? state.commandFeatureGate : null) ||
     (key === "timers" ? state.timerFeatureGate : null) ||
+    (key === "moderation_filters" ? state.moderationFeatureGate : null) ||
     { key, label: key, mode: "off", liveAllowed: false, testAllowed: false };
 }
 
@@ -2250,12 +2375,13 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, commands, timers, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult] = await Promise.all([
+    const [config, status, giveaway, commands, timers, moderation, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
       api.commands(),
       api.timers(),
+      api.moderation(),
       api.templates(),
       api.operatorMessages(),
       api.reminder(),
@@ -2269,6 +2395,7 @@ async function refreshAll() {
     state.giveaway = giveaway;
     setCommandState(commands);
     setTimerState(timers);
+    setModerationState(moderation);
     state.templates = templates.templates || [];
     state.operatorMessages = operatorMessages.templates || [];
     state.reminder = reminder.reminder || {};
@@ -2283,11 +2410,12 @@ async function refreshAll() {
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, commands, timers, operatorMessages, reminder, audit, outbound, featureGateResult] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.timers(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates()]);
+  const [status, giveaway, commands, timers, moderation, operatorMessages, reminder, audit, outbound, featureGateResult] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.timers(), api.moderation(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates()]);
   state.status = status;
   state.giveaway = giveaway;
   setCommandState(commands);
   setTimerState(timers);
+  setModerationState(moderation);
   state.operatorMessages = operatorMessages.templates || [];
   state.reminder = reminder.reminder || {};
   state.auditLogs = audit.logs || [];
@@ -2337,6 +2465,14 @@ function setTimerState(result = {}) {
     state.selectedTimerId = null;
     state.timerDraft = {};
   }
+}
+
+function setModerationState(result = {}) {
+  state.moderation = result;
+  state.moderationTerms = result.terms || [];
+  state.moderationHits = result.hits || [];
+  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, filtersEnabled: 0, hits: 0 };
+  state.moderationFeatureGate = result.featureGate || state.moderationFeatureGate;
 }
 
 async function runAction(key, fn, options = {}) {
@@ -2492,6 +2628,57 @@ async function sendTimerNow(id) {
     setTimerState(result);
     return result;
   }, { skipRefresh: true, success: "Timer queued." });
+}
+
+async function saveModerationSettings() {
+  await runAction("saveModerationSettings", async () => {
+    const result = await api.saveModerationSettings(readModerationSettingsPayload());
+    setModerationState(result);
+    state.moderationDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Moderation settings saved." });
+}
+
+async function saveModerationTerm() {
+  await runAction("saveModerationTerm", async () => {
+    const result = await api.saveModerationTerm(readModerationTermPayload());
+    setModerationState(result);
+    state.moderationTermDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Blocked phrase saved." });
+}
+
+async function toggleModerationTerm(id, enabled) {
+  await runAction("moderationTermEnable", async () => {
+    const result = await api.enableModerationTerm(id, enabled);
+    setModerationState(result);
+    return result;
+  }, { skipRefresh: true, success: enabled ? "Blocked phrase enabled." : "Blocked phrase disabled." });
+}
+
+async function deleteModerationTerm(id, term) {
+  if (!confirm(`Delete blocked phrase "${term}"?`)) {
+    return;
+  }
+
+  await runAction("moderationTermDelete", async () => {
+    const result = await api.deleteModerationTerm(id);
+    setModerationState(result);
+    return result;
+  }, { skipRefresh: true, success: "Blocked phrase deleted." });
+}
+
+async function runModerationTest() {
+  await runAction("runModerationTest", async () => {
+    const result = await api.simulateModeration({
+      actor: field("moderationTestActor")?.value || "viewer",
+      role: field("moderationTestRole")?.value || "viewer",
+      text: field("moderationTestText")?.value || ""
+    });
+    setModerationState(result);
+    state.moderationTestResult = result;
+    return result;
+  }, { skipRefresh: true, success: "Moderation test completed." });
 }
 
 function newCustomCommand() {
@@ -2663,6 +2850,16 @@ function updateTimerDraft(event) {
   state.timerDraft[event.target.id] = value;
 }
 
+function updateModerationDraft(event) {
+  const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  state.moderationDraft[event.target.id] = value;
+}
+
+function updateModerationTermDraft(event) {
+  const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  state.moderationTermDraft[event.target.id] = value;
+}
+
 function updateGiveawayDraft(event) {
   state.giveawayDraft[event.target.id] = event.target.value;
 }
@@ -2769,6 +2966,30 @@ function readTimerPayload() {
     intervalMinutes: Number(field("timerInterval")?.value || 5),
     enabled: Boolean(field("timerEnabled")?.checked),
     message: field("timerMessage")?.value || ""
+  };
+}
+
+function readModerationSettingsPayload() {
+  return {
+    blockedTermsEnabled: Boolean(field("blockedTermsEnabled")?.checked),
+    linkFilterEnabled: Boolean(field("linkFilterEnabled")?.checked),
+    capsFilterEnabled: Boolean(field("capsFilterEnabled")?.checked),
+    repeatFilterEnabled: Boolean(field("repeatFilterEnabled")?.checked),
+    symbolFilterEnabled: Boolean(field("symbolFilterEnabled")?.checked),
+    warningMessage: field("moderationWarningMessage")?.value || "",
+    capsMinLength: Number(field("capsMinLength")?.value || 20),
+    capsRatio: Number(field("capsRatio")?.value || 0.75),
+    repeatLimit: Number(field("repeatLimit")?.value || 3),
+    repeatWindowSeconds: Number(field("repeatWindowSeconds")?.value || 30),
+    symbolMinLength: Number(field("symbolMinLength")?.value || 12),
+    symbolRatio: Number(field("symbolRatio")?.value || 0.6)
+  };
+}
+
+function readModerationTermPayload() {
+  return {
+    term: field("moderationTerm")?.value || "",
+    enabled: Boolean(field("moderationTermEnabled")?.checked)
   };
 }
 
@@ -3110,6 +3331,23 @@ function renderTestResult() {
   ]);
 }
 
+function renderModerationTestResult() {
+  const result = state.moderationTestResult?.result;
+
+  if (!result) {
+    return null;
+  }
+
+  return h("div", { className: "test-result" }, [
+    statusGrid([
+      ["Result", result.hit ? "hit" : result.skipped ? "skipped" : "clear", !result.hit],
+      ["Action", result.hit?.action || "none", !result.hit],
+      ["Reason", result.hit?.detail || result.reason || "none", !result.hit]
+    ]),
+    result.hit ? callout(result.hit.warningMessage, "warn") : null
+  ]);
+}
+
 function fallbackCommandMessage(result) {
   if (result.routerResult === "denied") return "Command denied by permission checks.";
   if (result.routerResult === "unknown") return "Unknown command ignored.";
@@ -3121,6 +3359,7 @@ function syncFormValues() {
   const summary = state.giveaway?.summary || {};
   const selectedCommand = selectedCustomCommand();
   const currentTimer = selectedTimer();
+  const moderationSettings = state.moderation?.settings || {};
   setValue("mode", settingsValue("mode", config.mode || "live"));
   setValue("redirectUri", settingsValue("redirectUri", config.redirectUri || defaultRedirectUri));
   setValue("clientId", settingsValue("clientId", config.hasClientId ? savedCredentialMask : ""));
@@ -3141,6 +3380,23 @@ function syncFormValues() {
   setValue("timerInterval", timerValue("timerInterval", currentTimer?.intervalMinutes || 5));
   setChecked("timerEnabled", Boolean(timerValue("timerEnabled", currentTimer?.enabled ?? false)));
   setValue("timerMessage", timerValue("timerMessage", currentTimer?.message || ""));
+  setChecked("blockedTermsEnabled", Boolean(moderationValue("blockedTermsEnabled", moderationSettings.blockedTermsEnabled)));
+  setChecked("linkFilterEnabled", Boolean(moderationValue("linkFilterEnabled", moderationSettings.linkFilterEnabled)));
+  setChecked("capsFilterEnabled", Boolean(moderationValue("capsFilterEnabled", moderationSettings.capsFilterEnabled)));
+  setChecked("repeatFilterEnabled", Boolean(moderationValue("repeatFilterEnabled", moderationSettings.repeatFilterEnabled)));
+  setChecked("symbolFilterEnabled", Boolean(moderationValue("symbolFilterEnabled", moderationSettings.symbolFilterEnabled)));
+  setValue("moderationWarningMessage", moderationValue("moderationWarningMessage", moderationSettings.warningMessage || "@{user}, please keep chat within channel guidelines."));
+  setValue("capsMinLength", moderationValue("capsMinLength", moderationSettings.capsMinLength || 20));
+  setValue("capsRatio", moderationValue("capsRatio", moderationSettings.capsRatio || 0.75));
+  setValue("repeatLimit", moderationValue("repeatLimit", moderationSettings.repeatLimit || 3));
+  setValue("repeatWindowSeconds", moderationValue("repeatWindowSeconds", moderationSettings.repeatWindowSeconds || 30));
+  setValue("symbolMinLength", moderationValue("symbolMinLength", moderationSettings.symbolMinLength || 12));
+  setValue("symbolRatio", moderationValue("symbolRatio", moderationSettings.symbolRatio || 0.6));
+  setValue("moderationTerm", draftValue(state.moderationTermDraft, "moderationTerm", ""));
+  setChecked("moderationTermEnabled", Boolean(draftValue(state.moderationTermDraft, "moderationTermEnabled", true)));
+  setValue("moderationTestActor", field("moderationTestActor")?.value || "viewer");
+  setValue("moderationTestRole", field("moderationTestRole")?.value || "viewer");
+  setValue("moderationTestText", field("moderationTestText")?.value || "VISIT EXAMPLE.COM NOW");
   setValue("giveawayTitle", giveawayValue("giveawayTitle", summary.title || "Community Giveaway"));
   setValue("giveawayKeyword", giveawayValue("giveawayKeyword", summary.keyword || "enter"));
   setValue("winnerCount", giveawayValue("winnerCount", summary.winnerCount || 3));
@@ -3171,6 +3427,10 @@ function commandValue(id, fallback) {
 
 function timerValue(id, fallback) {
   return draftValue(state.timerDraft, id, fallback);
+}
+
+function moderationValue(id, fallback) {
+  return draftValue(state.moderationDraft, id, fallback);
 }
 
 function giveawayValue(id, fallback) {

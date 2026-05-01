@@ -147,6 +147,43 @@ export const initializeSchema = (db: DbClient) => {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS moderation_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      blocked_terms_enabled INTEGER NOT NULL DEFAULT 0 CHECK (blocked_terms_enabled IN (0, 1)),
+      link_filter_enabled INTEGER NOT NULL DEFAULT 0 CHECK (link_filter_enabled IN (0, 1)),
+      caps_filter_enabled INTEGER NOT NULL DEFAULT 0 CHECK (caps_filter_enabled IN (0, 1)),
+      repeat_filter_enabled INTEGER NOT NULL DEFAULT 0 CHECK (repeat_filter_enabled IN (0, 1)),
+      symbol_filter_enabled INTEGER NOT NULL DEFAULT 0 CHECK (symbol_filter_enabled IN (0, 1)),
+      action TEXT NOT NULL DEFAULT 'warn' CHECK (action IN ('warn')),
+      warning_message TEXT NOT NULL DEFAULT '@{user}, please keep chat within channel guidelines.',
+      caps_min_length INTEGER NOT NULL DEFAULT 20,
+      caps_ratio REAL NOT NULL DEFAULT 0.75,
+      repeat_window_seconds INTEGER NOT NULL DEFAULT 30,
+      repeat_limit INTEGER NOT NULL DEFAULT 3,
+      symbol_min_length INTEGER NOT NULL DEFAULT 12,
+      symbol_ratio REAL NOT NULL DEFAULT 0.6,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS moderation_blocked_terms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      term TEXT NOT NULL UNIQUE,
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS moderation_hits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      filter_type TEXT NOT NULL,
+      action TEXT NOT NULL,
+      user_key TEXT NOT NULL,
+      user_login TEXT NOT NULL,
+      message_preview TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS giveaway_reminder_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
@@ -176,6 +213,10 @@ export const initializeSchema = (db: DbClient) => {
       ON custom_command_invocations(command_id);
     CREATE INDEX IF NOT EXISTS idx_timers_enabled_next_fire
       ON timers(enabled, next_fire_at);
+    CREATE INDEX IF NOT EXISTS idx_moderation_hits_created_at
+      ON moderation_hits(created_at);
+    CREATE INDEX IF NOT EXISTS idx_moderation_blocked_terms_enabled
+      ON moderation_blocked_terms(enabled);
   `);
 
   ensureColumn(db, "outbound_messages", "failure_category", "TEXT NOT NULL DEFAULT 'none'");

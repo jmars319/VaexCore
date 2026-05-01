@@ -21,6 +21,7 @@ const steps = [
   ["Custom commands smoke", ["npm", "run", "smoke:commands"]],
   ["Operational guardrails smoke", ["npm", "run", "smoke:guardrails"]],
   ["Timers smoke", ["npm", "run", "smoke:timers"]],
+  ["Moderation smoke", ["npm", "run", "smoke:moderation"]],
   ["Token refresh smoke", ["npm", "run", "smoke:token-refresh"]],
   ["Giveaway readiness smoke", ["npm", "run", "smoke:giveaway"]],
   ["CLI env smoke", ["npm", "run", "smoke:cli-env"]],

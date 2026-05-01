@@ -11,6 +11,7 @@ import { StartupChecklist } from "./startupChecklist";
 import { createDbClient, type DbClient } from "../db/client";
 import { registerCommandsModule } from "../modules/commands/commands.module";
 import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
+import { ModerationService } from "../modules/moderation/moderation.module";
 import { TimerScheduler, TimersService } from "../modules/timers/timers.module";
 import { createRuntimeStatus, type RuntimeStatus } from "./runtimeStatus";
 import { registerStatusCommands } from "./statusCommands";
@@ -34,6 +35,7 @@ export class VaexCoreBot {
   private readonly db: DbClient;
   private readonly runtimeStatus: RuntimeStatus;
   private readonly timerScheduler: TimerScheduler;
+  private readonly moderationService: ModerationService;
   private pendingLivePingConfirmation = false;
   private twitchAccessToken: string;
 
@@ -116,6 +118,14 @@ export class VaexCoreBot {
       db: this.db,
       logger: options.logger,
       runtimeStatus: this.runtimeStatus
+    });
+    this.moderationService = new ModerationService(this.db, {
+      featureGates,
+      commandPrefix: options.env.commandPrefix,
+      exemptCommandNames: () => {
+        const active = giveawaysService.status()?.giveaway.keyword;
+        return active ? [active] : [];
+      }
     });
     registerStatusCommands({
       router: this.commandRouter,
@@ -286,6 +296,7 @@ export class VaexCoreBot {
       "Inbound chat message text"
     );
 
+    await this.handleModeration(message);
     await this.commandRouter.handle(message);
 
     if (
@@ -294,6 +305,27 @@ export class VaexCoreBot {
       !this.runtimeStatus.liveChatConfirmed
     ) {
       this.pendingLivePingConfirmation = true;
+    }
+  }
+
+  private async handleModeration(message: ChatMessage) {
+    try {
+      const result = this.moderationService.evaluate(message);
+
+      if (!result.hit || !this.moderationService.shouldWarn(message, result.hit.filterTypes)) {
+        return;
+      }
+
+      this.messageQueue.enqueue(result.hit.warningMessage, {
+        category: "system",
+        action: "moderation:warn",
+        importance: "normal"
+      });
+    } catch (error) {
+      this.options.logger.warn(
+        { error: redactSecrets(error), userLogin: message.userLogin },
+        "Moderation filters failed open"
+      );
     }
   }
 }
