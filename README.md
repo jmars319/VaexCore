@@ -403,6 +403,12 @@ npm run app:zip
 npm run smoke:unsigned-release
 ```
 
+Run the full unsigned release checklist:
+
+```bash
+npm run release:unsigned
+```
+
 Outputs are written to:
 
 ```text
@@ -457,6 +463,24 @@ Tester install flow:
 5. Open `Diagnostics` and verify SQLite says `better-sqlite3`, Setup UI assets are present, and first-run recovery points to `Settings -> Setup Guide` if the app is not configured yet.
 
 Do not describe these builds as notarized. Public distribution should wait until Developer ID signing and notarization are available.
+
+### Release Checklist
+
+Before sharing a tester build:
+
+1. Update `package.json` version when the artifact should have a new filename.
+2. Add or update the matching section in `CHANGELOG.md`.
+3. Run `npm run release:unsigned`.
+4. Share all three generated files from `release/`: `.zip`, `.zip.sha256`, and `.json`.
+5. Tell testers the build is unsigned, ad-hoc signed, and not notarized.
+
+### Known Limitations
+
+- Current tester artifact is macOS arm64 only.
+- Builds are ad-hoc signed, not Developer ID signed, and not notarized.
+- First launch may require the macOS unidentified-developer override.
+- VaexCore is local-first only; it is not a SaaS/public hosted bot.
+- Prize codes are never stored. Manual delivery remains outside VaexCore.
 
 ### Installing, Resetting, And Recovering
 

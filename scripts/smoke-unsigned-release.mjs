@@ -24,6 +24,7 @@ assert(existsSync(manifestPath), "manifest exists");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 assert(manifest.productName === productName, "manifest product name matches");
 assert(manifest.version === version, "manifest version matches");
+assert(manifest.releaseType === "unsigned-tester", "manifest marks unsigned tester release type");
 assert(manifest.notarized === false, "manifest marks app as not notarized");
 assert(manifest.signing === "ad-hoc", "manifest marks ad-hoc signing");
 

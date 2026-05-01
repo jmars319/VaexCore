@@ -48,6 +48,8 @@ writeFileSync(
     productName,
     version,
     gitCommit,
+    createdAt: new Date().toISOString(),
+    releaseType: "unsigned-tester",
     platform: "darwin",
     arch: process.arch,
     notarized: false,
