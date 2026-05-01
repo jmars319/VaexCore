@@ -27,6 +27,17 @@ try {
   if (env.mode === "live") {
     console.log(`- bot user ID present: ${Boolean(env.twitchBotUserId)}`);
     console.log(`- broadcaster ID present: ${Boolean(env.twitchBroadcasterUserId)}`);
+    console.log(
+      `- token auto-refresh: ${env.twitchAutoRefreshAvailable ? "available" : "not configured"}`
+    );
+    if (env.twitchSecretsBootstrapped) {
+      console.log("- local OAuth store updated from refresh-capable configuration.");
+    }
+    if (!env.twitchAutoRefreshAvailable) {
+      console.log(
+        "  Add TWITCH_CLIENT_SECRET and TWITCH_REFRESH_TOKEN, or use Settings -> Setup Guide, so CLI startup can refresh expired Twitch access tokens."
+      );
+    }
     console.log("- required Twitch scopes: user:read:chat user:write:chat");
     console.log(
       "  Scope ownership cannot be verified offline; Twitch will confirm scopes during live startup."

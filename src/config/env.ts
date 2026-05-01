@@ -1,8 +1,18 @@
 import "dotenv/config";
 import { z, ZodError } from "zod";
-import { readLocalSecrets } from "./localSecrets";
+import {
+  defaultRedirectUri,
+  readLocalSecrets,
+  writeLocalSecrets,
+  type LocalSecrets
+} from "./localSecrets";
 
 const modeSchema = z.enum(["local", "live"]).default("live");
+const optionalEnvString = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().trim().min(1).optional()
+);
 const baseEnvSchema = z.object({
   VAEXCORE_MODE: modeSchema,
   COMMAND_PREFIX: z.string().min(1).default("!"),
@@ -23,6 +33,7 @@ const baseEnvSchema = z.object({
 const liveEnvSchema = baseEnvSchema.extend({
   VAEXCORE_MODE: z.literal("live"),
   TWITCH_CLIENT_ID: z.string().trim().min(1),
+  TWITCH_CLIENT_SECRET: optionalEnvString,
   TWITCH_USER_ACCESS_TOKEN: z
     .string()
     .trim()
@@ -30,6 +41,7 @@ const liveEnvSchema = baseEnvSchema.extend({
     .refine((token) => !token.startsWith("oauth:"), {
       message: "Use the raw access token without the oauth: prefix"
     }),
+  TWITCH_REFRESH_TOKEN: optionalEnvString,
   TWITCH_BROADCASTER_USER_ID: z.string().trim().min(1),
   TWITCH_BOT_USER_ID: z.string().trim().min(1)
 });
@@ -58,13 +70,22 @@ export const loadEnv = () => {
   const env = liveEnvSchema.parse({
     ...process.env,
     VAEXCORE_MODE: "live",
-    TWITCH_CLIENT_ID: process.env.TWITCH_CLIENT_ID ?? twitch.clientId,
+    TWITCH_CLIENT_ID: envValueOrExisting("TWITCH_CLIENT_ID", twitch.clientId),
+    TWITCH_CLIENT_SECRET: envValueOrExisting(
+      "TWITCH_CLIENT_SECRET",
+      twitch.clientSecret
+    ),
     TWITCH_USER_ACCESS_TOKEN:
-      process.env.TWITCH_USER_ACCESS_TOKEN ?? twitch.accessToken,
+      envValueOrExisting("TWITCH_USER_ACCESS_TOKEN", twitch.accessToken),
+    TWITCH_REFRESH_TOKEN: envValueOrExisting(
+      "TWITCH_REFRESH_TOKEN",
+      twitch.refreshToken
+    ),
     TWITCH_BROADCASTER_USER_ID:
-      process.env.TWITCH_BROADCASTER_USER_ID ?? twitch.broadcasterUserId,
-    TWITCH_BOT_USER_ID: process.env.TWITCH_BOT_USER_ID ?? twitch.botUserId
+      envValueOrExisting("TWITCH_BROADCASTER_USER_ID", twitch.broadcasterUserId),
+    TWITCH_BOT_USER_ID: envValueOrExisting("TWITCH_BOT_USER_ID", twitch.botUserId)
   });
+  const bootstrap = bootstrapLocalOAuthStore(secrets, env);
 
   return {
     mode: env.VAEXCORE_MODE,
@@ -76,7 +97,11 @@ export const loadEnv = () => {
     logLevel: env.LOG_LEVEL,
     debug: env.VAEXCORE_DEBUG,
     twitchEventSubUrl: env.TWITCH_EVENTSUB_URL,
-    databaseUrl: env.DATABASE_URL
+    databaseUrl: env.DATABASE_URL,
+    twitchAutoRefreshAvailable: Boolean(
+      env.TWITCH_CLIENT_SECRET && env.TWITCH_REFRESH_TOKEN
+    ),
+    twitchSecretsBootstrapped: bootstrap.wrote
   } as const;
 };
 
@@ -104,4 +129,39 @@ export const formatEnvError = (error: unknown) => {
       return `${key}: ${issue.message}`;
     })
     .join("\n");
+};
+
+const envValueOrExisting = (key: string, existing: string | undefined) => {
+  const value = process.env[key]?.trim();
+  return value ? value : existing;
+};
+
+const bootstrapLocalOAuthStore = (
+  existing: LocalSecrets,
+  env: z.infer<typeof liveEnvSchema>
+) => {
+  if (!env.TWITCH_CLIENT_SECRET || !env.TWITCH_REFRESH_TOKEN) {
+    return { wrote: false };
+  }
+
+  const next: LocalSecrets = {
+    mode: "live",
+    twitch: {
+      ...existing.twitch,
+      clientId: env.TWITCH_CLIENT_ID,
+      clientSecret: env.TWITCH_CLIENT_SECRET,
+      redirectUri: existing.twitch.redirectUri || defaultRedirectUri,
+      accessToken: env.TWITCH_USER_ACCESS_TOKEN,
+      refreshToken: env.TWITCH_REFRESH_TOKEN,
+      broadcasterUserId: env.TWITCH_BROADCASTER_USER_ID,
+      botUserId: env.TWITCH_BOT_USER_ID
+    }
+  };
+
+  if (JSON.stringify(existing) === JSON.stringify(next)) {
+    return { wrote: false };
+  }
+
+  writeLocalSecrets(next);
+  return { wrote: true };
 };

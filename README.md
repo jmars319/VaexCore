@@ -31,7 +31,9 @@ Edit `.env` before live startup:
 
 - `VAEXCORE_MODE`: `live` for Twitch, `local` for non-Twitch env checks.
 - `TWITCH_CLIENT_ID`: Twitch app client ID.
+- `TWITCH_CLIENT_SECRET`: Optional but recommended for CLI auto-refresh.
 - `TWITCH_USER_ACCESS_TOKEN`: Bot user access token without the `oauth:` prefix.
+- `TWITCH_REFRESH_TOKEN`: Optional but recommended for CLI auto-refresh.
 - `TWITCH_BROADCASTER_USER_ID`: Channel owner user ID.
 - `TWITCH_BOT_USER_ID`: Bot account user ID.
 - `COMMAND_PREFIX`: Optional command prefix. Defaults to `!`.
@@ -42,7 +44,7 @@ The Twitch user access token must belong to the bot user and include these scope
 - `user:read:chat`
 - `user:write:chat`
 
-`npm run check:env` validates that required values are present and catches local formatting mistakes, such as using an `oauth:` prefix. It cannot verify token scopes offline; Twitch confirms those when VaexCore creates the chat subscription and sends a message.
+`npm run check:env` validates that required values are present and catches local formatting mistakes, such as using an `oauth:` prefix. If `TWITCH_CLIENT_SECRET` and `TWITCH_REFRESH_TOKEN` are present, VaexCore imports them into the local OAuth store so future CLI starts can refresh expired access tokens. It cannot verify token scopes offline; Twitch confirms those when VaexCore creates the chat subscription and sends a message.
 
 ## Git Hygiene
 
@@ -107,6 +109,8 @@ If you configured Twitch in the packaged macOS app instead of `.env`, start the 
 npm run dev:app-config
 ```
 
+Access-token-only `.env` files still work. For easier long-term CLI use, include `TWITCH_CLIENT_SECRET` and `TWITCH_REFRESH_TOKEN` once, then let VaexCore keep rotated OAuth tokens in `config/local.secrets.json`.
+
 Startup logs should include these checklist entries:
 
 - `bot user ID present`
@@ -131,7 +135,7 @@ If Twitch rejects startup with `401` or `403`, check:
 
 ## Going Live With VaexCore
 
-1. Fill `.env` with `VAEXCORE_MODE=live`, Twitch client ID, bot token, bot user ID, and broadcaster user ID.
+1. Use `Settings` -> `Setup Guide`, or fill `.env` with `VAEXCORE_MODE=live`, Twitch client ID, bot token, bot user ID, broadcaster user ID, and preferably the client secret plus refresh token for CLI auto-refresh.
 2. Run `npm run check:env`.
 3. Run `npm run build`.
 4. Start VaexCore from `Dashboard` -> `Bot Runtime` -> `Start Bot`. CLI fallback remains `npm run dev`, or `npm run dev:app-config` if setup was completed in the packaged macOS app.
@@ -196,7 +200,7 @@ Open `Settings`, then use `Setup Guide`.
    Click `Connect Twitch` while logged into the Bot Login account and approve `user:read:chat` and `user:write:chat`. The Client ID and Client Secret belong to the Twitch Developer App, not to one authorized Twitch user.
    If Twitch authorizes the wrong account, click `Disconnect Twitch`, switch Twitch accounts in the browser, then connect again.
 5. Validate setup.
-   Click `Validate Setup` and confirm token, scopes, bot identity, and broadcaster identity pass.
+   Click `Validate Setup` and confirm token, scopes, bot identity, and broadcaster identity pass. VaexCore stores Twitch OAuth tokens locally and refreshes expired access tokens automatically when Twitch returns `401 Unauthorized`; if refresh fails, disconnect and reconnect Twitch.
 6. Test chat.
    Click `Send test message` to confirm the bot can speak in chat.
 7. Start the bot.
@@ -218,6 +222,8 @@ After UI changes, run:
 ```bash
 npm run typecheck
 npm run build
+npm run smoke:cli-env
+npm run smoke:token-refresh
 npm run setup
 ```
 
@@ -243,7 +249,7 @@ In the `Settings` section:
 
 Common setup errors:
 
-- `401`: bad, expired, or revoked token. Connect Twitch again.
+- `401`: bad, expired, or revoked token. VaexCore will try to refresh it automatically when a refresh token is available; if refresh fails, connect Twitch again.
 - `403`: missing scopes. Reconnect and approve both chat scopes.
 - Bot identity mismatch: click `Disconnect Twitch`, log into Twitch as the configured bot login, then connect again.
 - Redirect mismatch: the Twitch Developer app redirect URI does not exactly match `http://localhost:3434/auth/twitch/callback`.
@@ -291,6 +297,8 @@ The `Giveaways` tab also includes stream-night controls:
 - `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.
 - Critical giveaway guardrails treat queued, sending, retrying, missing, and failed required chat announcements as blocking until the outbound queue confirms `sent` or `resent`. Phase rows show queue status, queue ID, retry timing, failure category, and the next recovery action.
 - `npm run smoke:giveaway` runs a temp-database giveaway readiness check covering command permissions, entry, close, draw, reroll, delivery, audit logs, recap, outbound history, and the local lifecycle test.
+- `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
+- `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
 
 Current chat command syntax:
 
@@ -414,7 +422,7 @@ npm run dev:app-config
 
 After changing setup UI assets, run `npm run app:build` again so `dist-bundle/setup-ui` is refreshed before packaging. Electron loads the same localhost setup server as `npm run setup`.
 
-VaexCore uses native `better-sqlite3`. The app build leaves the project `node_modules` on the normal Node ABI, then installs the Electron ABI prebuild into the packaged `.app` and probes it before finishing. A `node:sqlite` fallback remains as a last resort if a future Electron/native prebuild is unavailable; that fallback may emit Node's experimental SQLite warning.
+VaexCore uses native `better-sqlite3`. The app build leaves the project `node_modules` on the normal Node ABI, then installs the Electron ABI prebuild into the packaged `.app`, re-signs the app bundle so macOS accepts the modified native module, and probes it before finishing. A `node:sqlite` fallback remains as a last resort if a future Electron/native prebuild is unavailable; that fallback may emit Node's experimental SQLite warning.
 
 If Electron fails to load the packaged app after Node, Electron, or dependency upgrades, reinstall dependencies and rebuild the package:
 
