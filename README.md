@@ -396,13 +396,20 @@ Create a DMG:
 npm run app:dist
 ```
 
+Create an unsigned tester zip:
+
+```bash
+npm run app:zip
+npm run smoke:unsigned-release
+```
+
 Outputs are written to:
 
 ```text
 release/
 ```
 
-The `.app` bundle can be copied into `/Applications`. The DMG, when built, can be opened and installed normally.
+The `.app` bundle can be copied into `/Applications`. The DMG, when built, can be opened and installed normally. The unsigned tester zip writes a `.zip`, `.zip.sha256`, and `.json` manifest under `release/`.
 
 App-local data is stored under:
 
@@ -430,6 +437,26 @@ After changing setup UI assets, run `npm run app:build` again so `dist-bundle/se
 VaexCore uses native `better-sqlite3`. The app build leaves the project `node_modules` on the normal Node ABI, then installs the Electron ABI prebuild into the packaged `.app`, re-signs the app bundle so macOS accepts the modified native module, and probes it before finishing. A `node:sqlite` fallback remains as a last resort if a future Electron/native prebuild is unavailable; that fallback may emit Node's experimental SQLite warning.
 
 For support handoff, open `Diagnostics` and click `Copy diagnostic report` for the short report or `Copy support bundle` for diagnostics plus recent non-secret bot logs, outbound history, and audit summaries. Both are local-only and intentionally omit Twitch client secrets, access tokens, and refresh tokens while still showing the paths and readiness checks needed to troubleshoot setup or packaging.
+
+### Unsigned Tester Builds
+
+VaexCore currently has no Apple Developer ID signing or notarization. That means tester builds are intentionally labeled unsigned and macOS may show an unidentified developer warning. Share only zips you built yourself from this repo, and include the `.zip.sha256` checksum and `.json` manifest with the zip.
+
+Tester install flow:
+
+1. Download the unsigned zip and matching `.zip.sha256` file.
+2. Optional checksum check:
+
+   ```bash
+   cd ~/Downloads
+   shasum -a 256 -c VaexCore-0.1.0-mac-arm64-unsigned.zip.sha256
+   ```
+
+3. Unzip the archive and move `VaexCore.app` to `/Applications`.
+4. First launch may require right-clicking `VaexCore.app` and choosing `Open`, or opening `System Settings -> Privacy & Security` and choosing `Open Anyway`.
+5. Open `Diagnostics` and verify SQLite says `better-sqlite3`, Setup UI assets are present, and first-run recovery points to `Settings -> Setup Guide` if the app is not configured yet.
+
+Do not describe these builds as notarized. Public distribution should wait until Developer ID signing and notarization are available.
 
 ### Installing, Resetting, And Recovering
 
