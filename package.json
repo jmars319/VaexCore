@@ -1,6 +1,6 @@
 {
   "name": "vaexcore",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "VaexCore is a quiet Twitch operations bot for commands, moderation, giveaways, and stream control without the usual clutter.",
   "type": "module",
@@ -16,6 +16,8 @@
     "app:zip": "npm run app:build && node scripts/package-unsigned-mac.mjs",
     "check:env": "tsx src/cli/checkEnv.ts",
     "build": "tsc && esbuild src/setup/server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-bundle/setup-server.js && esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-bundle/live-bot.js && node scripts/copy-setup-ui.mjs",
+    "release:guard": "node scripts/verify-release-git-state.mjs",
+    "release:handoff": "node scripts/write-release-handoff.mjs",
     "release:check": "node scripts/verify-release-metadata.mjs",
     "release:unsigned": "node scripts/release-unsigned.mjs",
     "smoke:tester-guide": "node scripts/smoke-tester-guide.mjs",

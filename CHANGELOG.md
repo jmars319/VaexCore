@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 - Versioned unsigned tester release
+
+Current release state: clean-main unsigned tester cut for wider local testing.
+
+- Milestone 30: versioned tester release cut with clean-main release guard, full git SHA manifests, tester handoff notes, and rebuilt unsigned artifacts.
+
 ## 0.1.0 - Local unsigned tester build
 
 Current release state: usable local Twitch operator console with unsigned macOS tester packaging.

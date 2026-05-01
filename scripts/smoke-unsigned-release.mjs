@@ -22,8 +22,11 @@ assert(existsSync(checksumPath), "checksum exists");
 assert(existsSync(manifestPath), "manifest exists");
 
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const currentCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 assert(manifest.productName === productName, "manifest product name matches");
 assert(manifest.version === version, "manifest version matches");
+assert(manifest.gitCommit === currentCommit, "manifest points to current full git commit");
+assert(/^[0-9a-f]{40}$/.test(manifest.gitCommit), "manifest uses a full git commit SHA");
 assert(manifest.releaseType === "unsigned-tester", "manifest marks unsigned tester release type");
 assert(manifest.notarized === false, "manifest marks app as not notarized");
 assert(manifest.signing === "ad-hoc", "manifest marks ad-hoc signing");

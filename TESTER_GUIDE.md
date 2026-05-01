@@ -24,7 +24,7 @@ Before sharing the zip, the maintainer should have run the tester artifact dry r
 
    ```bash
    cd ~/Downloads
-   shasum -a 256 -c VaexCore-0.1.0-mac-arm64-unsigned.zip.sha256
+   shasum -a 256 -c VaexCore-0.1.1-mac-arm64-unsigned.zip.sha256
    ```
 
 3. Unzip the archive.

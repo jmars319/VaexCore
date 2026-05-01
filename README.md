@@ -411,13 +411,15 @@ Run the full unsigned release checklist:
 npm run release:unsigned
 ```
 
+`npm run release:unsigned` starts with `npm run release:guard`, which requires `main`, a clean working tree, and no unpushed or unpulled commits. Commit and push release changes before running it.
+
 Outputs are written to:
 
 ```text
 release/
 ```
 
-The `.app` bundle can be copied into `/Applications`. The DMG, when built, can be opened and installed normally. The unsigned tester zip writes a `.zip`, `.zip.sha256`, and `.json` manifest under `release/`.
+The `.app` bundle can be copied into `/Applications`. The DMG, when built, can be opened and installed normally. The unsigned tester zip writes a `.zip`, `.zip.sha256`, `.json` manifest, and `-handoff.md` tester note under `release/`.
 
 `npm run smoke:tester-artifact` extracts that zip into a temporary folder, launches the extracted `VaexCore.app` with isolated app data, and verifies the setup UI, Diagnostics, support bundle redaction, and packaged `better-sqlite3` path.
 `npm run smoke:tester-update` launches the same extracted artifact against a seeded existing app-data folder and verifies Twitch setup flags, safe config redaction, and SQLite audit data survive the app replacement.
@@ -429,6 +431,7 @@ App-local data is stored under:
 ```
 
 That folder contains `local.secrets.json` and `data/vaexcore.sqlite`. To reset the app config, quit VaexCore and remove that folder. Development CLI mode still uses the project-local config path unless `VAEXCORE_CONFIG_DIR` is set.
+
 For normal tester updates, replace only `VaexCore.app`; do not delete this Application Support folder unless you intentionally want to reset Twitch setup and local giveaway/operator data.
 
 CLI fallback remains available:
@@ -463,7 +466,7 @@ Tester install flow:
 
    ```bash
    cd ~/Downloads
-   shasum -a 256 -c VaexCore-0.1.0-mac-arm64-unsigned.zip.sha256
+   shasum -a 256 -c VaexCore-0.1.1-mac-arm64-unsigned.zip.sha256
    ```
 
 3. Unzip the archive and move `VaexCore.app` to `/Applications`.
@@ -486,10 +489,11 @@ Before sharing a tester build:
 
 1. Update `package.json` version when the artifact should have a new filename.
 2. Add or update the matching section in `CHANGELOG.md`.
-3. Run `npm run release:unsigned`.
-4. Confirm the tester artifact dry run and tester update preservation checks passed.
-5. Share all three generated files from `release/`: `.zip`, `.zip.sha256`, and `.json`.
-6. Tell testers the build is unsigned, ad-hoc signed, and not notarized.
+3. Commit and push the release cut to `main`.
+4. Run `npm run release:unsigned`.
+5. Confirm the tester artifact dry run and tester update preservation checks passed.
+6. Share the generated `.zip`, `.zip.sha256`, `.json`, and `-handoff.md` from `release/`.
+7. Tell testers the build is unsigned, ad-hoc signed, and not notarized.
 
 ### Known Limitations
 

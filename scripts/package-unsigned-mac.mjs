@@ -108,7 +108,7 @@ function sha256File(path) {
 
 function getGitCommit() {
   try {
-    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
       encoding: "utf8"
     }).trim();
   } catch {

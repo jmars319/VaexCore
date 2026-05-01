@@ -8,8 +8,10 @@ const version = packageJson.version ?? "0.0.0";
 const artifactBase = `${productName}-${version}-mac-${process.arch}-unsigned`;
 const releaseDir = resolve("release");
 const manifestPath = join(releaseDir, `${artifactBase}.json`);
+const handoffPath = join(releaseDir, `${artifactBase}-handoff.md`);
 
 const steps = [
+  ["Git release state", ["npm", "run", "release:guard"]],
   ["Release metadata", ["node", "scripts/verify-release-metadata.mjs"]],
   ["Tester guide", ["npm", "run", "smoke:tester-guide"]],
   ["Typecheck", ["npm", "run", "typecheck"]],
@@ -22,7 +24,8 @@ const steps = [
   ["Message queue smoke", ["npm", "run", "smoke:queue"]],
   ["Unsigned release artifact smoke", ["npm", "run", "smoke:unsigned-release"]],
   ["Tester artifact dry run", ["npm", "run", "smoke:tester-artifact"]],
-  ["Tester update preservation", ["npm", "run", "smoke:tester-update"]]
+  ["Tester update preservation", ["npm", "run", "smoke:tester-update"]],
+  ["Tester handoff", ["npm", "run", "release:handoff"]]
 ];
 
 for (const [label, command] of steps) {
@@ -47,5 +50,7 @@ console.log("\nUnsigned release ready:");
 console.log(`- zip: ${manifest.zip}`);
 console.log(`- checksum: release/${basename(manifest.zip)}.sha256`);
 console.log(`- manifest: release/${basename(manifestPath)}`);
+console.log(`- handoff: release/${basename(handoffPath)}`);
 console.log(`- sha256: ${manifest.sha256}`);
+console.log(`- git commit: ${manifest.gitCommit}`);
 console.log("- notarized: false");
