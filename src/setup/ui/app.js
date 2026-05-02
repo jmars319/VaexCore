@@ -22,6 +22,7 @@ const state = {
   commandSummary: { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 },
   commandReservedNames: [],
   commandPresets: [],
+  commandPresetPacks: [],
   commandFeatureGate: null,
   timers: [],
   timerSummary: { total: 0, enabled: 0, disabled: 0, sent: 0, waitingForActivity: 0 },
@@ -147,6 +148,7 @@ const api = {
   exportCommands: () => api.get("/api/commands/export"),
   importCommands: (body) => api.post("/api/commands/import", body),
   applyCommandPreset: (id) => api.post("/api/commands/preset", { id }),
+  applyCommandPresetPack: (id) => api.post("/api/commands/preset-pack", { id }),
   previewCommand: (body) => api.post("/api/commands/preview", body),
   timers: () => api.get("/api/timers"),
   exportTimers: () => api.get("/api/timers/export"),
@@ -893,6 +895,7 @@ function renderCommands() {
       ])
     ),
     renderFeatureGateCard("custom_commands"),
+    renderCommandPresetPackCard(),
     renderCommandPresetCard(),
     card("Command Library", [
       statusGrid([
@@ -999,12 +1002,13 @@ function renderCommandPresetCard() {
 
   return card("Starter Commands", [
     presets.length
-      ? dataTable(["Preset", "Command", "Permission", "Response", "Status", "Actions"], presets.map((preset) => [
+      ? dataTable(["Preset", "Category", "Command", "Permission", "Response", "Status", "Actions"], presets.map((preset) => [
           preset.label,
+          preset.category || "Utility",
           `!${preset.commandName}${preset.aliases?.length ? ` (${preset.aliases.map((alias) => `!${alias}`).join(", ")})` : ""}`,
           commandPermissionChip(preset.permission || "viewer"),
           formatMessagePreview((preset.responses || [])[0] || ""),
-          preset.inspection?.status === "ready" ? statusChip("ready") : preset.inspection?.detail || "blocked",
+          preset.inspection?.status === "ready" ? preset.inspection?.nextAction || "ready" : preset.inspection?.detail || "blocked",
           actionButton("Create disabled", {
             id: `command-preset-${preset.id}`,
             variant: "secondary",
@@ -1014,6 +1018,29 @@ function renderCommandPresetCard() {
           })
         ]))
       : callout("No command presets are available.", "muted")
+  ]);
+}
+
+function renderCommandPresetPackCard() {
+  const packs = state.commandPresetPacks || [];
+
+  return card("Utility Packs", [
+    callout("Packs create ready commands disabled. Review placeholder links/copy, then enable only after local tests.", "muted"),
+    packs.length
+      ? dataTable(["Pack", "Commands", "Ready", "Status", "Actions"], packs.map((pack) => [
+          pack.label,
+          pack.description || "",
+          `${pack.readyCount || 0}/${pack.commandCount || 0}`,
+          pack.inspection?.detail || "",
+          actionButton("Create ready disabled", {
+            id: `command-pack-${pack.id}`,
+            variant: "secondary",
+            busyKey: "commandPresetPack",
+            disabled: !pack.readyCount,
+            onClick: () => applyCommandPresetPack(pack.id)
+          })
+        ]))
+      : callout("No utility packs are available.", "muted")
   ]);
 }
 
@@ -2698,6 +2725,7 @@ function setCommandState(result = {}) {
   state.commandSummary = result.summary || { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 };
   state.commandReservedNames = result.reservedNames || [];
   state.commandPresets = result.presets || state.commandPresets || [];
+  state.commandPresetPacks = result.presetPacks || state.commandPresetPacks || [];
   state.commandFeatureGate = result.featureGate || state.commandFeatureGate;
 
   if (state.selectedCommandId && !state.commands.some((command) => Number(command.id) === Number(state.selectedCommandId))) {
@@ -2949,6 +2977,16 @@ async function applyCommandPreset(id) {
     state.commandDraft = {};
     return result;
   }, { skipRefresh: true, success: "Command preset created disabled." });
+}
+
+async function applyCommandPresetPack(id) {
+  await runAction("commandPresetPack", async () => {
+    const result = await api.applyCommandPresetPack(id);
+    setCommandState(result);
+    state.selectedCommandId = result.created?.[0]?.id ?? state.selectedCommandId;
+    state.commandDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Utility pack created ready commands disabled." });
 }
 
 async function saveModerationSettings() {

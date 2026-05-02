@@ -485,6 +485,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/commands/preset-pack") {
+    const body = (await readJson(request)) as { id?: string };
+    sendJson(response, 200, createCustomCommandPresetPack(body.id));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/commands/preview") {
     const body = await readJson(request);
     sendJson(response, 200, previewCustomCommand(body));
@@ -3379,6 +3385,9 @@ const getCustomCommands = () => {
     presets: customCommandPresetDefinitions.map((preset) =>
       inspectCustomCommandPreset(preset, commands, getCustomCommandReservedNames())
     ),
+    presetPacks: customCommandPresetPackDefinitions.map((pack) =>
+      inspectCustomCommandPresetPack(pack, commands, getCustomCommandReservedNames())
+    ),
     featureGate: featureGates.get("custom_commands"),
     summary: {
       total: commands.length,
@@ -3506,6 +3515,72 @@ const createCustomCommandFromPreset = (id: string | undefined) => {
   }
 };
 
+const createCustomCommandPresetPack = (id: string | undefined) => {
+  try {
+    const pack = customCommandPresetPackDefinitions.find((item) => item.id === id);
+
+    if (!pack) {
+      throw new Error("Command preset pack was not found.");
+    }
+
+    const beforeCommands = customCommandsService.listCommands();
+    const reservedNames = getCustomCommandReservedNames();
+    const inspected = pack.presetIds
+      .map((presetId) => customCommandPresetDefinitions.find((preset) => preset.id === presetId))
+      .filter((preset): preset is (typeof customCommandPresetDefinitions)[number] => Boolean(preset))
+      .map((preset) => inspectCustomCommandPreset(preset, beforeCommands, reservedNames));
+    const ready = inspected.filter((preset) => preset.inspection.status === "ready");
+
+    if (!ready.length) {
+      throw new Error("No preset commands in this pack are ready to create.");
+    }
+
+    const created = ready.map((preset) =>
+      customCommandsService.saveCommand(
+        {
+          name: preset.commandName,
+          permission: preset.permission,
+          enabled: false,
+          globalCooldownSeconds: preset.globalCooldownSeconds,
+          userCooldownSeconds: preset.userCooldownSeconds,
+          aliases: preset.aliases,
+          responses: preset.responses
+        },
+        localUiActor,
+        { reservedNames }
+      )
+    );
+    const skipped = inspected
+      .filter((preset) => preset.inspection.status !== "ready")
+      .map((preset) => ({
+        id: preset.id,
+        commandName: preset.commandName,
+        reason: preset.inspection.detail
+      }));
+
+    writeAuditLog(db, localUiActor, "custom_command.preset_pack_create", `custom_command_pack:${pack.id}`, {
+      packId: pack.id,
+      label: pack.label,
+      created: created.map((command) => command.name),
+      skipped
+    });
+
+    return {
+      ...getCustomCommands(),
+      ok: true,
+      pack,
+      created,
+      skipped
+    };
+  } catch (error) {
+    return {
+      ...getCustomCommands(),
+      ok: false,
+      error: safeErrorMessage(error, "Command preset pack create failed")
+    };
+  }
+};
+
 const importCustomCommands = (body: unknown) => {
   try {
     const commands = customCommandsService.importCommands(body, localUiActor, {
@@ -3571,6 +3646,7 @@ const customCommandPresetDefinitions = [
   {
     id: "discord",
     label: "Discord",
+    category: "Community",
     description: "Community Discord link.",
     commandName: "discord",
     permission: "viewer",
@@ -3582,6 +3658,7 @@ const customCommandPresetDefinitions = [
   {
     id: "socials",
     label: "Social Links",
+    category: "Community",
     description: "Primary social and link hub.",
     commandName: "socials",
     permission: "viewer",
@@ -3593,6 +3670,7 @@ const customCommandPresetDefinitions = [
   {
     id: "schedule",
     label: "Schedule",
+    category: "Channel Info",
     description: "Streaming schedule reminder.",
     commandName: "schedule",
     permission: "viewer",
@@ -3602,8 +3680,21 @@ const customCommandPresetDefinitions = [
     responses: ["Stream schedule: check the channel panels for upcoming streams."]
   },
   {
+    id: "commands",
+    label: "Command List",
+    category: "Channel Info",
+    description: "Simple list of common viewer commands.",
+    commandName: "commands",
+    permission: "viewer",
+    globalCooldownSeconds: 20,
+    userCooldownSeconds: 20,
+    aliases: ["cmds"],
+    responses: ["Common commands: !discord, !socials, !schedule, !lurk, !rules"]
+  },
+  {
     id: "lurk",
     label: "Lurk",
+    category: "Community",
     description: "Viewer lurk acknowledgement.",
     commandName: "lurk",
     permission: "viewer",
@@ -3613,8 +3704,21 @@ const customCommandPresetDefinitions = [
     responses: ["{user} is lurking. Thanks for hanging out."]
   },
   {
+    id: "unlurk",
+    label: "Unlurk",
+    category: "Community",
+    description: "Viewer return acknowledgement.",
+    commandName: "unlurk",
+    permission: "viewer",
+    globalCooldownSeconds: 10,
+    userCooldownSeconds: 30,
+    aliases: ["back"],
+    responses: ["Welcome back, {user}."]
+  },
+  {
     id: "shoutout",
     label: "Shoutout",
+    category: "Moderator",
     description: "Moderator shoutout helper.",
     commandName: "so",
     permission: "moderator",
@@ -3626,6 +3730,7 @@ const customCommandPresetDefinitions = [
   {
     id: "rules",
     label: "Rules",
+    category: "Safety",
     description: "Short chat rules reminder.",
     commandName: "rules",
     permission: "viewer",
@@ -3635,8 +3740,57 @@ const customCommandPresetDefinitions = [
     responses: ["Keep chat respectful, avoid spoilers, and listen to mods."]
   },
   {
+    id: "youtube",
+    label: "YouTube",
+    category: "Community",
+    description: "YouTube or VOD link.",
+    commandName: "youtube",
+    permission: "viewer",
+    globalCooldownSeconds: 30,
+    userCooldownSeconds: 10,
+    aliases: ["yt"],
+    responses: ["YouTube and VODs: https://example.com"]
+  },
+  {
+    id: "tip",
+    label: "Tip Link",
+    category: "Support",
+    description: "Optional support or tip link.",
+    commandName: "tip",
+    permission: "viewer",
+    globalCooldownSeconds: 60,
+    userCooldownSeconds: 30,
+    aliases: ["donate"],
+    responses: ["Support is never required, but you can find the tip link here: https://example.com"]
+  },
+  {
+    id: "merch",
+    label: "Merch",
+    category: "Support",
+    description: "Merch store link.",
+    commandName: "merch",
+    permission: "viewer",
+    globalCooldownSeconds: 60,
+    userCooldownSeconds: 30,
+    aliases: ["store"],
+    responses: ["Merch/store link: https://example.com"]
+  },
+  {
+    id: "specs",
+    label: "Setup Specs",
+    category: "Channel Info",
+    description: "Streaming setup or gear note.",
+    commandName: "specs",
+    permission: "viewer",
+    globalCooldownSeconds: 30,
+    userCooldownSeconds: 15,
+    aliases: ["setup"],
+    responses: ["Stream setup/specs: update this command with your current gear list."]
+  },
+  {
     id: "giveaway",
     label: "Giveaway Status",
+    category: "Giveaway",
     description: "Points viewers to giveaway status.",
     commandName: "giveaway",
     permission: "viewer",
@@ -3644,6 +3798,21 @@ const customCommandPresetDefinitions = [
     userCooldownSeconds: 10,
     aliases: ["raffle"],
     responses: ["Giveaway status: use !gstatus when a giveaway is active."]
+  }
+] as const;
+
+const customCommandPresetPackDefinitions = [
+  {
+    id: "core-utilities",
+    label: "Core Utility Pack",
+    description: "Discord, socials, schedule, command list, lurk/unlurk, rules, and shoutout.",
+    presetIds: ["discord", "socials", "schedule", "commands", "lurk", "unlurk", "rules", "shoutout"]
+  },
+  {
+    id: "support-links",
+    label: "Support Links Pack",
+    description: "YouTube, tips, merch, and setup/specs placeholders.",
+    presetIds: ["youtube", "tip", "merch", "specs"]
   }
 ] as const;
 
@@ -3672,6 +3841,41 @@ const inspectCustomCommandPreset = (
       status: conflicts.length ? "blocked" : "ready",
       detail: conflicts.join("; ") || "Ready to create disabled.",
       nextAction: conflicts.length ? "Resolve the command or alias conflict first." : "Create, edit links/copy, then enable when tested."
+    }
+  };
+};
+
+const inspectCustomCommandPresetPack = (
+  pack: (typeof customCommandPresetPackDefinitions)[number],
+  commands: ReturnType<CustomCommandsService["listCommands"]>,
+  reservedNames: string[]
+) => {
+  const presets = pack.presetIds
+    .map((presetId) => customCommandPresetDefinitions.find((preset) => preset.id === presetId))
+    .filter((preset): preset is (typeof customCommandPresetDefinitions)[number] => Boolean(preset))
+    .map((preset) => inspectCustomCommandPreset(preset, commands, reservedNames));
+  const ready = presets.filter((preset) => preset.inspection.status === "ready");
+  const blocked = presets.filter((preset) => preset.inspection.status !== "ready");
+
+  return {
+    ...pack,
+    commandCount: presets.length,
+    readyCount: ready.length,
+    blockedCount: blocked.length,
+    commands: presets.map((preset) => ({
+      id: preset.id,
+      commandName: preset.commandName,
+      label: preset.label,
+      status: preset.inspection.status
+    })),
+    inspection: {
+      status: ready.length === 0 ? "blocked" : blocked.length ? "partial" : "ready",
+      detail: blocked.length
+        ? `${ready.length} ready, ${blocked.length} already present or blocked.`
+        : `${ready.length} commands ready to create disabled.`,
+      nextAction: ready.length
+        ? "Create ready commands disabled, edit placeholder links/copy, then enable after local tests."
+        : "Resolve command or alias conflicts before creating this pack."
     }
   };
 };

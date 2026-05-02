@@ -39,6 +39,7 @@ async function runSmoke() {
   assert(appJs.includes("Dashboard") && appJs.includes("Giveaways"), "browser UI has tabs");
   assert(appJs.includes("Command Library"), "browser UI exposes custom command library");
   assert(appJs.includes("Response variants"), "custom command editor supports response variants");
+  assert(appJs.includes("Utility Packs"), "custom command UI exposes utility packs");
   assert(appJs.includes("Starter Commands"), "custom command UI exposes starter presets");
   assert(appJs.includes("Export commands JSON"), "custom command UI can export commands");
   assert(appJs.includes("Import commands JSON"), "custom command UI can import commands");

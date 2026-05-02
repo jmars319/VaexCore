@@ -93,7 +93,7 @@ Do not put prize codes into VaexCore. Deliver prizes manually outside the app.
 
 ## Custom Commands Test
 
-Open `Commands`, create a simple command such as `!discord`, add one response, click `Preview response`, then `Run test command`. For live use, start the bot and type the command in Twitch chat after `!ping` confirms live chat.
+Open `Commands`, create a simple command such as `!discord`, add one response, click `Preview response`, then `Run test command`. You can also create a utility pack disabled, edit placeholder links/copy, then enable only the commands you have tested. For live use, start the bot and type the command in Twitch chat after `!ping` confirms live chat.
 
 ## Bot Replacement Test
 

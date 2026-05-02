@@ -28,7 +28,9 @@ async function runSmoke() {
   const appJs = await text("/ui/app.js");
   assert(appJs.includes("Command Library"), "Commands tab renders command library");
   assert(appJs.includes("Response variants"), "Commands tab renders response variants");
+  assert(appJs.includes("Utility Packs"), "Commands tab renders utility packs");
   assert(appJs.includes("Starter Commands"), "Commands tab renders starter presets");
+  assert(appJs.includes("Category"), "Commands tab renders preset categories");
   assert(appJs.includes("Create disabled"), "Commands tab can create disabled preset commands");
   assert(appJs.includes("Export commands JSON"), "Commands tab exposes export");
   assert(appJs.includes("Import commands JSON"), "Commands tab exposes import");
@@ -38,6 +40,14 @@ async function runSmoke() {
   assert(initial.summary.total === 0, "custom command list starts empty");
   assert(initial.reservedNames.includes("ping"), "reserved command names are returned");
   assert(initial.presets.some((preset) => preset.id === "lurk" && preset.inspection.status === "ready"), "starter command presets are returned");
+  assert(initial.presets.some((preset) => preset.id === "commands" && preset.category === "Channel Info"), "viewer utility command presets are returned");
+  assert(initial.presetPacks.some((pack) => pack.id === "support-links" && pack.inspection.status === "ready"), "utility command packs are returned");
+
+  const pack = await post("/api/commands/preset-pack", { id: "support-links" });
+  assert(pack.ok === true, "utility command preset pack can be created");
+  assert(pack.created.length >= 4, "utility command preset pack creates ready commands");
+  assert(pack.commands.some((command) => command.name === "youtube" && command.enabled === false), "utility pack commands start disabled");
+  assert(pack.presetPacks.find((item) => item.id === "support-links")?.inspection.status === "blocked", "created utility pack reports conflicts");
 
   const preset = await post("/api/commands/preset", { id: "lurk" });
   assert(preset.ok === true, "starter command preset can be created");
@@ -170,6 +180,7 @@ async function runSmoke() {
 
   const audit = await json("/api/audit-logs");
   assert(audit.logs.some((log) => log.action === "custom_command.create"), "custom command create audit is written");
+  assert(audit.logs.some((log) => log.action === "custom_command.preset_pack_create"), "custom command preset pack audit is written");
   assert(audit.logs.some((log) => log.action === "custom_command.use"), "custom command use audit is written");
   assert(audit.logs.some((log) => log.action === "custom_command.import"), "custom command import audit is written");
 }

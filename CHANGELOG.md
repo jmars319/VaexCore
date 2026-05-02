@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Milestone 45: viewer-facing utility command presets with categorized starter commands, disabled utility packs for common channel/support commands, conflict-aware pack creation, UI pack controls, and expanded custom command smoke coverage.
 - Milestone 44: operator-grade moderation filter polish with boundary-aware blocked phrase matching, intentional wildcard phrases, blocked link domains, clearer local test enforcement plans, recent hit summaries by filter/action, and expanded smoke coverage.
 - Milestone 43: activity-aware timers with per-timer non-command chat message thresholds, UI activity progress, activity-blocked explanations, timer export/import versioning, live-ready EventSub activity counting, and smoke coverage proving timers wait for eligible chat before queueing.
 - Milestone 42: scoped moderation enforcement with per-filter warn/delete/timeout actions, optional Twitch moderation scopes, fail-open enforcement planning, audit entries for blocked/succeeded/failed actions, UI capability status, and smoke coverage for missing-scope and protected-command behavior.

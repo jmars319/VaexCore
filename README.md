@@ -215,14 +215,15 @@ Open `Commands` to manage local command definitions stored in SQLite. Custom com
 - aliases such as `!discord`, `!links`, and `!socials`
 - random response variants, one per line
 - safe placeholders: `{user}`, `{displayName}`, `{login}`, `{args}`, `{arg1}` through `{arg9}`, `{target}`, and `{count}`
-- disabled starter presets for Discord, socials, schedule, lurk, shoutout, rules, and giveaway status commands
+- categorized disabled starter presets for Discord, socials, schedule, command list, lurk/unlurk, shoutout, rules, support links, setup specs, and giveaway status commands
+- disabled utility packs for quickly creating editable command sets
 - preview and local command testing before going live
 - JSON import/export for backup or moving setup between machines
 - use counts, last-used timestamps, recent invocation history, and audit entries
 
 Built-in names such as `!ping`, `!vcstatus`, and giveaway commands are reserved through the protected command registry. While a giveaway is active, its entry keyword is also reserved in the setup UI. At runtime, built-in commands and active giveaway keywords are checked before custom command fallback, so giveaway entry behavior stays predictable.
 
-The `Commands` tab includes a feature gate for custom commands. `Live` responds in Twitch chat, `Test` responds only to local simulations, and `Off` disables custom command replies while keeping definitions available.
+The `Commands` tab includes a feature gate for custom commands. `Live` responds in Twitch chat, `Test` responds only to local simulations, and `Off` disables custom command replies while keeping definitions available. Starter commands and utility packs are created disabled so links, copy, permissions, and cooldowns can be reviewed before live use.
 
 ## Timers
 
@@ -378,7 +379,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Live Mode` keeps the current operator state explicit: `entries open`, `ready to draw`, `delivery pending`, `safe to end`, or `giveaway ended`. It can send the current giveaway status to chat, panic-resend the latest failed critical giveaway message, show outbound failure logs separately, and copy a post-stream recap for notes.
 - `Queue Health` and `Recovery Checklist` show pending queue age, retry delay, send throttle delay, failure category, latest failed action, resend safety, and concrete recovery steps before an operator retries a critical message. Auth/config failures do not blindly retry; Twitch rate limits and transient network failures retry with queue-owned backoff.
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
-- `Commands` stores local-only custom chat commands in SQLite, with disabled starter presets, aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
+- `Commands` stores local-only custom chat commands in SQLite, with categorized disabled starter presets, utility packs, aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
 - `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness, clear queue health, and optional chat activity thresholds before sending.
 - `Moderation` stores local-only filter settings, per-filter actions, blocked phrases, allowed and blocked link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, audits enforcement outcomes, and exempts protected commands plus active giveaway entry commands.
 - `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and moderation filters start `off` until explicitly enabled.
@@ -389,7 +390,7 @@ The `Giveaways` tab also includes stream-night controls:
 - Critical giveaway guardrails treat queued, sending, retrying, missing, and failed required chat announcements as blocking until the outbound queue confirms `sent` or `resent`. Phase rows show queue status, queue ID, retry timing, failure category, and the next recovery action.
 - `npm run smoke:giveaway` runs a temp-database giveaway readiness check covering command permissions, entry, close, draw, reroll, delivery, audit logs, recap, outbound history, and the local lifecycle test.
 - `npm run smoke:giveaway-live` runs the stream-night giveaway rehearsal covering UI/API start, chat commands, five entrants, duplicate entry handling, insufficient entrants, reroll, manual claim/delivery, restart persistence, outbound assurance, and custom command/timer/moderation interference checks.
-- `npm run smoke:commands` runs a temp-database custom command check covering reserved names, aliases, placeholders, permissions, cooldowns, disabled commands, preview, import/export, usage history, and audit logs.
+- `npm run smoke:commands` runs a temp-database custom command check covering utility packs, reserved names, aliases, placeholders, permissions, cooldowns, disabled commands, preview, import/export, usage history, and audit logs.
 - `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
 - `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, chat activity thresholds, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
 - `npm run smoke:moderation` checks moderation feature-gate behavior, disabled-by-default filters, trusted role exemptions, boundary-aware and wildcard blocked phrases, allowed and blocked domains, temporary link permits, links, caps, repeat and symbol detection, protected command exemptions, recent hits, and audit logging.
