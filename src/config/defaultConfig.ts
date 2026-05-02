@@ -1,5 +1,5 @@
 export const defaultConfig = {
-  productName: "VaexCore",
+  productName: "vaexcore console",
   internalNamespace: "vaexcore",
   outboundMessagesPerChannelPerSecond: 1
 } as const;

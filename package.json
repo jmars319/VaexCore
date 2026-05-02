@@ -1,8 +1,8 @@
 {
-  "name": "vaexcore",
+  "name": "vaexcore-console",
   "version": "0.1.2",
   "private": true,
-  "description": "VaexCore is a quiet Twitch operations bot for commands, moderation, giveaways, and stream control without the usual clutter.",
+  "description": "vaexcore console is a quiet Twitch operations bot for commands, moderation, giveaways, and stream control without the usual clutter.",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -61,8 +61,8 @@
     "typescript": "^5.7.2"
   },
   "build": {
-    "appId": "com.vaexil.vaexcore",
-    "productName": "VaexCore",
+    "appId": "com.vaexil.vaexcore.console",
+    "productName": "vaexcore console",
     "directories": {
       "output": "release"
     },
@@ -88,7 +88,7 @@
       ]
     },
     "dmg": {
-      "artifactName": "VaexCore-${version}-${arch}.${ext}"
+      "artifactName": "vaexcore-console-${version}-${arch}.${ext}"
     }
   }
 }

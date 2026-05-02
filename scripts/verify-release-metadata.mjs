@@ -46,7 +46,7 @@ assert(readme.includes("smoke:replacement"), "README must document bot replaceme
 assert(readme.includes("smoke:giveaway-live"), "README must document giveaway live smoke");
 assert(readme.includes("development-guidelines.md"), "README must link to development guidelines");
 assert(testerGuide.includes("tester artifact dry run"), "tester guide must mention tester artifact dry run");
-assert(testerGuide.includes("Updating VaexCore"), "tester guide must explain manual updates");
+assert(testerGuide.includes("Updating vaexcore console"), "tester guide must explain manual updates");
 assert(packageJson.scripts?.["release:unsigned"], "package.json must define release:unsigned");
 assert(packageJson.scripts?.["release:guard"], "package.json must define release:guard");
 assert(packageJson.scripts?.["release:handoff"], "package.json must define release:handoff");

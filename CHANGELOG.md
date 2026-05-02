@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Product naming: renamed the visible app and release metadata to `vaexcore console`, with hyphenated unsigned artifact filenames and legacy app-data fallback for existing installs.
 - Milestone 45: viewer-facing utility command presets with categorized starter commands, disabled utility packs for common channel/support commands, conflict-aware pack creation, UI pack controls, and expanded custom command smoke coverage.
 - Milestone 44: operator-grade moderation filter polish with boundary-aware blocked phrase matching, intentional wildcard phrases, blocked link domains, clearer local test enforcement plans, recent hit summaries by filter/action, and expanded smoke coverage.
 - Milestone 43: activity-aware timers with per-timer non-command chat message thresholds, UI activity progress, activity-blocked explanations, timer export/import versioning, live-ready EventSub activity counting, and smoke coverage proving timers wait for eligible chat before queueing.

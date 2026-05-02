@@ -1,13 +1,13 @@
 import { formatEnvError, loadEnv } from "./config/env";
 import { createLogger } from "./core/logger";
-import { VaexCoreBot } from "./core/bot";
+import { ConsoleBot } from "./core/bot";
 
 let env: ReturnType<typeof loadEnv>;
 
 try {
   env = loadEnv();
 } catch (error) {
-  console.error("VaexCore could not start because .env is invalid:");
+  console.error("vaexcore console could not start because .env is invalid:");
   console.error(formatEnvError(error));
   process.exit(1);
 }
@@ -22,10 +22,10 @@ if (env.mode !== "live") {
   process.exit(1);
 }
 
-const bot = new VaexCoreBot({ env, logger });
+const bot = new ConsoleBot({ env, logger });
 
 const shutdown = async (signal: NodeJS.Signals) => {
-  logger.info({ signal }, "Shutting down VaexCore");
+  logger.info({ signal }, "Shutting down vaexcore console");
   await bot.stop();
   process.exit(0);
 };
@@ -36,7 +36,7 @@ process.on("SIGTERM", shutdown);
 try {
   await bot.start();
 } catch (error) {
-  logger.error({ error }, "VaexCore failed during startup");
+  logger.error({ error }, "vaexcore console failed during startup");
   await bot.stop();
   process.exit(1);
 }

@@ -4,8 +4,9 @@ import { basename, join, resolve } from "node:path";
 
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
 const productName = packageJson.build?.productName ?? packageJson.name;
+const artifactProductName = productName.replace(/\s+/g, "-");
 const version = packageJson.version ?? "0.0.0";
-const artifactBase = `${productName}-${version}-mac-${process.arch}-unsigned`;
+const artifactBase = `${artifactProductName}-${version}-mac-${process.arch}-unsigned`;
 const releaseDir = resolve("release");
 const manifestPath = join(releaseDir, `${artifactBase}.json`);
 const handoffPath = join(releaseDir, `${artifactBase}-handoff.md`);

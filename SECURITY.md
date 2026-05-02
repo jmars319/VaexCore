@@ -1,6 +1,6 @@
-# VaexCore Security Notes
+# vaexcore console Security Notes
 
-VaexCore is designed as a local-first Twitch bot. The setup/operator console must stay bound to `127.0.0.1` and is not intended for public hosting.
+vaexcore console is designed as a local-first Twitch bot. The setup/operator console must stay bound to `127.0.0.1` and is not intended for public hosting.
 
 ## Secrets
 
@@ -18,12 +18,12 @@ VaexCore is designed as a local-first Twitch bot. The setup/operator console mus
 ## Audit And Diagnostics
 
 - Audit metadata is redacted before storage and redacted again before diagnostics or support exports.
-- VaexCore keeps the latest 1,000 audit rows for up to 90 days by default.
+- vaexcore console keeps the latest 1,000 audit rows for up to 90 days by default.
 - Diagnostics and support bundles should explain state and next action without exposing local secrets.
 
 ## Twitch Chat Threat Model
 
-VaexCore treats chat input as untrusted. Commands are bounded, normalized, permission checked, and rate limited. Unknown commands are ignored. Denied commands do not return sensitive details.
+vaexcore console treats chat input as untrusted. Commands are bounded, normalized, permission checked, and rate limited. Unknown commands are ignored. Denied commands do not return sensitive details.
 
 Moderation filters are feature-gated, local, and warn-only. They do not ban users, do not use public blocklists, and do not call Twitch moderation APIs. Protected commands and active giveaway entry commands are exempt so core operations continue even if a filter is configured too aggressively.
 
@@ -38,7 +38,9 @@ config/local.secrets.json
 The macOS app stores local secrets and SQLite data under the app data directory:
 
 ```text
-~/Library/Application Support/VaexCore
+~/Library/Application Support/vaexcore console
 ```
 
-Quit VaexCore before deleting or moving these files.
+Installs updated from older pre-rename builds may continue using the existing legacy app data directory. Diagnostics shows the active config path.
+
+Quit vaexcore console before deleting or moving these files.

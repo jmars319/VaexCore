@@ -17,7 +17,7 @@ export const protectedCommandDefinitions: ProtectedCommandDefinition[] = [
   {
     name: "vcstatus",
     owner: "status",
-    description: "Reports VaexCore runtime, EventSub, queue, and giveaway status."
+    description: "Reports vaexcore console runtime, EventSub, queue, and giveaway status."
   },
   {
     name: "enter",
@@ -93,7 +93,7 @@ export const assertNotProtectedCommandName = (value: unknown, field = "Command n
   const name = normalizeCommandName(value, field);
 
   if (protectedCommandNameSet.has(name)) {
-    throw new Error(`!${name} is protected by VaexCore.`);
+    throw new Error(`!${name} is protected by vaexcore console.`);
   }
 
   return name;

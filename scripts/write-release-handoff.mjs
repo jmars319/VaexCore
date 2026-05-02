@@ -3,8 +3,9 @@ import { basename, join, resolve } from "node:path";
 
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
 const productName = packageJson.build?.productName ?? packageJson.name;
+const artifactProductName = productName.replace(/\s+/g, "-");
 const version = packageJson.version ?? "0.0.0";
-const artifactBase = `${productName}-${version}-mac-${process.arch}-unsigned`;
+const artifactBase = `${artifactProductName}-${version}-mac-${process.arch}-unsigned`;
 const releaseDir = resolve("release");
 const manifestPath = join(releaseDir, `${artifactBase}.json`);
 const checksumPath = join(releaseDir, `${artifactBase}.zip.sha256`);
@@ -44,8 +45,8 @@ writeFileSync(handoffPath, `${[
   "",
   "- This build is unsigned, ad-hoc signed, and not notarized.",
   "- First launch may require right-click Open or Privacy & Security -> Open Anyway.",
-  "- For updates, quit VaexCore and replace only VaexCore.app.",
-  "- Do not delete ~/Library/Application Support/VaexCore unless intentionally resetting local setup.",
+  "- For updates, quit vaexcore console and replace only vaexcore console.app.",
+  "- Do not delete ~/Library/Application Support/vaexcore console unless intentionally resetting local setup.",
   "- If anything fails, open Diagnostics and click Copy support bundle.",
   "",
   `Checksum file contents: ${checksum}`,

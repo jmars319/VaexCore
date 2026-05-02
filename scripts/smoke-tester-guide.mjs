@@ -13,7 +13,7 @@ const requiredGuideText = [
   "unsigned",
   "not notarized",
   "Open Anyway",
-  "Updating VaexCore",
+  "Updating vaexcore console",
   "Do not delete",
   "Settings -> Setup Guide",
   "Bot Replacement Test",
@@ -24,7 +24,7 @@ const requiredGuideText = [
   "Invalid Token",
   "Wrong Bot Account",
   "SQLite Fallback",
-  "Do not put prize codes into VaexCore"
+  "Do not put prize codes into vaexcore console"
 ];
 
 for (const text of requiredGuideText) {

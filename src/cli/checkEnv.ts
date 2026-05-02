@@ -20,7 +20,7 @@ try {
   const env = loadEnv();
   const gitReady = isGitRepo();
 
-  console.log("VaexCore environment check passed.");
+  console.log("vaexcore console environment check passed.");
   console.log(`- app version: ${getPackageVersion()}`);
   console.log(`- runtime: cli`);
   console.log(`- git repository present: ${gitReady}`);
@@ -55,7 +55,7 @@ try {
     console.log("- use npm run dev:local for fake users and stdin command testing.");
   }
 } catch (error) {
-  console.error("VaexCore environment check failed:");
+  console.error("vaexcore console environment check failed:");
   console.error(formatEnvError(error));
   process.exitCode = 1;
 }

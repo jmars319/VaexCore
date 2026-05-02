@@ -35,7 +35,7 @@ type BotOptions = {
   logger: Logger;
 };
 
-export class VaexCoreBot {
+export class ConsoleBot {
   private readonly commandRouter: CommandRouter;
   private readonly eventSubClient: TwitchEventSubClient;
   private readonly messageQueue: MessageQueue;
@@ -176,7 +176,7 @@ export class VaexCoreBot {
 
   async start() {
     this.options.logger.info(
-      "VaexCore LIVE MODE -- waiting for chat confirmation (!ping)"
+      "vaexcore console LIVE MODE -- waiting for chat confirmation (!ping)"
     );
 
     await this.validateLiveTwitchWithRefresh();

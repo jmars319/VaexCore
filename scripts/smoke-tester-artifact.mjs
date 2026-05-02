@@ -19,8 +19,9 @@ const setupUrl = `http://127.0.0.1:${setupPort}`;
 const releaseDir = resolve("release");
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
 const productName = packageJson.build?.productName ?? packageJson.name;
+const artifactProductName = productName.replace(/\s+/g, "-");
 const version = packageJson.version ?? "0.0.0";
-const artifactBase = `${productName}-${version}-mac-${process.arch}-unsigned`;
+const artifactBase = `${artifactProductName}-${version}-mac-${process.arch}-unsigned`;
 const zipPath = join(releaseDir, `${artifactBase}.zip`);
 const checksumPath = join(releaseDir, `${artifactBase}.zip.sha256`);
 const manifestPath = join(releaseDir, `${artifactBase}.json`);
@@ -87,7 +88,7 @@ async function runSmoke() {
   assert(appJs.includes("Diagnostics"), "diagnostics UI code is present in tester artifact");
   assert(appJs.includes("Copy support bundle"), "support bundle UI code is present in tester artifact");
   assert(appJs.includes("About This Build"), "build/version diagnostics UI is present in tester artifact");
-  assert(appJs.includes("Manual updates should replace only VaexCore.app"), "update-safe diagnostics note is present in tester artifact");
+  assert(appJs.includes("Manual updates should replace only vaexcore console.app"), "update-safe diagnostics note is present in tester artifact");
 
   const diagnostics = await json("/api/diagnostics");
   assert(diagnostics.app.runtime === "electron", "diagnostics reports Electron runtime");
@@ -189,7 +190,7 @@ function assertPortAvailable(port) {
     const server = createServer();
 
     server.once("error", () => {
-      reject(new Error(`Port ${port} is already in use. Quit VaexCore or the setup server before running tester artifact smoke.`));
+      reject(new Error(`Port ${port} is already in use. Quit vaexcore console or the setup server before running tester artifact smoke.`));
     });
     server.once("listening", () => {
       server.close(resolvePort);

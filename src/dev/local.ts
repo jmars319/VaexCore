@@ -110,7 +110,7 @@ process.on("SIGINT", () => {
   void shutdown();
 });
 
-console.log("VaexCore local command mode");
+console.log("vaexcore console local command mode");
 console.log(`Type chat messages and press Enter. Current live commands: ${env.COMMAND_PREFIX}ping, ${env.COMMAND_PREFIX}enter, ${env.COMMAND_PREFIX}g*, and local custom commands`);
 console.log("Optional identity prefix: alice: !enter, mod: !gstatus, broadcaster: !gstart codes=6 keyword=enter");
 

@@ -158,7 +158,7 @@ function mockUsers(url, init) {
   }
 
   if (login === "vaexcorebot") {
-    return jsonResponse({ data: [{ id: "bot-user-id", login, display_name: "VaexCoreBot" }] });
+    return jsonResponse({ data: [{ id: "bot-user-id", login, display_name: "vaexcorebot" }] });
   }
 
   if (login === "vaexil") {

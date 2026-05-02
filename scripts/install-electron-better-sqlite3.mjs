@@ -18,7 +18,7 @@ if (!existsSync(prebuildInstallBin)) {
 const apps = findPackagedApps(releaseDir);
 
 if (apps.length === 0) {
-  throw new Error("No packaged VaexCore.app bundle was found under release/.");
+  throw new Error("No packaged vaexcore console.app bundle was found under release/.");
 }
 
 for (const appPath of apps) {

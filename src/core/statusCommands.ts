@@ -17,7 +17,7 @@ export const registerStatusCommands = ({
   router.register("vcstatus", PermissionLevel.Moderator, ({ reply }) => {
     const giveaway = giveawaysService.status()?.giveaway.status ?? "none";
     reply(
-      `VaexCore ${runtimeStatus.mode}: eventsub=${yesNo(
+      `vaexcore console ${runtimeStatus.mode}: eventsub=${yesNo(
         runtimeStatus.eventSubConnected
       )}, sub=${yesNo(runtimeStatus.chatSubscriptionActive)}, queue=${yesNo(
         runtimeStatus.messageQueueReady

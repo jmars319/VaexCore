@@ -56,7 +56,7 @@ const getHint = (
   }
 
   if (status === 429) {
-    return "Twitch rejected the outbound chat message for rate limiting. VaexCore queues at 1 message per second, but Twitch may apply broader account or channel limits.";
+    return "Twitch rejected the outbound chat message for rate limiting. vaexcore console queues at 1 message per second, but Twitch may apply broader account or channel limits.";
   }
 
   return "Failed to send Twitch chat message.";

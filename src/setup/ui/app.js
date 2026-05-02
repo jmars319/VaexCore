@@ -244,7 +244,7 @@ function renderHeader() {
   const giveaway = state.status?.giveaway;
   return h("header", { className: "topbar" }, [
     h("div", {}, [
-      h("h1", { text: "VaexCore" }),
+      h("h1", { text: "vaexcore console" }),
       h("p", { className: "subtitle", text: "Local Twitch operations console" })
     ]),
     h("div", { className: "header-status" }, [
@@ -1395,7 +1395,7 @@ function renderGiveaways() {
   return [
     sectionHeader("Giveaways", "Operate entries, winner selection, and manual prize delivery from one place."),
     card("", [
-      callout("VaexCore does not store or reveal giveaway prizes. Delivery remains manual.", "warn"),
+      callout("vaexcore console does not store or reveal giveaway prizes. Delivery remains manual.", "warn"),
       statusGrid([...giveawayRows(summary), ["Delivery", summary.manualCodeDeliveryRequired ? "manual delivery required" : "none", !summary.manualCodeDeliveryRequired]]),
       h("p", { className: "warn", text: (summary.endWarnings || []).join(" ") })
     ]),
@@ -1608,7 +1608,7 @@ function renderSetupGuide() {
         active: activeStep === "app",
         complete: progress.appCreated,
         children: [
-          h("p", { text: "You need to create a Twitch application so VaexCore can connect to your account." }),
+          h("p", { text: "You need to create a Twitch application so vaexcore console can connect to your account." }),
           h("a", {
             className: "button secondary",
             href: "https://dev.twitch.tv/console/apps",
@@ -1618,7 +1618,7 @@ function renderSetupGuide() {
           }),
           h("ul", {}, [
             h("li", { text: "Click Register Your Application." }),
-            h("li", { text: "Name: anything, for example VaexCore." }),
+            h("li", { text: "Name: anything, for example vaexcore console." }),
             h("li", {}, ["OAuth Redirect URL: ", h("code", { text: defaultRedirectUri })]),
             h("li", { text: "Use one redirect URL only. Do not leave an extra blank redirect URL row." }),
             h("li", { text: "Category: Application Integration." })
@@ -1668,7 +1668,7 @@ function renderSetupGuide() {
         complete: progress.twitchConnected,
         disabled: !canConnect,
         children: [
-          h("p", { text: "Click Connect Twitch while logged into the Bot Login account to authorize VaexCore for chat and optional scoped moderation actions." }),
+          h("p", { text: "Click Connect Twitch while logged into the Bot Login account to authorize vaexcore console for chat and optional scoped moderation actions." }),
           h("div", { className: "actions" }, [
             connectButton(config, "secondary", !canConnect),
             config.hasAccessToken ? actionButton("Disconnect Twitch", { id: "guideDisconnectTwitch", variant: "secondary", busyKey: "disconnectTwitch", onClick: disconnectTwitch }) : null
@@ -1682,7 +1682,7 @@ function renderSetupGuide() {
             ["moderator:manage:chat_messages", hasScope("moderator:manage:chat_messages") ? "granted" : "optional", true],
             ["moderator:manage:banned_users", hasScope("moderator:manage:banned_users") ? "granted" : "optional", true]
           ]),
-          config.hasAccessToken ? callout("VaexCore will refresh expired Twitch access tokens automatically. If refresh fails, disconnect and reconnect Twitch.", "info") : null,
+          config.hasAccessToken ? callout("vaexcore console will refresh expired Twitch access tokens automatically. If refresh fails, disconnect and reconnect Twitch.", "info") : null,
           botLoginReconnectCallout(config),
           state.oauthNotice ? callout(state.oauthNotice.text, state.oauthNotice.tone) : null,
           canConnect ? null : callout("Enter credentials and usernames before connecting Twitch.", "warn")
@@ -1830,14 +1830,14 @@ function renderDiagnostics() {
       statusGrid([
         ["Version", app.version || "unknown", Boolean(app.version)],
         ["Distribution", app.runtime === "electron" ? "manual unsigned zip" : "local development", Boolean(app.runtime)],
-        ["Update method", app.runtime === "electron" ? "quit app, replace VaexCore.app" : "rebuild and restart local server", Boolean(app.runtime)],
+        ["Update method", app.runtime === "electron" ? "quit app, replace vaexcore console.app" : "rebuild and restart local server", Boolean(app.runtime)],
         ["Runtime", app.runtime || "unknown", Boolean(app.runtime)],
         ["Electron", app.electron || "not electron", Boolean(app.electron)],
         ["Platform", `${app.platform || "unknown"} ${app.arch || ""}`.trim(), Boolean(app.platform)],
         ["Generated", report?.generatedAt || "not run", Boolean(report?.generatedAt)]
       ]),
       app.runtime === "electron"
-        ? callout("Manual updates should replace only VaexCore.app. Keep the Application Support folder unless you intentionally want to reset Twitch setup and local data.", "muted")
+        ? callout("Manual updates should replace only vaexcore console.app. Keep the Application Support folder unless you intentionally want to reset Twitch setup and local data.", "muted")
         : null
     ]),
     card("Environment", [
@@ -3701,7 +3701,7 @@ function incidentNoteText() {
   const runbook = liveRunbookSteps();
 
   return [
-    `VaexCore incident note - ${new Date().toISOString()}`,
+    `vaexcore console incident note - ${new Date().toISOString()}`,
     `Mode: ${runtime.mode || "unknown"}`,
     `Bot: ${process.status || "unknown"}${process.pid ? ` pid=${process.pid}` : ""}`,
     `EventSub: ${runtime.eventSubConnected ? "connected" : "not connected"}`,

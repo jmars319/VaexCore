@@ -1,6 +1,6 @@
-# VaexCore Development Guidelines
+# vaexcore console Development Guidelines
 
-These rules guide future VaexCore milestones. VaexCore is local stream operations software, so reliability, safety, and recovery matter more than broad feature count.
+These rules guide future vaexcore console milestones. vaexcore console is local stream operations software, so reliability, safety, and recovery matter more than broad feature count.
 
 ## Core Stability
 

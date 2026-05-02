@@ -153,7 +153,7 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
 
   logger.info(
     { url: `http://localhost:${port}`, secretsPath: getLocalSecretsPath() },
-    "VaexCore setup server started"
+    "vaexcore console setup server started"
   );
 
   scheduleGiveawayReminder();
@@ -173,12 +173,12 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
 
 const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (!isLocalRequest(request)) {
-    sendText(response, 403, "VaexCore setup is local-only.");
+    sendText(response, 403, "vaexcore console setup is local-only.");
     return;
   }
 
   if (!isAllowedHost(request.headers.host)) {
-    sendText(response, 403, "VaexCore setup only accepts localhost requests.");
+    sendText(response, 403, "vaexcore console setup only accepts localhost requests.");
     return;
   }
 
@@ -1116,7 +1116,7 @@ const sendTestMessage = async () => {
     return { ok: false, error: "Setup is missing resolved Twitch IDs." };
   }
 
-  const result = await sendConfiguredChatMessage("VaexCore setup test.");
+  const result = await sendConfiguredChatMessage("vaexcore console setup test.");
   const structured = typeof result === "string" ? { status: result } : result;
   return {
     ok: structured.status === "sent",
@@ -1469,7 +1469,7 @@ const getDiagnosticChecks = (input: {
     severity: "blocker",
     detail: input.setupUi.appJs && input.setupUi.stylesCss
       ? "Static setup UI assets are present."
-      : "Rebuild VaexCore so setup UI assets are available."
+      : "Rebuild vaexcore console so setup UI assets are available."
   },
   {
     name: "Database",
@@ -1564,7 +1564,7 @@ const getFirstRunStatus = (input: {
   const cleanInstall = !configFilePresent && !input.config.hasClientId && !input.config.hasAccessToken;
   const blockers = [
     !input.setupUi.appJs || !input.setupUi.stylesCss
-      ? "Setup UI assets are missing; rebuild VaexCore."
+      ? "Setup UI assets are missing; rebuild vaexcore console."
       : undefined,
     !input.database.ok
       ? "SQLite did not respond; rebuild or reset the local app data folder."
@@ -1639,12 +1639,12 @@ const firstRunRecoverySteps = (input: {
   }
 
   if (!input.setupUiOk) {
-    return ["Run npm run build, then reopen VaexCore or rerun npm run setup."];
+    return ["Run npm run build, then reopen vaexcore console or rerun npm run setup."];
   }
 
   if (!input.databaseOk) {
     return [
-      "Quit VaexCore.",
+      "Quit vaexcore console.",
       "Back up the local app data folder if needed.",
       "Rebuild the app; reset the local data folder only if SQLite remains unhealthy."
     ];
@@ -2212,7 +2212,7 @@ const startBotProcess = async () => {
   try {
     command = getBotRuntimeCommand();
   } catch (error) {
-    const detail = safeErrorMessage(error, "Unable to find VaexCore live bot entrypoint.");
+    const detail = safeErrorMessage(error, "Unable to find vaexcore console live bot entrypoint.");
     return {
       ok: false,
       error: detail,
@@ -2394,7 +2394,7 @@ const getBotRuntimeCommand = () => {
     };
   }
 
-  throw new Error("Unable to find VaexCore live bot entrypoint.");
+  throw new Error("Unable to find vaexcore console live bot entrypoint.");
 };
 
 const getBotRuntimeEnv = () => {
@@ -5319,7 +5319,7 @@ const setupShellHtml = String.raw`<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VaexCore</title>
+    <title>vaexcore console</title>
     <link rel="stylesheet" href="/ui/styles.css" />
   </head>
   <body>

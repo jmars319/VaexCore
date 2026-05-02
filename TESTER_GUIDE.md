@@ -1,15 +1,15 @@
-# VaexCore Tester Guide
+# vaexcore console Tester Guide
 
 This guide is for early testers running the unsigned macOS build.
 
-VaexCore is local-first. It runs on your Mac, stores Twitch setup locally, and opens a local operator console. It is not a public website or SaaS service.
+vaexcore console is local-first. It runs on your Mac, stores Twitch setup locally, and opens a local operator console. It is not a public website or SaaS service.
 
 ## Before You Start
 
 You need:
 
 - A Mac with Apple silicon.
-- The VaexCore unsigned zip.
+- The vaexcore console unsigned zip.
 - The matching `.zip.sha256` checksum file.
 - A Twitch account for the bot. This can be the same as the broadcaster account, or a separate bot account.
 
@@ -24,41 +24,43 @@ Before sharing the zip, the maintainer should have run the tester artifact dry r
 
    ```bash
    cd ~/Downloads
-   shasum -a 256 -c VaexCore-0.1.1-mac-arm64-unsigned.zip.sha256
+   shasum -a 256 -c vaexcore-console-0.1.1-mac-arm64-unsigned.zip.sha256
    ```
 
 3. Unzip the archive.
-4. Move `VaexCore.app` to `/Applications`.
+4. Move `vaexcore console.app` to `/Applications`.
 5. Open the app.
 
 If macOS blocks the first launch:
 
-1. Right-click `VaexCore.app`.
+1. Right-click `vaexcore console.app`.
 2. Choose `Open`.
 3. Confirm `Open` again if macOS asks.
 4. If there is no `Open` button, open `System Settings -> Privacy & Security`, scroll down, and choose `Open Anyway`.
 
-## Updating VaexCore
+## Updating vaexcore console
 
 When you receive a newer unsigned zip:
 
-1. Quit VaexCore.
+1. Quit vaexcore console.
 2. Unzip the new archive.
-3. Replace the old `VaexCore.app` in `/Applications`.
+3. Replace the old `vaexcore console.app` in `/Applications`.
 4. Do not delete:
 
    ```text
-   ~/Library/Application Support/VaexCore
+   ~/Library/Application Support/vaexcore console
    ```
 
-5. Open VaexCore.
+5. Open vaexcore console.
 6. Open `Diagnostics -> About This Build` and confirm the version changed.
 
-That Application Support folder is where Twitch setup, tokens, giveaway data, and local operator data live. Deleting it resets VaexCore.
+That Application Support folder is where Twitch setup, tokens, giveaway data, and local operator data live. Deleting it resets vaexcore console.
+
+If you updated from an older pre-rename build, Diagnostics may show a legacy Application Support folder instead. Keep the folder Diagnostics shows during app replacement.
 
 ## First Setup
 
-Open `Settings -> Setup Guide` in VaexCore and follow the steps there.
+Open `Settings -> Setup Guide` in vaexcore console and follow the steps there.
 
 The short version:
 
@@ -69,13 +71,13 @@ The short version:
    http://localhost:3434/auth/twitch/callback
    ```
 
-3. Save the Twitch Client ID and Client Secret in VaexCore.
+3. Save the Twitch Client ID and Client Secret in vaexcore console.
 4. Enter Broadcaster Login and Bot Login.
 5. Click `Connect Twitch` while logged into the bot account.
 6. Click `Validate Setup`.
 7. Click `Send test message`.
 8. Click `Start Bot`.
-9. Type `!ping` in Twitch chat and confirm VaexCore sees live chat.
+9. Type `!ping` in Twitch chat and confirm vaexcore console sees live chat.
 
 ## Giveaway Test
 
@@ -89,7 +91,7 @@ Before using a real giveaway, run a tiny test:
 6. Confirm the app shows the entrant and winner.
 7. End the giveaway.
 
-Do not put prize codes into VaexCore. Deliver prizes manually outside the app.
+Do not put prize codes into vaexcore console. Deliver prizes manually outside the app.
 
 ## Custom Commands Test
 
@@ -115,7 +117,7 @@ The support bundle is designed to omit Twitch client secrets, access tokens, and
 
 ### Port 3434 Is Busy
 
-VaexCore uses `localhost:3434`. If the app says the port is already in use, quit other VaexCore windows first. If it still happens, restart the Mac or ask the maintainer for help with this command:
+vaexcore console uses `localhost:3434`. If the app says the port is already in use, quit other vaexcore console windows first. If it still happens, restart the Mac or ask the maintainer for help with this command:
 
 ```bash
 lsof -nP -iTCP:3434 -sTCP:LISTEN
@@ -141,11 +143,11 @@ Open `Live Mode` or `Giveaways` and look for `Giveaway Chat Assurance`. If there
 
 Only do this if the maintainer asks.
 
-1. Quit VaexCore.
+1. Quit vaexcore console.
 2. Remove:
 
    ```text
-   ~/Library/Application Support/VaexCore
+   ~/Library/Application Support/vaexcore console
    ```
 
-3. Reopen VaexCore and run `Settings -> Setup Guide` again.
+3. Reopen vaexcore console and run `Settings -> Setup Guide` again.

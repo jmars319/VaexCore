@@ -551,7 +551,7 @@ export class CustomCommandsService {
     ]);
 
     if (reserved.has(name)) {
-      throw new Error(`!${name} is reserved by VaexCore.`);
+      throw new Error(`!${name} is reserved by vaexcore console.`);
     }
 
     const command = this.findCommandByName(name);

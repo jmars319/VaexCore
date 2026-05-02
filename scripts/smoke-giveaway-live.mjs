@@ -47,7 +47,7 @@ async function verifyUiAndSafetyCopy() {
   assert(appJs.includes("End giveaway?"), "end giveaway requires confirmation");
   assert(appJs.includes("Reroll this winner?"), "reroll requires confirmation");
   assert(
-    appJs.includes("VaexCore does not store or reveal giveaway prizes. Delivery remains manual."),
+    appJs.includes("vaexcore console does not store or reveal giveaway prizes. Delivery remains manual."),
     "UI states manual prize delivery"
   );
   assert(appJs.includes("setDisabled(\"gstart\""), "giveaway controls have disabled-state handling");

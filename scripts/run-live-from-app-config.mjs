@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,8 +16,8 @@ const env = {
 
 delete env.ELECTRON_RUN_AS_NODE;
 
-console.log(`Using VaexCore app config: ${configDir}`);
-console.log("Starting live bot runtime. Keep this terminal open while VaexCore is live.");
+console.log(`Using vaexcore console app config: ${configDir}`);
+console.log("Starting live bot runtime. Keep this terminal open while vaexcore console is live.");
 
 const child = spawn(
   process.execPath,
@@ -45,12 +46,23 @@ child.on("exit", (code, signal) => {
 
 function defaultAppConfigDir() {
   if (platform() === "darwin") {
-    return join(homedir(), "Library/Application Support/VaexCore");
+    const legacyConfigDir = join(homedir(), "Library/Application Support/VaexCore");
+    return existsSync(legacyConfigDir)
+      ? legacyConfigDir
+      : join(homedir(), "Library/Application Support/vaexcore console");
   }
 
   if (platform() === "win32") {
-    return join(process.env.APPDATA || join(homedir(), "AppData/Roaming"), "VaexCore");
+    const appDataDir = process.env.APPDATA || join(homedir(), "AppData/Roaming");
+    const legacyConfigDir = join(appDataDir, "VaexCore");
+    return existsSync(legacyConfigDir)
+      ? legacyConfigDir
+      : join(appDataDir, "vaexcore console");
   }
 
-  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "VaexCore");
+  const baseConfigDir = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const legacyConfigDir = join(baseConfigDir, "VaexCore");
+  return existsSync(legacyConfigDir)
+    ? legacyConfigDir
+    : join(baseConfigDir, "vaexcore console");
 }

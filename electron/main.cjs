@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, shell } = require("electron");
+const { existsSync } = require("node:fs");
 const { get } = require("node:http");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -10,8 +11,10 @@ let quitting = false;
 const setupPort = 3434;
 const setupUrl = `http://localhost:${setupPort}`;
 const setupProbeUrl = `http://127.0.0.1:${setupPort}/api/config`;
+const productName = "vaexcore console";
+const legacyProductName = "VaexCore";
 
-app.setName("VaexCore");
+app.setName(productName);
 
 const createWindow = async (url) => {
   mainWindow = new BrowserWindow({
@@ -19,7 +22,7 @@ const createWindow = async (url) => {
     height: 800,
     minWidth: 900,
     minHeight: 650,
-    title: "VaexCore",
+    title: productName,
     backgroundColor: "#0d1117",
     icon: join(app.getAppPath(), "assets/icon.icns"),
     webPreferences: {
@@ -42,10 +45,8 @@ const createWindow = async (url) => {
 };
 
 const startApp = async () => {
-  const userData = process.env.VAEXCORE_APP_USER_DATA || app.getPath("userData");
-  if (process.env.VAEXCORE_APP_USER_DATA) {
-    app.setPath("userData", userData);
-  }
+  const userData = resolveUserDataPath();
+  app.setPath("userData", userData);
   process.env.VAEXCORE_CONFIG_DIR = userData;
   process.env.DATABASE_URL = `file:${join(userData, "data/vaexcore.sqlite")}`;
 
@@ -55,7 +56,7 @@ const startApp = async () => {
     setupServer = await setup.startSetupServer({ port: setupPort });
     activeSetupUrl = setupServer.url;
   } catch (error) {
-    if (isAddressInUse(error) && await isVaexCoreServerRunning()) {
+    if (isAddressInUse(error) && await isConsoleServerRunning()) {
       activeSetupUrl = setupUrl;
     } else {
       showStartupError(error);
@@ -69,7 +70,16 @@ const startApp = async () => {
 
 const isAddressInUse = (error) => error?.code === "EADDRINUSE";
 
-const isVaexCoreServerRunning = async () => {
+const resolveUserDataPath = () => {
+  if (process.env.VAEXCORE_APP_USER_DATA) {
+    return process.env.VAEXCORE_APP_USER_DATA;
+  }
+
+  const legacyUserData = join(app.getPath("appData"), legacyProductName);
+  return existsSync(legacyUserData) ? legacyUserData : app.getPath("userData");
+};
+
+const isConsoleServerRunning = async () => {
   try {
     const config = await getJson(setupProbeUrl);
     return (
@@ -112,10 +122,10 @@ const getJson = (url) => new Promise((resolve, reject) => {
 
 const showStartupError = (error) => {
   const message = isAddressInUse(error)
-    ? `Port ${setupPort} is already in use and did not respond as VaexCore. Quit the other app or process using localhost:${setupPort}, then open VaexCore again.\n\nFor recovery, run: lsof -nP -iTCP:${setupPort} -sTCP:LISTEN`
-    : error?.message || "VaexCore could not start.";
+    ? `Port ${setupPort} is already in use and did not respond as vaexcore console. Quit the other app or process using localhost:${setupPort}, then open vaexcore console again.\n\nFor recovery, run: lsof -nP -iTCP:${setupPort} -sTCP:LISTEN`
+    : error?.message || "vaexcore console could not start.";
 
-  dialog.showErrorBox("VaexCore startup failed", message);
+  dialog.showErrorBox("vaexcore console startup failed", message);
 };
 
 app.whenReady().then(() => {
