@@ -24,6 +24,7 @@ const steps = [
   ["Moderation smoke", ["npm", "run", "smoke:moderation"]],
   ["Token refresh smoke", ["npm", "run", "smoke:token-refresh"]],
   ["Giveaway readiness smoke", ["npm", "run", "smoke:giveaway"]],
+  ["Giveaway live rehearsal", ["npm", "run", "smoke:giveaway-live"]],
   ["CLI env smoke", ["npm", "run", "smoke:cli-env"]],
   ["Message queue smoke", ["npm", "run", "smoke:queue"]],
   ["Unsigned release artifact smoke", ["npm", "run", "smoke:unsigned-release"]],

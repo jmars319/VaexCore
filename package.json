@@ -30,6 +30,7 @@
     "smoke:timers": "npm run build && tsx scripts/smoke-timers.mjs",
     "smoke:moderation": "npm run build && node scripts/smoke-moderation.mjs",
     "smoke:giveaway": "npm run build && node scripts/smoke-giveaway-readiness.mjs",
+    "smoke:giveaway-live": "npm run build && node scripts/smoke-giveaway-live.mjs",
     "smoke:token-refresh": "npm run build && node scripts/smoke-token-refresh.mjs",
     "smoke:diagnostics": "npm run build && node scripts/smoke-diagnostics.mjs",
     "smoke:clean-install": "npm run build && node scripts/smoke-clean-install.mjs",
