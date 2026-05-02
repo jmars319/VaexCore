@@ -5,9 +5,24 @@ import { pathToFileURL } from "node:url";
 
 const tempDir = mkdtempSync(join(tmpdir(), "vaexcore-diagnostics-smoke-"));
 const smokeDbPath = join(tempDir, "data/vaexcore.sqlite");
+const realFetch = globalThis.fetch;
 
 process.env.VAEXCORE_CONFIG_DIR = tempDir;
 process.env.DATABASE_URL = `file:${smokeDbPath}`;
+
+globalThis.fetch = async (input, init) => {
+  const url = typeof input === "string" ? input : input.url;
+
+  if (url.startsWith("https://id.twitch.tv/oauth2/validate")) {
+    return mockValidate(init);
+  }
+
+  if (url.startsWith("https://api.twitch.tv/helix/users")) {
+    return mockUsers(url, init);
+  }
+
+  return realFetch(input, init);
+};
 
 writeLocalSecretsFixture({
   mode: "live",
@@ -39,6 +54,7 @@ try {
   console.log("diagnostics smoke passed");
 } finally {
   await handle.stop();
+  globalThis.fetch = realFetch;
   rmSync(tempDir, { recursive: true, force: true });
 }
 
@@ -46,8 +62,15 @@ async function runSmoke() {
   const shell = await text("/");
   assert(shell.includes("/ui/app.js"), "setup shell loads static UI");
 
+  const launch = await waitForLaunchPreparation();
+  assert(launch.setupReady === true, "launch preparation validates existing setup");
+  assert(launch.status === "attention", "launch preparation runs preflight and reports bot-start attention");
+  assert(launch.validation?.ok === true, "launch preparation includes validation result");
+  assert(launch.preflight?.checks?.some((check) => check.name === "Bot runtime"), "launch preparation includes preflight checks");
+
   const diagnostics = await json("/api/diagnostics");
   assert(diagnostics.ok === true, "diagnostics returns ok when core blockers are clear");
+  assert(diagnostics.launchPreparation.setupReady === true, "diagnostics includes launch preparation state");
   assert(diagnostics.app.version, "diagnostics includes app version");
   assert(diagnostics.app.runtime, "diagnostics includes runtime kind");
   assert(diagnostics.paths.configDir === tempDir, "diagnostics includes config path");
@@ -73,6 +96,69 @@ async function runSmoke() {
   assert(Array.isArray(bundle.recent.outbound), "support bundle includes outbound history");
   assert(Array.isArray(bundle.recent.audit), "support bundle includes audit history");
   assertSafeDiagnostics(bundle);
+}
+
+async function waitForLaunchPreparation() {
+  const deadline = Date.now() + 5000;
+
+  while (Date.now() < deadline) {
+    const launch = await json("/api/launch-preparation");
+
+    if (!["pending", "running"].includes(launch.status)) {
+      return launch;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  throw new Error("Smoke failed: launch preparation did not finish");
+}
+
+function mockValidate(init) {
+  const accessToken = authToken(init);
+
+  if (accessToken !== "diagnostics-access-token") {
+    return jsonResponse({ status: 401, message: "invalid access token" }, 401);
+  }
+
+  return jsonResponse({
+    client_id: "diagnostics-client-id",
+    login: "vaexcorebot",
+    scopes: ["user:read:chat", "user:write:chat"],
+    user_id: "bot-id",
+    expires_in: 14400
+  });
+}
+
+function mockUsers(url, init) {
+  if (authToken(init) !== "diagnostics-access-token") {
+    return jsonResponse({ status: 401, message: "invalid access token" }, 401);
+  }
+
+  const parsed = new URL(url);
+  const login = parsed.searchParams.get("login");
+
+  if (login === "vaexcorebot") {
+    return jsonResponse({ data: [{ id: "bot-id", login, display_name: "vaexcorebot" }] });
+  }
+
+  if (login === "vaexil") {
+    return jsonResponse({ data: [{ id: "broadcaster-id", login, display_name: "Vaexil" }] });
+  }
+
+  return jsonResponse({ data: [] });
+}
+
+function authToken(init) {
+  const header = new Headers(init?.headers).get("authorization") || "";
+  return header.replace(/^Bearer\s+/i, "");
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" }
+  });
 }
 
 async function text(path) {

@@ -34,8 +34,14 @@ async function runSmoke() {
   assert(config.hasAccessToken === false, "clean install starts disconnected");
   assertSafePayload(config);
 
+  const launch = await waitForLaunchPreparation();
+  assert(launch.status === "setup_required", "clean install launch preparation asks for one-time setup");
+  assert(launch.nextAction.includes("Setup Guide"), "launch preparation points clean installs to setup guide");
+  assertSafePayload(launch);
+
   const diagnostics = await json("/api/diagnostics");
   assert(diagnostics.ok === false, "clean install diagnostics report setup blockers");
+  assert(diagnostics.launchPreparation.status === "setup_required", "diagnostics includes setup-required launch preparation");
   assert(diagnostics.firstRun.cleanInstall === true, "diagnostics detects clean install");
   assert(diagnostics.firstRun.nextAction.includes("Setup Guide"), "first-run next action points to setup guide");
   assert(diagnostics.firstRun.recoverySteps.length >= 3, "first-run recovery steps are present");
@@ -57,6 +63,22 @@ async function runSmoke() {
   assert(bundle.diagnostics.firstRun.cleanInstall === true, "support bundle includes diagnostics");
   assert(Array.isArray(bundle.recent.botLogs), "support bundle includes bot logs array");
   assertSafePayload(bundle);
+}
+
+async function waitForLaunchPreparation() {
+  const deadline = Date.now() + 3000;
+
+  while (Date.now() < deadline) {
+    const launch = await json("/api/launch-preparation");
+
+    if (!["pending", "running"].includes(launch.status)) {
+      return launch;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error("Smoke failed: launch preparation did not finish");
 }
 
 async function text(path) {

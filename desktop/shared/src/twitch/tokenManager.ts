@@ -28,6 +28,16 @@ export type StoredTwitchTokenValidation = {
   refreshed: boolean;
 };
 
+export class TwitchTokenRefreshError extends Error {
+  constructor(
+    readonly status: number,
+    readonly twitchMessage: string
+  ) {
+    super(formatTwitchTokenRefreshMessage(status, twitchMessage));
+    this.name = "TwitchTokenRefreshError";
+  }
+}
+
 type StoredTwitchTokenOptions = {
   secrets?: LocalSecrets;
   expectedClientId?: string;
@@ -141,9 +151,7 @@ export const refreshTwitchAccessToken = async (input: {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(
-      `Twitch token refresh failed: ${response.status} ${body}. Reconnect Twitch to authorize again.`
-    );
+    throw new TwitchTokenRefreshError(response.status, parseTwitchTokenErrorMessage(body));
   }
 
   const tokens = (await response.json()) as Partial<TwitchOAuthTokenResponse>;
@@ -163,6 +171,28 @@ export const refreshTwitchAccessToken = async (input: {
 
 export const getTokenExpiresAt = (expiresInSeconds: number) =>
   new Date(Date.now() + Math.max(0, expiresInSeconds) * 1000).toISOString();
+
+const parseTwitchTokenErrorMessage = (body: string) => {
+  try {
+    const parsed = JSON.parse(body) as { message?: unknown; error?: unknown };
+    const message = typeof parsed.message === "string" ? parsed.message : parsed.error;
+    return typeof message === "string" && message.trim() ? message.trim() : body;
+  } catch {
+    return body;
+  }
+};
+
+const formatTwitchTokenRefreshMessage = (status: number, twitchMessage: string) => {
+  if (status === 403 && /invalid client secret/i.test(twitchMessage)) {
+    return "Twitch token refresh failed: Twitch rejected the saved Client Secret. Generate or copy a fresh Client Secret in the Twitch Developer Console, save settings, then reconnect Twitch as the Bot Login account.";
+  }
+
+  if (/invalid client/i.test(twitchMessage)) {
+    return "Twitch token refresh failed: Twitch rejected the saved Client ID or Client Secret. Check both Twitch app credentials, save settings, then reconnect Twitch as the Bot Login account.";
+  }
+
+  return `Twitch token refresh failed: ${twitchMessage || `HTTP ${status}`}. Reconnect Twitch as the Bot Login account.`;
+};
 
 export const isInvalidTwitchAccessTokenError = (error: unknown) => {
   if (error instanceof TwitchTokenValidationError) {

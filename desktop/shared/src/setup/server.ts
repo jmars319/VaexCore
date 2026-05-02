@@ -91,6 +91,8 @@ export type SetupServerHandle = {
 const host = "127.0.0.1";
 const defaultPort = 3434;
 const queueStaleWarningMs = 30_000;
+const tokenRefreshLeadMs = 5 * 60 * 1000;
+const tokenValidationMaxAgeMs = 24 * 60 * 60 * 1000;
 const databaseUrl = process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite";
 const logger = createLogger("info");
 const oauthStates = new Map<string, number>();
@@ -123,6 +125,9 @@ chatQueue.start();
 setupRuntimeStatus.messageQueueReady = chatQueue.isReady();
 const botProcess = createBotProcessState();
 const giveawayReminder = createGiveawayReminderState();
+let launchPreparation = createLaunchPreparationState();
+let launchPreparationPromise: Promise<void> | undefined;
+let pendingLaunchPreparationReason: string | undefined;
 
 export const startSetupServer = async (options: { port?: number } = {}) => {
   const port = options.port ?? defaultPort;
@@ -157,6 +162,9 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
   );
 
   scheduleGiveawayReminder();
+  setTimeout(() => {
+    void queueLaunchPreparation("launch");
+  }, 0);
 
   return {
     url: `http://localhost:${port}`,
@@ -202,6 +210,7 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "POST" && url.pathname === "/api/config") {
     const body = await readJson(request);
     const saved = saveConfig(body);
+    void queueLaunchPreparation("settings_saved");
     sendJson(response, 200, { ok: true, config: saved });
     return;
   }
@@ -212,7 +221,9 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/twitch/disconnect") {
-    sendJson(response, 200, { ok: true, config: disconnectTwitch() });
+    const config = disconnectTwitch();
+    resetLaunchPreparation("setup_required", "Twitch was disconnected.", "Connect Twitch in Configuration Settings.");
+    sendJson(response, 200, { ok: true, config });
     return;
   }
 
@@ -233,6 +244,17 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
 
   if (request.method === "GET" && url.pathname === "/api/status") {
     sendJson(response, 200, await getOperatorStatus());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/launch-preparation") {
+    sendJson(response, 200, getLaunchPreparationSnapshot());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/launch-preparation") {
+    await queueLaunchPreparation("manual");
+    sendJson(response, 200, getLaunchPreparationSnapshot());
     return;
   }
 
@@ -805,6 +827,65 @@ const getSafeConfig = () => {
   };
 };
 
+const getCachedTokenReadiness = (config = getSafeConfig()) => {
+  const missing = missingSafeConfigFields(config);
+  const requiredScopesPresent = requiredTwitchScopes.every((scope) =>
+    (config.scopes || []).includes(scope)
+  );
+  const expiresAtMs = Date.parse(config.tokenExpiresAt || "");
+  const expiresSoon = !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now() + tokenRefreshLeadMs;
+  const validatedAtMs = Date.parse(config.tokenValidatedAt || "");
+  const validationStale =
+    !Number.isFinite(validatedAtMs) || validatedAtMs <= Date.now() - tokenValidationMaxAgeMs;
+  const identitiesResolved = config.hasBotUserId && config.hasBroadcasterUserId;
+  const ready = Boolean(
+    config.hasAccessToken &&
+    identitiesResolved &&
+    requiredScopesPresent &&
+    !expiresSoon &&
+    !validationStale
+  );
+  const checks: SetupCheck[] = [
+    {
+      name: "Saved setup",
+      ok: missing.length === 0,
+      detail: missing.length === 0
+        ? "Required saved Twitch setup fields are present."
+        : `Missing setup fields: ${missing.join(", ")}.`
+    },
+    {
+      name: "Token valid",
+      ok: Boolean(config.hasAccessToken && !expiresSoon && !validationStale),
+      detail: config.hasAccessToken && !expiresSoon && !validationStale
+        ? `Saved token is valid until ${config.tokenExpiresAt}.`
+        : "Saved token is missing, expired, close to expiry, or due for validation."
+    },
+    {
+      name: "Required scopes",
+      ok: requiredScopesPresent,
+      detail: requiredScopesPresent
+        ? requiredTwitchScopes.join(", ")
+        : "Saved token scopes are missing required chat access."
+    },
+    {
+      name: "Twitch identities",
+      ok: identitiesResolved,
+      detail: identitiesResolved
+        ? "Saved bot and broadcaster identities are resolved."
+        : "Bot or broadcaster identity must be resolved."
+    }
+  ];
+
+  return {
+    ready,
+    requiredScopesPresent,
+    expiresSoon,
+    validationStale,
+    identitiesResolved,
+    checks
+  };
+};
+
 const saveConfig = (body: unknown) => {
   const input = body as Record<string, string>;
   const existing = readLocalSecrets();
@@ -865,12 +946,20 @@ const disconnectTwitch = () => {
   return getSafeConfig();
 };
 
+const redirectToOAuthNotice = (response: ServerResponse, error: string) => {
+  const params = new URLSearchParams({
+    window: "settings",
+    error
+  });
+  redirect(response, `/?${params.toString()}`);
+};
+
 const redirectToTwitch = (response: ServerResponse) => {
   const secrets = readLocalSecrets();
   const twitch = secrets.twitch;
 
   if (!twitch.clientId || !twitch.clientSecret) {
-    redirect(response, "/?error=missing_client_credentials");
+    redirectToOAuthNotice(response, "missing_client_credentials");
     return;
   }
 
@@ -892,7 +981,7 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
   const error = url.searchParams.get("error");
 
   if (error) {
-    redirect(response, `/?error=${encodeURIComponent(error)}`);
+    redirectToOAuthNotice(response, error);
     return;
   }
 
@@ -900,7 +989,7 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
   const state = url.searchParams.get("state");
 
   if (!code || !state || !consumeOauthState(state)) {
-    redirect(response, "/?error=invalid_oauth_state");
+    redirectToOAuthNotice(response, "invalid_oauth_state");
     return;
   }
 
@@ -908,17 +997,34 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
   const twitch = secrets.twitch;
 
   if (!twitch.clientId || !twitch.clientSecret) {
-    redirect(response, "/?error=missing_client_credentials");
+    redirectToOAuthNotice(response, "missing_client_credentials");
     return;
   }
 
-  const tokens = await exchangeCode({
-    code,
-    clientId: twitch.clientId,
-    clientSecret: twitch.clientSecret,
-    redirectUri: twitch.redirectUri ?? defaultRedirectUri
-  });
-  const validation = await validateToken(tokens.access_token);
+  let tokens: TwitchOAuthTokenResponse & { refresh_token: string };
+
+  try {
+    tokens = await exchangeCode({
+      code,
+      clientId: twitch.clientId,
+      clientSecret: twitch.clientSecret,
+      redirectUri: twitch.redirectUri ?? defaultRedirectUri
+    });
+  } catch (error) {
+    logger.warn({ error: redactSecrets(error) }, "Twitch OAuth token exchange failed");
+    redirectToOAuthNotice(response, classifyOAuthExchangeError(error));
+    return;
+  }
+
+  let validation: Awaited<ReturnType<typeof validateToken>>;
+
+  try {
+    validation = await validateToken(tokens.access_token);
+  } catch (error) {
+    logger.warn({ error: redactSecrets(error) }, "Twitch OAuth token validation failed after exchange");
+    redirectToOAuthNotice(response, "oauth_token_validation_failed");
+    return;
+  }
   const expiresAt = getTokenExpiresAt(tokens.expires_in);
   const tokenLogin = normalizeTwitchLogin(validation.login);
   const configuredBotLogin = twitch.botLogin
@@ -937,7 +1043,7 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
       connected_login: tokenLogin,
       expected_login: configuredBotLogin ?? ""
     });
-    redirect(response, `/?${params.toString()}`);
+    redirect(response, `/?window=settings&${params.toString()}`);
     return;
   }
 
@@ -955,7 +1061,8 @@ const handleTwitchCallback = async (url: URL, response: ServerResponse) => {
     }
   });
 
-  redirect(response, "/?connected=1");
+  void queueLaunchPreparation("oauth_connected");
+  redirect(response, "/?window=settings&connected=1");
 };
 
 const validateSetup = async () => {
@@ -1070,6 +1177,7 @@ const validateSetup = async () => {
   const nextTwitch: LocalSecrets["twitch"] = {
     ...activeTwitch,
     scopes: token.scopes,
+    tokenExpiresAt: token.expires_in ? getTokenExpiresAt(token.expires_in) : activeTwitch.tokenExpiresAt,
     tokenValidatedAt: setupOk ? new Date().toISOString() : undefined,
     botUserId: undefined,
     broadcasterUserId: undefined
@@ -1130,24 +1238,30 @@ const getOperatorStatus = async () => {
   let tokenValid = false;
   let requiredScopesPresent = false;
   let tokenRefreshed = false;
+  const cachedReadiness = getCachedTokenReadiness(config);
 
-  try {
-    const secrets = readLocalSecrets();
-    const validation = secrets.twitch.accessToken
-      ? await validateStoredTwitchToken({ secrets, logger })
-      : undefined;
-    const token = validation?.token;
-    tokenRefreshed = Boolean(validation?.refreshed);
-    tokenValid = Boolean(token);
-    requiredScopesPresent = token
-      ? requiredTwitchScopes.every((scope) => token.scopes.includes(scope))
-      : false;
-    if (tokenRefreshed) {
-      config = getSafeConfig();
+  if (cachedReadiness.ready) {
+    tokenValid = true;
+    requiredScopesPresent = true;
+  } else {
+    try {
+      const secrets = readLocalSecrets();
+      const validation = secrets.twitch.accessToken
+        ? await validateStoredTwitchToken({ secrets, logger })
+        : undefined;
+      const token = validation?.token;
+      tokenRefreshed = Boolean(validation?.refreshed);
+      tokenValid = Boolean(token);
+      requiredScopesPresent = token
+        ? requiredTwitchScopes.every((scope) => token.scopes.includes(scope))
+        : false;
+      if (tokenRefreshed) {
+        config = getSafeConfig();
+      }
+    } catch {
+      tokenValid = false;
+      requiredScopesPresent = false;
     }
-  } catch {
-    tokenValid = false;
-    requiredScopesPresent = false;
   }
 
   const giveaway = giveawaysService.getOperatorState();
@@ -1159,6 +1273,7 @@ const getOperatorStatus = async () => {
 
   return {
     ok: true,
+    launchPreparation: getLaunchPreparationSnapshot(),
     config,
     runtime: {
       mode: config.mode,
@@ -1206,7 +1321,7 @@ const runPreflightCheck = async () => {
       ok: runtime.tokenValid && runtime.requiredScopesPresent,
       detail: runtime.tokenValid && runtime.requiredScopesPresent
         ? "OAuth token is valid and required chat scopes are present."
-        : "Run Validate Setup after connecting Twitch."
+        : "Reconnect Twitch if automatic launch validation cannot confirm the saved token."
     },
     {
       name: "Setup queue",
@@ -1258,6 +1373,236 @@ const runPreflightCheck = async () => {
     checks,
     nextAction: failed?.detail ?? "Giveaway controls ready.",
     summary: giveawayState.summary
+  };
+};
+
+type SetupCheck = {
+  name: string;
+  ok: boolean;
+  detail: string;
+};
+
+type LaunchPreparationStatus =
+  | "pending"
+  | "running"
+  | "setup_required"
+  | "attention"
+  | "ready"
+  | "error";
+
+type LaunchPreparationState = {
+  ok: boolean;
+  status: LaunchPreparationStatus;
+  reason: string;
+  step: string;
+  startedAt: string;
+  completedAt: string;
+  setupReady: boolean;
+  preflightReady: boolean;
+  summary: string;
+  nextAction: string;
+  checks: SetupCheck[];
+  validation?: {
+    ok: boolean;
+    checks: SetupCheck[];
+    error?: string;
+  };
+  preflight?: {
+    ok: boolean;
+    checks: SetupCheck[];
+    nextAction: string;
+    summary?: unknown;
+  };
+  error?: string;
+};
+
+function createLaunchPreparationState(): LaunchPreparationState {
+  return {
+    ok: false,
+    status: "pending",
+    reason: "startup",
+    step: "pending",
+    startedAt: "",
+    completedAt: "",
+    setupReady: false,
+    preflightReady: false,
+    summary: "Launch preparation has not run yet.",
+    nextAction: "Waiting for vaexcore console to start.",
+    checks: []
+  };
+}
+
+function resetLaunchPreparation(
+  status: LaunchPreparationStatus,
+  summary: string,
+  nextAction: string
+) {
+  pendingLaunchPreparationReason = undefined;
+  const now = new Date().toISOString();
+  launchPreparation = {
+    ...createLaunchPreparationState(),
+    status,
+    reason: "reset",
+    step: status,
+    startedAt: now,
+    completedAt: now,
+    summary,
+    nextAction,
+    checks: [
+      {
+        name: "Saved setup",
+        ok: false,
+        detail: nextAction
+      }
+    ]
+  };
+}
+
+const getLaunchPreparationSnapshot = () => ({
+  ...launchPreparation,
+  checks: launchPreparation.checks.map((check) => ({ ...check })),
+  validation: launchPreparation.validation
+    ? {
+        ...launchPreparation.validation,
+        checks: launchPreparation.validation.checks.map((check) => ({ ...check }))
+      }
+    : undefined,
+  preflight: launchPreparation.preflight
+    ? {
+        ...launchPreparation.preflight,
+        checks: launchPreparation.preflight.checks.map((check) => ({ ...check }))
+      }
+    : undefined
+});
+
+const queueLaunchPreparation = (reason: string) => {
+  if (launchPreparationPromise) {
+    pendingLaunchPreparationReason = reason;
+    return launchPreparationPromise;
+  }
+
+  launchPreparationPromise = runLaunchPreparation(reason)
+    .catch((error: unknown) => {
+      const detail = safeErrorMessage(error, "Launch preparation failed.");
+      launchPreparation = {
+        ...launchPreparation,
+        ok: false,
+        status: "error",
+        step: "error",
+        completedAt: new Date().toISOString(),
+        summary: "Automatic launch preparation failed.",
+        nextAction: detail,
+        error: detail,
+        checks: [
+          ...launchPreparation.checks,
+          { name: "Launch preparation", ok: false, detail }
+        ]
+      };
+      logger.error({ error: redactSecrets(error) }, "Automatic launch preparation failed");
+    })
+    .finally(() => {
+      launchPreparationPromise = undefined;
+      const pendingReason = pendingLaunchPreparationReason;
+      pendingLaunchPreparationReason = undefined;
+      if (pendingReason) {
+        void queueLaunchPreparation(pendingReason);
+      }
+    });
+
+  return launchPreparationPromise;
+};
+
+const runLaunchPreparation = async (reason: string) => {
+  const startedAt = new Date().toISOString();
+  launchPreparation = {
+    ...createLaunchPreparationState(),
+    status: "running",
+    reason,
+    step: "setup",
+    startedAt,
+    summary: "Checking saved setup and Twitch connection.",
+    nextAction: "Automatic launch checks are running."
+  };
+
+  const config = getSafeConfig();
+  const missing = missingSafeConfigFields(config);
+
+  if (missing.length > 0) {
+    const detail = `Missing setup fields: ${missing.join(", ")}.`;
+    launchPreparation = {
+      ...launchPreparation,
+      ok: false,
+      status: "setup_required",
+      step: "setup_required",
+      completedAt: new Date().toISOString(),
+      setupReady: false,
+      preflightReady: false,
+      summary: "One-time setup is not complete yet.",
+      nextAction: "Open Configuration Settings -> Setup Guide.",
+      checks: [{ name: "Saved setup", ok: false, detail }]
+    };
+    return;
+  }
+
+  launchPreparation = {
+    ...launchPreparation,
+    step: "validation",
+    summary: "Validating saved Twitch OAuth and refreshing tokens if needed."
+  };
+
+  const cachedReadiness = getCachedTokenReadiness(config);
+  const validation = cachedReadiness.ready
+    ? { ok: true, checks: cachedReadiness.checks }
+    : await validateSetup();
+  const failedValidation = validation.checks.find((check) => !check.ok);
+
+  if (!validation.ok) {
+    launchPreparation = {
+      ...launchPreparation,
+      ok: false,
+      status: "error",
+      step: "validation",
+      completedAt: new Date().toISOString(),
+      setupReady: false,
+      preflightReady: false,
+      summary: "Saved Twitch setup needs attention.",
+      nextAction: failedValidation?.detail ?? "Reconnect Twitch in Configuration Settings.",
+      checks: validation.checks,
+      validation
+    };
+    return;
+  }
+
+  launchPreparation = {
+    ...launchPreparation,
+    step: "preflight",
+    setupReady: true,
+    summary: "Running automatic preflight."
+  };
+
+  const preflight = await runPreflightCheck();
+  const checks = [
+    ...validation.checks,
+    ...preflight.checks.filter((check) =>
+      !validation.checks.some((validationCheck) => validationCheck.name === check.name)
+    )
+  ];
+
+  launchPreparation = {
+    ...launchPreparation,
+    ok: preflight.ok,
+    status: preflight.ok ? "ready" : "attention",
+    step: "complete",
+    completedAt: new Date().toISOString(),
+    setupReady: true,
+    preflightReady: preflight.ok,
+    summary: preflight.ok
+      ? "Launch preparation completed automatically."
+      : "Saved setup is ready. Live preflight still needs operator attention.",
+    nextAction: preflight.nextAction,
+    checks,
+    validation,
+    preflight
   };
 };
 
@@ -1318,6 +1663,7 @@ const getDiagnosticsReport = () => {
       databasePath: resolveDatabasePath(databaseUrl),
       setupUiDir: getSetupUiDir()
     },
+    launchPreparation: getLaunchPreparationSnapshot(),
     setupUi,
     firstRun,
     config,
@@ -1509,7 +1855,7 @@ const getDiagnosticChecks = (input: {
     severity: "blocker",
     detail: input.config.hasBotUserId && input.config.hasBroadcasterUserId
       ? "Bot and broadcaster identities are resolved."
-      : "Run Validate Setup after connecting Twitch."
+      : "Automatic launch validation has not resolved Twitch identities yet."
   },
   {
     name: "Outbound queue",
@@ -1573,7 +1919,7 @@ const getFirstRunStatus = (input: {
       ? `Missing Twitch setup fields: ${missingConfig.join(", ")}.`
       : undefined,
     missingConfig.length === 0 && !identitiesResolved
-      ? "Twitch identities are not validated; run Validate Setup."
+      ? "Twitch identities are not validated; automatic launch validation will retry after OAuth is connected."
       : undefined
   ].filter(Boolean) as string[];
   const warnings = [
@@ -1634,7 +1980,7 @@ const firstRunRecoverySteps = (input: {
       "Open Settings -> Setup Guide.",
       "Create or reuse a Twitch Developer application.",
       "Save credentials and usernames, then Connect Twitch.",
-      "Run Validate Setup, Send test message, then Start Bot."
+      "Automatic validation and preflight will run; then send a test message and start the bot."
     ];
   }
 
@@ -1654,7 +2000,7 @@ const firstRunRecoverySteps = (input: {
     return [
       "Open Settings -> Setup Guide.",
       "Complete the missing setup item shown in Diagnostics.",
-      "Run Validate Setup before starting the bot."
+      "Let automatic launch validation complete before starting the bot."
     ];
   }
 
@@ -1696,7 +2042,7 @@ const getSetupUiDiagnostics = () => {
     dir,
     appJs: existsSync(join(dir, "app.js")),
     stylesCss: existsSync(join(dir, "styles.css")),
-    logoJpg: existsSync(join(dir, "logo.jpg"))
+    logoJpg: Boolean(resolveSetupUiAssetPath("logo.jpg"))
   };
 };
 
@@ -1860,8 +2206,8 @@ const outboundRecoveryNextAction = (
 ) => {
   if (!safeToResend) {
     return latestFailed.failureCategory === "auth" || latestFailed.failureCategory === "config"
-      ? "Fix Twitch setup and run Validate Setup before resending outbound chat."
-      : "Run Validate Setup before resending outbound chat.";
+      ? "Fix Twitch setup and let automatic validation complete before resending outbound chat."
+      : "Automatic validation must pass before resending outbound chat.";
   }
 
   if (latestFailed.failureCategory === "rate_limit") {
@@ -1893,7 +2239,7 @@ const outboundRecoverySteps = (
   return [
     categorySteps[latestFailed.failureCategory],
     "Check Twitch chat for the original message.",
-    safeToResend ? "Resend only if the message is missing or still relevant." : "Run Validate Setup before resending.",
+    safeToResend ? "Resend only if the message is missing or still relevant." : "Automatic validation must pass before resending.",
     latestFailed.importance === "critical"
       ? "Use Live Mode -> Panic Resend for the latest failed critical giveaway message."
       : "Use Outbound Chat History -> Resend for this message.",
@@ -2201,7 +2547,7 @@ const startBotProcess = async () => {
     return {
       ok: false,
       error: failed?.detail || "Resolve readiness blockers before starting the live bot.",
-      nextAction: failed?.detail || "Run Validate Setup before starting the bot.",
+      nextAction: failed?.detail || "Let automatic launch validation complete before starting the bot.",
       checks: startReadiness.checks,
       diagnostics: getDiagnosticsReport(),
       botProcess: getBotProcessSnapshot()
@@ -5058,6 +5404,45 @@ const runLocalLifecycleTest = (options: { echoToChat: boolean; confirmed: boolea
 const requireUsername = (username: string | undefined) =>
   normalizeTwitchLogin(username, "Username");
 
+class TwitchOAuthExchangeError extends Error {
+  constructor(
+    readonly status: number,
+    readonly twitchMessage: string,
+    readonly body: string
+  ) {
+    super(`Twitch OAuth exchange failed: ${status} ${twitchMessage}`);
+    this.name = "TwitchOAuthExchangeError";
+  }
+}
+
+const classifyOAuthExchangeError = (error: unknown) => {
+  if (error instanceof TwitchOAuthExchangeError) {
+    if (error.status === 403 && /invalid client secret/i.test(error.twitchMessage)) {
+      return "invalid_client_secret";
+    }
+
+    if (/invalid client/i.test(error.twitchMessage)) {
+      return "invalid_client_credentials";
+    }
+
+    if (/redirect/i.test(error.twitchMessage)) {
+      return "redirect_uri_mismatch";
+    }
+  }
+
+  return "oauth_exchange_failed";
+};
+
+const parseTwitchOAuthErrorMessage = (body: string) => {
+  try {
+    const parsed = JSON.parse(body) as { message?: unknown; error?: unknown };
+    const message = typeof parsed.message === "string" ? parsed.message : parsed.error;
+    return typeof message === "string" && message.trim() ? message.trim() : body;
+  } catch {
+    return body;
+  }
+};
+
 const exchangeCode = async (input: {
   code: string;
   clientId: string;
@@ -5079,7 +5464,11 @@ const exchangeCode = async (input: {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Twitch OAuth exchange failed: ${response.status} ${body}`);
+    throw new TwitchOAuthExchangeError(
+      response.status,
+      parseTwitchOAuthErrorMessage(body),
+      body
+    );
   }
 
   const tokens = (await response.json()) as Partial<TwitchOAuthTokenResponse>;
@@ -5146,9 +5535,9 @@ const sendStaticUiAsset = (response: ServerResponse, pathname: string) => {
     return;
   }
 
-  const filePath = join(getSetupUiDir(), fileName);
+  const filePath = resolveSetupUiAssetPath(fileName);
 
-  if (!existsSync(filePath)) {
+  if (!filePath) {
     sendText(response, 404, "Not found");
     return;
   }
@@ -5189,6 +5578,22 @@ const getSetupUiDir = () => {
   const sourcePath = join(currentDir, "ui");
 
   return existsSync(bundledPath) ? bundledPath : sourcePath;
+};
+
+const getSharedAssetDir = () => {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  return join(currentDir, "..", "..", "assets");
+};
+
+const resolveSetupUiAssetPath = (fileName: string) => {
+  const setupPath = join(getSetupUiDir(), fileName);
+
+  if (existsSync(setupPath)) {
+    return setupPath;
+  }
+
+  const sharedAssetPath = join(getSharedAssetDir(), fileName);
+  return existsSync(sharedAssetPath) ? sharedAssetPath : undefined;
 };
 
 const sendText = (response: ServerResponse, status: number, text: string) => {

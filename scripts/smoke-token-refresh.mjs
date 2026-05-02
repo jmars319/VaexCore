@@ -11,6 +11,7 @@ process.env.VAEXCORE_CONFIG_DIR = tempDir;
 process.env.DATABASE_URL = `file:${smokeDbPath}`;
 
 const twitchCalls = [];
+let failRefreshWithInvalidClientSecret = false;
 
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input.url;
@@ -67,15 +68,27 @@ try {
 }
 
 async function runSmoke() {
-  const validation = await json("/api/validate", { method: "POST" });
-  assert(validation.ok === true, "validation succeeds after refreshing expired token");
+  const launch = await waitForLaunchPreparation();
+  assert(launch.setupReady === true, "launch preparation validates saved setup automatically");
+  assert(launch.status === "attention", "launch preparation reports live preflight attention before bot runtime starts");
   assert(
-    validation.checks.some((check) => check.ok && check.name === "Token refreshed"),
-    "validation reports token refresh"
+    launch.validation?.checks?.some((check) => check.ok && check.name === "Token refreshed"),
+    "launch preparation reports token refresh"
+  );
+  assert(
+    launch.preflight?.checks?.some((check) => check.name === "Bot runtime" && check.ok === false),
+    "launch preflight runs and reports stopped bot runtime"
   );
   assert(
     twitchCalls.some((call) => call.type === "refresh" && call.refreshToken === "old-refresh-token"),
-    "refresh endpoint was called with saved refresh token"
+    "automatic launch preparation refreshes the saved token"
+  );
+
+  const validation = await json("/api/validate", { method: "POST" });
+  assert(validation.ok === true, "manual validation rerun succeeds after automatic refresh");
+  assert(
+    validation.checks.some((check) => check.ok && check.name === "Token valid"),
+    "manual validation sees the refreshed token as valid"
   );
 
   const secrets = readLocalSecretsFixture();
@@ -102,6 +115,46 @@ async function runSmoke() {
     twitchCalls.some((call) => call.type === "chat" && call.accessToken === "fresh-access-token"),
     "chat send uses refreshed access token"
   );
+
+  failRefreshWithInvalidClientSecret = true;
+  writeLocalSecretsFixture({
+    mode: "live",
+    twitch: {
+      clientId: "refresh-client-id",
+      clientSecret: "refresh-client-secret",
+      redirectUri: "http://localhost:3434/auth/twitch/callback",
+      broadcasterLogin: "vaexil",
+      botLogin: "vaexcorebot",
+      accessToken: "expired-access-token",
+      refreshToken: "old-refresh-token",
+      scopes: ["user:read:chat", "user:write:chat"],
+      tokenExpiresAt: "2026-01-01T00:00:00.000Z",
+      tokenValidatedAt: "2026-01-01T00:00:00.000Z"
+    }
+  });
+  const failedLaunch = await json("/api/launch-preparation", { method: "POST" });
+  assert(failedLaunch.status === "error", "launch preparation reports refresh failure");
+  assert(
+    failedLaunch.nextAction.includes("Twitch rejected the saved Client Secret"),
+    "refresh failure uses friendly invalid-client-secret guidance"
+  );
+  assert(!JSON.stringify(failedLaunch).includes('{"status":403'), "refresh failure does not expose raw Twitch JSON");
+}
+
+async function waitForLaunchPreparation() {
+  const deadline = Date.now() + 5000;
+
+  while (Date.now() < deadline) {
+    const launch = await json("/api/launch-preparation");
+
+    if (!["pending", "running"].includes(launch.status)) {
+      return launch;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  throw new Error("Smoke failed: launch preparation did not finish");
 }
 
 function mockValidate(init) {
@@ -138,6 +191,10 @@ async function mockTokenRefresh(init) {
   assert(body.get("client_secret") === "refresh-client-secret", "refresh uses saved Client Secret");
   assert(body.get("grant_type") === "refresh_token", "refresh uses refresh_token grant");
   assert(body.get("refresh_token") === "old-refresh-token", "refresh uses saved refresh token");
+
+  if (failRefreshWithInvalidClientSecret) {
+    return jsonResponse({ status: 403, message: "invalid client secret" }, 403);
+  }
 
   return jsonResponse({
     access_token: "fresh-access-token",
