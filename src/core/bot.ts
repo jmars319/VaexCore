@@ -21,7 +21,7 @@ import { createDbClient, type DbClient } from "../db/client";
 import { registerCommandsModule } from "../modules/commands/commands.module";
 import { registerGiveawaysModule } from "../modules/giveaways/giveaways.module";
 import { ModerationService } from "../modules/moderation/moderation.module";
-import { TimerScheduler, TimersService } from "../modules/timers/timers.module";
+import { isTimerActivityMessage, TimerScheduler, TimersService } from "../modules/timers/timers.module";
 import { createRuntimeStatus, type RuntimeStatus } from "./runtimeStatus";
 import { registerStatusCommands } from "./statusCommands";
 import {
@@ -315,6 +315,13 @@ export class VaexCoreBot {
       },
       "Inbound chat message text"
     );
+
+    if (isTimerActivityMessage(message, {
+      botUserId: this.options.env.twitchBotUserId,
+      commandPrefix: this.options.env.commandPrefix
+    })) {
+      this.timerScheduler.recordChatActivity(message);
+    }
 
     await this.handleModeration(message);
     await this.commandRouter.handle(message);

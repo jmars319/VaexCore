@@ -136,6 +136,8 @@ export const initializeSchema = (db: DbClient) => {
       name TEXT NOT NULL UNIQUE,
       message TEXT NOT NULL,
       interval_minutes INTEGER NOT NULL,
+      min_chat_messages INTEGER NOT NULL DEFAULT 0,
+      chat_messages_since_last_fire INTEGER NOT NULL DEFAULT 0,
       enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
       fire_count INTEGER NOT NULL DEFAULT 0,
       last_sent_at TEXT NOT NULL DEFAULT '',
@@ -253,6 +255,8 @@ export const initializeSchema = (db: DbClient) => {
   ensureColumn(db, "outbound_messages", "failure_category", "TEXT NOT NULL DEFAULT 'none'");
   ensureColumn(db, "outbound_messages", "retry_after_ms", "INTEGER");
   ensureColumn(db, "outbound_messages", "next_attempt_at", "TEXT");
+  ensureColumn(db, "timers", "min_chat_messages", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "timers", "chat_messages_since_last_fire", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "moderation_settings", "exempt_broadcaster", "INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "moderation_settings", "exempt_moderators", "INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "moderation_settings", "exempt_vips", "INTEGER NOT NULL DEFAULT 0");

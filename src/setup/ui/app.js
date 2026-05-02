@@ -24,7 +24,7 @@ const state = {
   commandPresets: [],
   commandFeatureGate: null,
   timers: [],
-  timerSummary: { total: 0, enabled: 0, disabled: 0, sent: 0 },
+  timerSummary: { total: 0, enabled: 0, disabled: 0, sent: 0, waitingForActivity: 0 },
   timerFeatureGate: null,
   timerReadiness: { ok: false, reason: "" },
   timerPresets: [],
@@ -1018,7 +1018,7 @@ function renderTimers() {
   const readiness = state.timerReadiness || {};
 
   return [
-    sectionHeader("Timers", "Schedule local stream messages with live readiness and queue guardrails.",
+    sectionHeader("Timers", "Schedule local stream messages with live readiness, non-command chat activity, and queue guardrails.",
       h("div", { className: "actions section-actions" }, [
         actionButton("New timer", { id: "newTimer", variant: "secondary", onClick: newTimer }),
         actionButton("Refresh", { id: "refreshTimers", variant: "secondary", busyKey: "refresh", onClick: refreshAll })
@@ -1034,14 +1034,18 @@ function renderTimers() {
         ["Disabled", state.timerSummary.disabled || 0, Number(state.timerSummary.disabled || 0) === 0],
         ["Sent", state.timerSummary.sent || 0, true],
         ["Blocked", state.timerSummary.blocked || 0, Number(state.timerSummary.blocked || 0) === 0],
+        ["Waiting activity", state.timerSummary.waitingForActivity || 0, true],
         ["Next fire", state.timerSummary.nextFireAt || "none", true],
         ["Readiness", readiness.ok ? "ready" : "blocked", Boolean(readiness.ok)]
       ]),
       readiness.reason ? callout(readiness.reason, readiness.ok ? "ok" : "warn") : null,
-      dataTable(["Timer", "State", "Interval", "Last Sent", "Next Fire", "Status", "Why / Next Action", "Actions"], timers.map((timer) => [
+      dataTable(["Timer", "State", "Interval", "Activity", "Last Sent", "Next Fire", "Status", "Why / Next Action", "Actions"], timers.map((timer) => [
         timer.name,
         statusChip(timer.enabled ? "enabled" : "disabled"),
         `${timer.intervalMinutes}m`,
+        timer.minChatMessages > 0
+          ? `${Math.min(timer.chatMessagesSinceLastFire || 0, timer.minChatMessages)}/${timer.minChatMessages}`
+          : "off",
         timer.lastSentAt || "never",
         timer.nextFireAt || "none",
         timer.lastStatus === "blocked" && timer.lastError
@@ -1063,6 +1067,7 @@ function renderTimers() {
       h("div", { className: "grid three" }, [
         formRow("Timer name", h("input", { id: "timerName", placeholder: "Discord reminder", onInput: updateTimerDraft })),
         formRow("Interval minutes", h("input", { id: "timerInterval", type: "number", min: "5", max: "1440", onInput: updateTimerDraft })),
+        formRow("Chat messages required", h("input", { id: "timerMinChatMessages", type: "number", min: "0", max: "500", onInput: updateTimerDraft })),
         h("label", { className: "inline-check editor-check" }, [
           h("input", { id: "timerEnabled", type: "checkbox", onChange: updateTimerDraft }),
           "Enabled"
@@ -1074,7 +1079,7 @@ function renderTimers() {
         placeholder: "Follow the channel for schedule updates.",
         onInput: updateTimerDraft
       })),
-      callout("Timers use the outbound queue and only fire when Timers are Live, the bot is live-ready, and the queue is clear. Minimum interval is 5 minutes.", "info"),
+      callout("Timers use the outbound queue and only fire when Timers are Live, the bot is live-ready, the queue is clear, and the timer's non-command chat activity requirement is met. Minimum interval is 5 minutes.", "info"),
       h("div", { className: "actions" }, [
         actionButton("Save timer", { id: "saveTimer", onClick: saveTimer }),
         selected ? actionButton("Send now", { id: "sendSelectedTimer", variant: "secondary", busyKey: "timerSend", disabled: !selected.enabled || !readiness.ok, onClick: () => sendTimerNow(selected.id) }) : null
@@ -2675,7 +2680,7 @@ function setCommandState(result = {}) {
 
 function setTimerState(result = {}) {
   state.timers = result.timers || [];
-  state.timerSummary = result.summary || { total: 0, enabled: 0, disabled: 0, sent: 0, blocked: 0, nextFireAt: "" };
+  state.timerSummary = result.summary || { total: 0, enabled: 0, disabled: 0, sent: 0, blocked: 0, waitingForActivity: 0, nextFireAt: "" };
   state.timerFeatureGate = result.featureGate || state.timerFeatureGate;
   state.timerReadiness = result.readiness || state.timerReadiness;
   state.timerPresets = result.presets || state.timerPresets || [];
@@ -2809,6 +2814,7 @@ function newTimer() {
   state.timerDraft = {
     timerName: "",
     timerInterval: 5,
+    timerMinChatMessages: 5,
     timerEnabled: false,
     timerMessage: ""
   };
@@ -3297,6 +3303,7 @@ function readTimerPayload() {
     id: selected?.id,
     name: field("timerName")?.value || "",
     intervalMinutes: Number(field("timerInterval")?.value || 5),
+    minChatMessages: Number(field("timerMinChatMessages")?.value || 0),
     enabled: Boolean(field("timerEnabled")?.checked),
     message: field("timerMessage")?.value || ""
   };
@@ -3739,6 +3746,7 @@ function syncFormValues() {
   setValue("commandPreviewArgs", field("commandPreviewArgs")?.value || "target");
   setValue("timerName", timerValue("timerName", currentTimer?.name || ""));
   setValue("timerInterval", timerValue("timerInterval", currentTimer?.intervalMinutes || 5));
+  setValue("timerMinChatMessages", timerValue("timerMinChatMessages", currentTimer?.minChatMessages ?? 5));
   setChecked("timerEnabled", Boolean(timerValue("timerEnabled", currentTimer?.enabled ?? false)));
   setValue("timerMessage", timerValue("timerMessage", currentTimer?.message || ""));
   setChecked("blockedTermsEnabled", Boolean(moderationValue("blockedTermsEnabled", moderationSettings.blockedTermsEnabled)));

@@ -48,6 +48,7 @@ async function runSmoke() {
   assert(appJs.includes("Schedule local stream messages"), "browser UI exposes timers");
   assert(appJs.includes("Save timer"), "browser UI can save timers");
   assert(appJs.includes("Preset Starters"), "browser UI exposes timer presets");
+  assert(appJs.includes("Chat messages required"), "browser UI exposes timer activity threshold");
   assert(appJs.includes("Export timers JSON"), "browser UI can export timers");
   assert(appJs.includes("scoped warn, delete, and timeout actions"), "browser UI exposes moderation filters");
   assert(appJs.includes("moderator:manage:chat_messages"), "browser UI exposes moderation delete scope status");
@@ -181,6 +182,7 @@ async function runSmoke() {
   const initialTimers = await json("/api/timers");
   assert(initialTimers.ok === true, "timer route exists");
   assert(initialTimers.featureGate.mode === "off", "timer route returns feature gate");
+  assert(initialTimers.summary.waitingForActivity === 0, "timer route returns activity waiting summary");
   const initialModeration = await json("/api/moderation");
   assert(initialModeration.ok === true, "moderation route exists");
   assert(initialModeration.featureGate.mode === "off", "moderation route returns feature gate");

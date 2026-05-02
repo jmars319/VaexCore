@@ -233,12 +233,13 @@ Open `Timers` to manage scheduled chat messages stored locally in SQLite. Timers
 - preset starters for common Discord, socials, schedule, and command reminders
 - JSON import/export for timer backup or manual timer migration
 - minimum 5-minute intervals
+- optional chat activity thresholds so a timer can require non-command viewer messages before each automatic send
 - bounded, redacted timer messages
-- next fire time, last sent time, last status, send count, and clear blocked/due/scheduled explanations
+- next fire time, chat activity progress, last sent time, last status, send count, and clear blocked/due/scheduled explanations
 - manual `Send now` only when timers are live, the bot is live-ready, and the outbound queue is clear
 - audit entries for create, update, delete, enable, and disable actions
 
-Automatic timer delivery runs in the live bot runtime and uses the same outbound message queue, retry handling, rate-limit behavior, and outbound history as other VaexCore chat sends. Timers do not fire while the Timers feature gate is `off` or `test`, before live chat confirmation, or while the outbound queue is degraded.
+Automatic timer delivery runs in the live bot runtime and uses the same outbound message queue, retry handling, rate-limit behavior, and outbound history as other VaexCore chat sends. Timers do not fire while the Timers feature gate is `off` or `test`, before live chat confirmation, while the outbound queue is degraded, or before the timer's live non-command chat activity requirement is met. Existing timers default to no activity requirement; new UI timers and presets start with conservative activity thresholds.
 
 ## Basic Moderation Filters
 
@@ -376,7 +377,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Queue Health` and `Recovery Checklist` show pending queue age, retry delay, send throttle delay, failure category, latest failed action, resend safety, and concrete recovery steps before an operator retries a critical message. Auth/config failures do not blindly retry; Twitch rate limits and transient network failures retry with queue-owned backoff.
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Commands` stores local-only custom chat commands in SQLite, with disabled starter presets, aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
-- `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness plus clear queue health before sending.
+- `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness, clear queue health, and optional chat activity thresholds before sending.
 - `Moderation` stores local-only filter settings, per-filter actions, blocked phrases, allowed link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, audits enforcement outcomes, and exempts protected commands plus active giveaway entry commands.
 - `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and moderation filters start `off` until explicitly enabled.
 - `Stream Night Presets` apply audited feature-gate bundles for giveaway-only nights, local bot rehearsals, timer-focused streams, or full local bot replacement mode.
@@ -388,7 +389,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:giveaway-live` runs the stream-night giveaway rehearsal covering UI/API start, chat commands, five entrants, duplicate entry handling, insufficient entrants, reroll, manual claim/delivery, restart persistence, outbound assurance, and custom command/timer/moderation interference checks.
 - `npm run smoke:commands` runs a temp-database custom command check covering reserved names, aliases, placeholders, permissions, cooldowns, disabled commands, preview, import/export, usage history, and audit logs.
 - `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
-- `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
+- `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, chat activity thresholds, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
 - `npm run smoke:moderation` checks moderation feature-gate behavior, disabled-by-default filters, trusted role exemptions, blocked phrases, allowed domains, temporary link permits, links, caps, repeat and symbol detection, protected command exemptions, recent hits, and audit logging.
 - `npm run smoke:replacement` checks the bot replacement path across stream presets, starter commands, timer presets, moderation rehearsal, live confirmation guards, protected `!enter`, and audit logging.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.

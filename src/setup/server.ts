@@ -1371,6 +1371,8 @@ const getSupportBundle = () => {
     name: timer.name,
     enabled: timer.enabled,
     intervalMinutes: timer.intervalMinutes,
+    minChatMessages: timer.minChatMessages,
+    chatMessagesSinceLastFire: timer.chatMessagesSinceLastFire,
     fireCount: timer.fireCount,
     lastSentAt: timer.lastSentAt,
     nextFireAt: timer.nextFireAt,
@@ -1422,7 +1424,8 @@ const summarizeTimers = (timers: ReturnType<TimersService["listTimers"]>) => ({
     .filter((timer) => timer.enabled && timer.nextFireAt)
     .map((timer) => timer.nextFireAt)
     .sort()[0] ?? "",
-  blocked: timers.filter((timer) => timer.lastStatus === "blocked").length
+  blocked: timers.filter((timer) => timer.lastStatus === "blocked").length,
+  waitingForActivity: timers.filter((timer) => timerNeedsActivity(timer)).length
 });
 
 const getDiagnosticChecks = (input: {
@@ -2680,6 +2683,7 @@ const getTimers = () => {
       disabled: timers.filter((timer) => !timer.enabled).length,
       sent: timers.reduce((total, timer) => total + timer.fireCount, 0),
       blocked: timers.filter((timer) => timer.lastStatus === "blocked").length,
+      waitingForActivity: timers.filter((timer) => timerNeedsActivity(timer)).length,
       nextFireAt: timers
         .filter((timer) => timer.enabled && timer.nextFireAt)
         .map((timer) => timer.nextFireAt)
@@ -2689,12 +2693,13 @@ const getTimers = () => {
 };
 
 const exportTimers = () => ({
-  version: 1,
+  version: 2,
   exportedAt: new Date().toISOString(),
   timers: timersService.listTimers().map((timer) => ({
     name: timer.name,
     message: timer.message,
     intervalMinutes: timer.intervalMinutes,
+    minChatMessages: timer.minChatMessages,
     enabled: timer.enabled,
     fireCount: timer.fireCount,
     lastSentAt: timer.lastSentAt
@@ -2716,6 +2721,7 @@ const importTimers = (body: unknown) => {
       const existing = timersService.listTimers().find((timer) => timer.name.toLowerCase() === name);
       return timersService.saveTimer({
         ...input,
+        minChatMessages: input.minChatMessages,
         id: existing?.id
       }, localUiActor);
     });
@@ -2752,6 +2758,7 @@ const createTimerFromPreset = (id: string | undefined) => {
       name: preset.name,
       message: preset.message,
       intervalMinutes: preset.intervalMinutes,
+      minChatMessages: preset.minChatMessages,
       enabled: false
     }, localUiActor);
 
@@ -2890,24 +2897,28 @@ const timerPresetDefinitions = [
     id: "discord",
     name: "Discord reminder",
     intervalMinutes: 15,
+    minChatMessages: 5,
     message: "Join the Discord for stream updates: https://example.com"
   },
   {
     id: "socials",
     name: "Social links",
     intervalMinutes: 20,
+    minChatMessages: 8,
     message: "Follow socials and find links here: https://example.com"
   },
   {
     id: "schedule",
     name: "Stream schedule",
     intervalMinutes: 30,
+    minChatMessages: 5,
     message: "Stream schedule: check the channel panels for upcoming streams."
   },
   {
     id: "commands",
     name: "Command reminder",
     intervalMinutes: 25,
+    minChatMessages: 5,
     message: "Try !gstatus during giveaways, or ask a mod for current channel commands."
   }
 ] as const;
@@ -2951,8 +2962,18 @@ const inspectTimer = (
   }
 
   const nextFireMs = Date.parse(timer.nextFireAt);
+  const activity = timerActivityProgress(timer);
 
   if (Number.isFinite(nextFireMs) && nextFireMs <= Date.now()) {
+    if (timerNeedsActivity(timer)) {
+      const remaining = Math.max(0, timer.minChatMessages - timer.chatMessagesSinceLastFire);
+      return {
+        status: "waiting_activity",
+        detail: `Interval elapsed; waiting for ${remaining} more chat message${remaining === 1 ? "" : "s"} (${activity}).`,
+        nextAction: "Let chat activity build or use Send now for an explicit operator send."
+      };
+    }
+
     return {
       status: "due",
       detail: "Timer is due and will send on the next scheduler tick if the bot remains live-ready.",
@@ -2965,9 +2986,23 @@ const inspectTimer = (
     detail: timer.nextFireAt
       ? `Next send is scheduled for ${timer.nextFireAt}.`
       : "Timer is waiting for its next schedule.",
-    nextAction: "No action needed."
+    nextAction: timer.minChatMessages > 0
+      ? `Needs ${activity} chat activity before the next automatic send.`
+      : "No action needed."
   };
 };
+
+const timerNeedsActivity = (timer: ReturnType<TimersService["listTimers"]>[number]) =>
+  timer.enabled &&
+  timer.minChatMessages > 0 &&
+  timer.chatMessagesSinceLastFire < timer.minChatMessages &&
+  Boolean(timer.nextFireAt) &&
+  Date.parse(timer.nextFireAt) <= Date.now();
+
+const timerActivityProgress = (timer: ReturnType<TimersService["listTimers"]>[number]) =>
+  timer.minChatMessages > 0
+    ? `${Math.min(timer.chatMessagesSinceLastFire, timer.minChatMessages)}/${timer.minChatMessages}`
+    : "off";
 
 const getModerationState = () => ({
   ...moderationService.getState(),
@@ -3604,7 +3639,7 @@ const streamPresetDefinitions = [
   {
     id: "bot-replacement",
     label: "Bot Replacement",
-    description: "Enable custom commands, timers, and warn-only moderation for live Twitch chat.",
+    description: "Enable custom commands, timers, and scoped moderation for live Twitch chat.",
     modes: {
       custom_commands: "live",
       timers: "live",

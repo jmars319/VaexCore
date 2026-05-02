@@ -1,2 +1,2 @@
 export { TimersService } from "./timers.service";
-export { TimerScheduler, timerMetadata } from "./timers.runtime";
+export { TimerScheduler, isTimerActivityMessage, timerMetadata } from "./timers.runtime";
