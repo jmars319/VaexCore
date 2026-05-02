@@ -162,6 +162,10 @@ export const initializeSchema = (db: DbClient) => {
       repeat_limit INTEGER NOT NULL DEFAULT 3,
       symbol_min_length INTEGER NOT NULL DEFAULT 12,
       symbol_ratio REAL NOT NULL DEFAULT 0.6,
+      exempt_broadcaster INTEGER NOT NULL DEFAULT 1 CHECK (exempt_broadcaster IN (0, 1)),
+      exempt_moderators INTEGER NOT NULL DEFAULT 1 CHECK (exempt_moderators IN (0, 1)),
+      exempt_vips INTEGER NOT NULL DEFAULT 0 CHECK (exempt_vips IN (0, 1)),
+      exempt_subscribers INTEGER NOT NULL DEFAULT 0 CHECK (exempt_subscribers IN (0, 1)),
       updated_at TEXT NOT NULL
     );
 
@@ -182,6 +186,23 @@ export const initializeSchema = (db: DbClient) => {
       message_preview TEXT NOT NULL,
       detail TEXT NOT NULL,
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS moderation_allowed_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL UNIQUE,
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS moderation_link_permits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_login TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS giveaway_reminder_settings (
@@ -217,11 +238,19 @@ export const initializeSchema = (db: DbClient) => {
       ON moderation_hits(created_at);
     CREATE INDEX IF NOT EXISTS idx_moderation_blocked_terms_enabled
       ON moderation_blocked_terms(enabled);
+    CREATE INDEX IF NOT EXISTS idx_moderation_allowed_links_enabled
+      ON moderation_allowed_links(enabled);
+    CREATE INDEX IF NOT EXISTS idx_moderation_link_permits_user
+      ON moderation_link_permits(user_login, expires_at, used_at);
   `);
 
   ensureColumn(db, "outbound_messages", "failure_category", "TEXT NOT NULL DEFAULT 'none'");
   ensureColumn(db, "outbound_messages", "retry_after_ms", "INTEGER");
   ensureColumn(db, "outbound_messages", "next_attempt_at", "TEXT");
+  ensureColumn(db, "moderation_settings", "exempt_broadcaster", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "moderation_settings", "exempt_moderators", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "moderation_settings", "exempt_vips", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "moderation_settings", "exempt_subscribers", "INTEGER NOT NULL DEFAULT 0");
 };
 
 const ensureColumn = (

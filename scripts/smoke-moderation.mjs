@@ -29,11 +29,17 @@ async function runSmoke() {
   assert(appJs.includes("Moderation"), "Moderation tab renders");
   assert(appJs.includes("Run moderation test"), "Moderation tab exposes local test");
   assert(appJs.includes("Save moderation settings"), "Moderation tab exposes settings save");
+  assert(appJs.includes("Trusted Roles"), "Moderation tab exposes trusted role exemptions");
+  assert(appJs.includes("Allowed Link Domains"), "Moderation tab exposes allowed link domains");
+  assert(appJs.includes("Temporary Link Permits"), "Moderation tab exposes link permits");
 
   const initial = await json("/api/moderation");
   assert(initial.ok === true, "moderation route returns ok");
   assert(initial.featureGate.mode === "off", "moderation feature gate defaults off");
   assert(initial.summary.filtersEnabled === 0, "all moderation filters default off");
+  assert(initial.settings.exemptBroadcaster === true, "broadcaster exemption defaults on");
+  assert(initial.settings.exemptModerators === true, "moderator exemption defaults on");
+  assert(initial.settings.exemptSubscribers === false, "subscriber exemption defaults off");
 
   const term = await post("/api/moderation/terms", {
     term: "spoiler",
@@ -54,10 +60,22 @@ async function runSmoke() {
     repeatWindowSeconds: 30,
     repeatLimit: 3,
     symbolMinLength: 8,
-    symbolRatio: 0.6
+    symbolRatio: 0.6,
+    exemptBroadcaster: true,
+    exemptModerators: true,
+    exemptVips: true,
+    exemptSubscribers: false
   });
   assert(saved.ok === true, "moderation settings save");
   assert(saved.summary.filtersEnabled === 5, "moderation filters can be enabled");
+  assert(saved.summary.roleExemptions === 3, "trusted role exemptions are counted");
+
+  const allowedDomain = await post("/api/moderation/allowed-links", {
+    domain: "https://example.com/allowed",
+    enabled: true
+  });
+  assert(allowedDomain.ok === true, "allowed link domain can be saved");
+  assert(allowedDomain.allowedLinks.some((item) => item.domain === "example.com" && item.enabled), "allowed link domain is normalized");
 
   const offResult = await post("/api/moderation/simulate", {
     actor: "viewer",
@@ -80,12 +98,27 @@ async function runSmoke() {
   assert(blocked.result.hit.filterTypes.includes("blocked_term"), "blocked phrase hit is detected");
   assert(blocked.result.hit.warningMessage.includes("viewer"), "warning message renders user placeholder");
 
+  const moderator = await post("/api/moderation/simulate", {
+    actor: "channelmod",
+    role: "mod",
+    text: "this has a spoiler"
+  });
+  assert(moderator.result.skipped === true, "trusted moderator role is exempt");
+
   const link = await post("/api/moderation/simulate", {
+    actor: "viewer",
+    role: "viewer",
+    text: "visit bad-example.net please"
+  });
+  assert(link.result.hit.filterTypes.includes("link"), "link filter hit is detected");
+
+  const allowedLink = await post("/api/moderation/simulate", {
     actor: "viewer",
     role: "viewer",
     text: "visit example.com please"
   });
-  assert(link.result.hit.filterTypes.includes("link"), "link filter hit is detected");
+  assert(!allowedLink.result.hit, "allowed domain does not trigger link filter");
+  assert(allowedLink.result.allowedLinks.includes("example.com"), "allowed domain is reported in simulation");
 
   const caps = await post("/api/moderation/simulate", {
     actor: "viewer",
@@ -110,6 +143,21 @@ async function runSmoke() {
   });
   assert(repeat.result.hit.filterTypes.includes("repeat"), "repeat filter hit is detected");
 
+  const permit = await post("/api/moderation/link-permits", {
+    userLogin: "permituser",
+    minutes: 5
+  });
+  assert(permit.ok === true, "temporary link permit can be granted");
+  assert(permit.summary.activeLinkPermits >= 1, "active link permit is counted");
+
+  const permittedLink = await post("/api/moderation/simulate", {
+    actor: "permituser",
+    role: "viewer",
+    text: "visit unlisted-link.io"
+  });
+  assert(!permittedLink.result.hit, "temporary link permit suppresses link warning");
+  assert(permittedLink.result.consumedPermit?.userLogin === "permituser", "temporary link permit is reported");
+
   const command = await post("/api/command/simulate", {
     actor: "viewer",
     role: "viewer",
@@ -123,6 +171,8 @@ async function runSmoke() {
   const audit = await json("/api/audit-logs");
   assert(audit.logs.some((log) => log.action === "moderation.term_create"), "blocked phrase create is audited");
   assert(audit.logs.some((log) => log.action === "moderation.settings_update"), "moderation settings update is audited");
+  assert(audit.logs.some((log) => log.action === "moderation.allowed_link_create"), "allowed link create is audited");
+  assert(audit.logs.some((log) => log.action === "moderation.link_permit_create"), "link permit create is audited");
   assert(audit.logs.some((log) => log.action === "moderation.hit"), "moderation hit is audited");
 }
 

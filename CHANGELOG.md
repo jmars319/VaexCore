@@ -4,6 +4,7 @@
 
 Current release state: clean-main unsigned tester cut for wider local testing.
 
+- Milestone 37: moderation filters v2 with trusted-role exemptions, allowed link domains, temporary link permits, richer moderation state summaries, UI controls, audited operator actions, and expanded smoke coverage.
 - Milestone 36: timer live polish with preset starters, timer JSON import/export, richer live-readiness checks, next-action explanations for blocked or scheduled timers, and expanded timer smoke coverage.
 - Milestone 35: giveaway live-readiness audit with a stream-night rehearsal smoke for chat and UI lifecycle paths, duplicate entries, insufficient entrants, reroll, manual claim/delivery, restart persistence, audit logs, outbound assurance, and custom command/timer/moderation interference checks.
 - Milestone 34: basic feature-gated moderation filters with blocked phrases, link/caps/repeat/symbol checks, warn-only queue-owned responses, protected command and giveaway entry exemptions, recent hit history, audit logging, local simulation, and smoke coverage.

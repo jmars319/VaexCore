@@ -87,8 +87,10 @@ code { background: var(--surface-3); border: 1px solid var(--line); border-radiu
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.actions.align-end { align-items: end; }
 .section-actions { margin-top: 0; }
 .inline-actions { margin-top: 0; }
 .segmented-actions { gap: 6px; }

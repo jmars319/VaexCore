@@ -330,10 +330,34 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/moderation/allowed-links") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveModerationAllowedLink(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/allowed-links/enable") {
+    const body = (await readJson(request)) as { id?: number; enabled?: boolean };
+    sendJson(response, 200, setModerationAllowedLinkEnabled(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/allowed-links/delete") {
+    const body = (await readJson(request)) as { id?: number };
+    sendJson(response, 200, deleteModerationAllowedLink(body.id));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/link-permits") {
+    const body = await readJson(request);
+    sendJson(response, 200, grantModerationLinkPermit(body));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/moderation/simulate") {
     const body = (await readJson(request)) as {
       actor?: string;
-      role?: "viewer" | "mod" | "broadcaster";
+      role?: LocalChatRole;
       text?: string;
     };
     sendJson(response, 200, simulateModeration(body));
@@ -2916,9 +2940,64 @@ const deleteModerationTerm = (id: number | undefined) => {
   }
 };
 
+const saveModerationAllowedLink = (body: unknown) => {
+  try {
+    return moderationService.saveAllowedLink(body, localUiActor);
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Allowed domain save failed")
+    };
+  }
+};
+
+const setModerationAllowedLinkEnabled = (body: { id?: number; enabled?: boolean }) => {
+  try {
+    return moderationService.setAllowedLinkEnabled(
+      parseSafeInteger(body.id, { field: "Allowed domain ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      Boolean(body.enabled),
+      localUiActor
+    );
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Allowed domain update failed")
+    };
+  }
+};
+
+const deleteModerationAllowedLink = (id: number | undefined) => {
+  try {
+    return moderationService.deleteAllowedLink(
+      parseSafeInteger(id, { field: "Allowed domain ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      localUiActor
+    );
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Allowed domain delete failed")
+    };
+  }
+};
+
+const grantModerationLinkPermit = (body: unknown) => {
+  try {
+    return moderationService.grantLinkPermit(body, localUiActor);
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Link permit grant failed")
+    };
+  }
+};
+
 const simulateModeration = (body: {
   actor?: string;
-  role?: "viewer" | "mod" | "broadcaster";
+  role?: LocalChatRole;
   text?: string;
 }) => {
   try {
@@ -2927,7 +3006,7 @@ const simulateModeration = (body: {
       role: body.role ?? "viewer",
       text: body.text || ""
     });
-    const result = moderationService.evaluate(actor);
+    const result = moderationService.evaluate(actor, { consumePermits: false });
 
     return {
       ...getModerationState(),
@@ -4141,15 +4220,19 @@ const simulatedChatActor: ChatMessage = {
   userDisplayName: "Simulated Chat"
 };
 
+type LocalChatRole = "viewer" | "subscriber" | "vip" | "mod" | "broadcaster";
+
 const createLocalChatMessage = (input: {
   login: string;
   displayName?: string;
-  role: "viewer" | "mod" | "broadcaster";
+  role: LocalChatRole;
   text: string;
 }): ChatMessage => {
   const login = requireUsername(input.login);
   const isBroadcaster = input.role === "broadcaster";
   const isMod = input.role === "mod" || isBroadcaster;
+  const isVip = input.role === "vip";
+  const isSubscriber = input.role === "subscriber";
 
   return {
     id: `local-${login}-${Date.now()}`,
@@ -4158,11 +4241,11 @@ const createLocalChatMessage = (input: {
     userLogin: login,
     userDisplayName: sanitizeDisplayName(input.displayName, login),
     broadcasterUserId: "local-broadcaster",
-    badges: isBroadcaster ? ["broadcaster"] : isMod ? ["moderator"] : [],
+    badges: isBroadcaster ? ["broadcaster"] : isMod ? ["moderator"] : isVip ? ["vip"] : isSubscriber ? ["subscriber"] : [],
     isBroadcaster,
     isMod,
-    isVip: false,
-    isSubscriber: false,
+    isVip,
+    isSubscriber,
     source: "local",
     receivedAt: new Date()
   };
@@ -4213,7 +4296,7 @@ const simulateCommand = async (body: {
     let moderation: ReturnType<ModerationService["evaluate"]> | undefined;
 
     try {
-      moderation = moderationService.evaluate(actor);
+      moderation = moderationService.evaluate(actor, { consumePermits: false });
       if (moderation.hit) {
         replies.push(moderation.hit.warningMessage);
       }

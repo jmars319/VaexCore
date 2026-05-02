@@ -29,8 +29,10 @@ const state = {
   timerPresets: [],
   moderation: null,
   moderationTerms: [],
+  moderationAllowedLinks: [],
+  moderationLinkPermits: [],
   moderationHits: [],
-  moderationSummary: { terms: 0, enabledTerms: 0, filtersEnabled: 0, hits: 0 },
+  moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, hits: 0 },
   moderationFeatureGate: null,
   featureGates: [],
   templates: [],
@@ -58,6 +60,8 @@ const state = {
   timerDraft: {},
   moderationDraft: {},
   moderationTermDraft: {},
+  moderationAllowedLinkDraft: {},
+  moderationPermitDraft: {},
   moderationTestResult: null,
   giveawayDraft: {},
   templateDraft: {},
@@ -149,6 +153,10 @@ const api = {
   saveModerationTerm: (body) => api.post("/api/moderation/terms", body),
   enableModerationTerm: (id, enabled) => api.post("/api/moderation/terms/enable", { id, enabled }),
   deleteModerationTerm: (id) => api.post("/api/moderation/terms/delete", { id }),
+  saveModerationAllowedLink: (body) => api.post("/api/moderation/allowed-links", body),
+  enableModerationAllowedLink: (id, enabled) => api.post("/api/moderation/allowed-links/enable", { id, enabled }),
+  deleteModerationAllowedLink: (id) => api.post("/api/moderation/allowed-links/delete", { id }),
+  grantModerationLinkPermit: (body) => api.post("/api/moderation/link-permits", body),
   simulateModeration: (body) => api.post("/api/moderation/simulate", body),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
   simulateCommand: (body) => api.post("/api/command/simulate", withEcho(body))
@@ -1070,6 +1078,8 @@ function renderModeration() {
   const settings = state.moderation?.settings || {};
   const hits = state.moderationHits || [];
   const terms = state.moderationTerms || [];
+  const allowedLinks = state.moderationAllowedLinks || [];
+  const linkPermits = state.moderationLinkPermits || [];
 
   return [
     sectionHeader("Moderation", "Lightweight local filters with warn-only actions and protected command exemptions.",
@@ -1082,6 +1092,8 @@ function renderModeration() {
       statusGrid([
         ["Filters enabled", state.moderationSummary.filtersEnabled || 0, Number(state.moderationSummary.filtersEnabled || 0) > 0],
         ["Blocked phrases", `${state.moderationSummary.enabledTerms || 0}/${state.moderationSummary.terms || 0}`, true],
+        ["Allowed domains", `${state.moderationSummary.enabledAllowedLinks || 0}/${state.moderationSummary.allowedLinks || 0}`, true],
+        ["Active permits", state.moderationSummary.activeLinkPermits || 0, true],
         ["Action", "warn only", true],
         ["Recent hits", state.moderationSummary.hits || 0, true]
       ]),
@@ -1120,6 +1132,25 @@ function renderModeration() {
         formRow("Symbol min length", h("input", { id: "symbolMinLength", type: "number", min: "5", max: "450", onInput: updateModerationDraft })),
         formRow("Symbol ratio", h("input", { id: "symbolRatio", type: "number", min: "0.1", max: "1", step: "0.05", onInput: updateModerationDraft }))
       ]),
+      h("h3", { text: "Trusted Roles" }),
+      h("div", { className: "grid four" }, [
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "exemptBroadcaster", type: "checkbox", onChange: updateModerationDraft }),
+          "Broadcaster"
+        ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "exemptModerators", type: "checkbox", onChange: updateModerationDraft }),
+          "Moderators"
+        ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "exemptVips", type: "checkbox", onChange: updateModerationDraft }),
+          "VIPs"
+        ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "exemptSubscribers", type: "checkbox", onChange: updateModerationDraft }),
+          "Subscribers"
+        ])
+      ]),
       callout("Moderation filters fail open and do not ban. Protected bot commands and active giveaway entry commands are exempt.", "info"),
       h("div", { className: "actions" }, [
         actionButton("Save moderation settings", { id: "saveModerationSettings", onClick: saveModerationSettings })
@@ -1145,11 +1176,49 @@ function renderModeration() {
         ])
       ]))
     ]),
+    card("Allowed Link Domains", [
+      h("div", { className: "grid" }, [
+        formRow("Domain", h("input", { id: "moderationAllowedDomain", placeholder: "example.com", onInput: updateModerationAllowedLinkDraft })),
+        h("label", { className: "inline-check editor-check" }, [
+          h("input", { id: "moderationAllowedDomainEnabled", type: "checkbox", onChange: updateModerationAllowedLinkDraft }),
+          "Enabled"
+        ])
+      ]),
+      h("div", { className: "actions" }, [
+        actionButton("Save allowed domain", { id: "saveModerationAllowedLink", variant: "secondary", onClick: saveModerationAllowedLink })
+      ]),
+      dataTable(["Domain", "State", "Actions"], allowedLinks.map((link) => [
+        link.domain,
+        statusChip(link.enabled ? "enabled" : "disabled"),
+        h("div", { className: "actions inline-actions table-actions" }, [
+          actionButton(link.enabled ? "Disable" : "Enable", { id: `moderation-allowed-link-enable-${link.id}`, variant: "secondary", busyKey: "moderationAllowedLinkEnable", onClick: () => toggleModerationAllowedLink(link.id, !link.enabled) }),
+          actionButton("Delete", { id: `moderation-allowed-link-delete-${link.id}`, variant: "danger", busyKey: "moderationAllowedLinkDelete", onClick: () => deleteModerationAllowedLink(link.id, link.domain) })
+        ])
+      ]))
+    ]),
+    card("Temporary Link Permits", [
+      h("div", { className: "grid three" }, [
+        formRow("Username", h("input", { id: "moderationPermitUser", placeholder: "viewer", onInput: updateModerationPermitDraft })),
+        formRow("Minutes", h("input", { id: "moderationPermitMinutes", type: "number", min: "1", max: "120", onInput: updateModerationPermitDraft })),
+        h("div", { className: "actions align-end" }, [
+          actionButton("Grant permit", { id: "grantModerationLinkPermit", variant: "secondary", onClick: grantModerationLinkPermit })
+        ])
+      ]),
+      dataTable(["User", "State", "Expires", "Used", "Created by"], linkPermits.map((permit) => [
+        permit.userLogin,
+        statusChip(permit.active ? "active" : permit.usedAt ? "used" : "expired"),
+        permit.expiresAt || "",
+        permit.usedAt || "not used",
+        permit.createdBy || ""
+      ]))
+    ]),
     card("Local Test", [
       h("div", { className: "grid three" }, [
         formRow("Actor", h("input", { id: "moderationTestActor", placeholder: "viewer" })),
         formRow("Role", h("select", { id: "moderationTestRole" }, [
           option("viewer", "viewer"),
+          option("subscriber", "subscriber"),
+          option("vip", "vip"),
           option("mod", "mod"),
           option("broadcaster", "broadcaster")
         ])),
@@ -2528,8 +2597,10 @@ function setTimerState(result = {}) {
 function setModerationState(result = {}) {
   state.moderation = result;
   state.moderationTerms = result.terms || [];
+  state.moderationAllowedLinks = result.allowedLinks || [];
+  state.moderationLinkPermits = result.linkPermits || [];
   state.moderationHits = result.hits || [];
-  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, filtersEnabled: 0, hits: 0 };
+  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, hits: 0 };
   state.moderationFeatureGate = result.featureGate || state.moderationFeatureGate;
 }
 
@@ -2764,6 +2835,44 @@ async function deleteModerationTerm(id, term) {
   }, { skipRefresh: true, success: "Blocked phrase deleted." });
 }
 
+async function saveModerationAllowedLink() {
+  await runAction("saveModerationAllowedLink", async () => {
+    const result = await api.saveModerationAllowedLink(readModerationAllowedLinkPayload());
+    setModerationState(result);
+    state.moderationAllowedLinkDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Allowed domain saved." });
+}
+
+async function toggleModerationAllowedLink(id, enabled) {
+  await runAction("moderationAllowedLinkEnable", async () => {
+    const result = await api.enableModerationAllowedLink(id, enabled);
+    setModerationState(result);
+    return result;
+  }, { skipRefresh: true, success: enabled ? "Allowed domain enabled." : "Allowed domain disabled." });
+}
+
+async function deleteModerationAllowedLink(id, domain) {
+  if (!confirm(`Delete allowed domain "${domain}"?`)) {
+    return;
+  }
+
+  await runAction("moderationAllowedLinkDelete", async () => {
+    const result = await api.deleteModerationAllowedLink(id);
+    setModerationState(result);
+    return result;
+  }, { skipRefresh: true, success: "Allowed domain deleted." });
+}
+
+async function grantModerationLinkPermit() {
+  await runAction("grantModerationLinkPermit", async () => {
+    const result = await api.grantModerationLinkPermit(readModerationPermitPayload());
+    setModerationState(result);
+    state.moderationPermitDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Link permit granted." });
+}
+
 async function runModerationTest() {
   await runAction("runModerationTest", async () => {
     const result = await api.simulateModeration({
@@ -2956,6 +3065,15 @@ function updateModerationTermDraft(event) {
   state.moderationTermDraft[event.target.id] = value;
 }
 
+function updateModerationAllowedLinkDraft(event) {
+  const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  state.moderationAllowedLinkDraft[event.target.id] = value;
+}
+
+function updateModerationPermitDraft(event) {
+  state.moderationPermitDraft[event.target.id] = event.target.value;
+}
+
 function updateGiveawayDraft(event) {
   state.giveawayDraft[event.target.id] = event.target.value;
 }
@@ -3078,7 +3196,11 @@ function readModerationSettingsPayload() {
     repeatLimit: Number(field("repeatLimit")?.value || 3),
     repeatWindowSeconds: Number(field("repeatWindowSeconds")?.value || 30),
     symbolMinLength: Number(field("symbolMinLength")?.value || 12),
-    symbolRatio: Number(field("symbolRatio")?.value || 0.6)
+    symbolRatio: Number(field("symbolRatio")?.value || 0.6),
+    exemptBroadcaster: Boolean(field("exemptBroadcaster")?.checked),
+    exemptModerators: Boolean(field("exemptModerators")?.checked),
+    exemptVips: Boolean(field("exemptVips")?.checked),
+    exemptSubscribers: Boolean(field("exemptSubscribers")?.checked)
   };
 }
 
@@ -3086,6 +3208,20 @@ function readModerationTermPayload() {
   return {
     term: field("moderationTerm")?.value || "",
     enabled: Boolean(field("moderationTermEnabled")?.checked)
+  };
+}
+
+function readModerationAllowedLinkPayload() {
+  return {
+    domain: field("moderationAllowedDomain")?.value || "",
+    enabled: Boolean(field("moderationAllowedDomainEnabled")?.checked)
+  };
+}
+
+function readModerationPermitPayload() {
+  return {
+    userLogin: field("moderationPermitUser")?.value || "",
+    minutes: Number(field("moderationPermitMinutes")?.value || 5)
   };
 }
 
@@ -3438,6 +3574,8 @@ function renderModerationTestResult() {
     statusGrid([
       ["Result", result.hit ? "hit" : result.skipped ? "skipped" : "clear", !result.hit],
       ["Action", result.hit?.action || "none", !result.hit],
+      ["Allowed links", (result.allowedLinks || []).join(", ") || "none", !result.hit],
+      ["Permit", result.consumedPermit ? `available for ${result.consumedPermit.userLogin}` : "none", !result.hit],
       ["Reason", result.hit?.detail || result.reason || "none", !result.hit]
     ]),
     result.hit ? callout(result.hit.warningMessage, "warn") : null
@@ -3488,8 +3626,16 @@ function syncFormValues() {
   setValue("repeatWindowSeconds", moderationValue("repeatWindowSeconds", moderationSettings.repeatWindowSeconds || 30));
   setValue("symbolMinLength", moderationValue("symbolMinLength", moderationSettings.symbolMinLength || 12));
   setValue("symbolRatio", moderationValue("symbolRatio", moderationSettings.symbolRatio || 0.6));
+  setChecked("exemptBroadcaster", Boolean(moderationValue("exemptBroadcaster", moderationSettings.exemptBroadcaster ?? true)));
+  setChecked("exemptModerators", Boolean(moderationValue("exemptModerators", moderationSettings.exemptModerators ?? true)));
+  setChecked("exemptVips", Boolean(moderationValue("exemptVips", moderationSettings.exemptVips ?? false)));
+  setChecked("exemptSubscribers", Boolean(moderationValue("exemptSubscribers", moderationSettings.exemptSubscribers ?? false)));
   setValue("moderationTerm", draftValue(state.moderationTermDraft, "moderationTerm", ""));
   setChecked("moderationTermEnabled", Boolean(draftValue(state.moderationTermDraft, "moderationTermEnabled", true)));
+  setValue("moderationAllowedDomain", draftValue(state.moderationAllowedLinkDraft, "moderationAllowedDomain", ""));
+  setChecked("moderationAllowedDomainEnabled", Boolean(draftValue(state.moderationAllowedLinkDraft, "moderationAllowedDomainEnabled", true)));
+  setValue("moderationPermitUser", draftValue(state.moderationPermitDraft, "moderationPermitUser", ""));
+  setValue("moderationPermitMinutes", draftValue(state.moderationPermitDraft, "moderationPermitMinutes", 5));
   setValue("moderationTestActor", field("moderationTestActor")?.value || "viewer");
   setValue("moderationTestRole", field("moderationTestRole")?.value || "viewer");
   setValue("moderationTestText", field("moderationTestText")?.value || "VISIT EXAMPLE.COM NOW");
