@@ -204,6 +204,14 @@ export const initializeSchema = (db: DbClient) => {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS moderation_blocked_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL UNIQUE,
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS moderation_link_permits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_login TEXT NOT NULL,

@@ -99,6 +99,8 @@ Open `Commands`, create a simple command such as `!discord`, add one response, c
 
 Open `Dashboard` or `Live Mode`, apply `Local Bot Rehearsal`, then use starter commands, timer presets, and moderation local tests before enabling live timers or live moderation. Timers can require non-command chat activity before each automatic send; check the `Activity` column before stream if you expect a timer to stay quiet in slow chat. `Bot Replacement` requires confirmation because it moves timers and scoped moderation into live chat. Delete and timeout actions stay unavailable until the optional Twitch moderation scopes are granted.
 
+For moderation, use the local test before enabling live mode. Plain blocked phrases are boundary-aware; use `*` only when you intentionally want broader matching. Put known-bad domains in `Blocked Link Domains` and trusted domains in `Allowed Link Domains`.
+
 ## Send A Support Bundle
 
 If something goes wrong:

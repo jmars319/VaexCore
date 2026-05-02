@@ -88,6 +88,14 @@ export type ModerationAllowedLink = {
   updatedAt: string;
 };
 
+export type ModerationBlockedLink = {
+  id: number;
+  domain: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ModerationLinkPermit = {
   id: number;
   userLogin: string;
@@ -152,6 +160,14 @@ type ModerationAllowedLinkRow = {
   updated_at: string;
 };
 
+type ModerationBlockedLinkRow = {
+  id: number;
+  domain: string;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+};
+
 type ModerationLinkPermitRow = {
   id: number;
   user_login: string;
@@ -182,6 +198,11 @@ export type ModerationEvaluation = {
     filterActions: Array<{
       filterType: ModerationFilterType;
       action: ModerationAction;
+    }>;
+    matches: Array<{
+      filterType: ModerationFilterType;
+      action: ModerationAction;
+      detail: string;
     }>;
     detail: string;
     warningMessage: string;
@@ -236,13 +257,17 @@ export class ModerationService {
     const hits = this.getRecentHits(50);
     const settings = this.getSettings();
     const allowedLinks = this.listAllowedLinks();
+    const blockedLinks = this.listBlockedLinks();
     const linkPermits = this.listLinkPermits(25);
+    const hitsByFilter = summarizeHitsByFilter(hits);
+    const hitsByAction = summarizeHitsByAction(hits);
 
     return {
       ok: true,
       settings,
       terms,
       allowedLinks,
+      blockedLinks,
       linkPermits,
       hits,
       featureGate: this.options.featureGates.get("moderation_filters"),
@@ -251,6 +276,8 @@ export class ModerationService {
         enabledTerms: terms.filter((term) => term.enabled).length,
         allowedLinks: allowedLinks.length,
         enabledAllowedLinks: allowedLinks.filter((link) => link.enabled).length,
+        blockedLinks: blockedLinks.length,
+        enabledBlockedLinks: blockedLinks.filter((link) => link.enabled).length,
         activeLinkPermits: linkPermits.filter((permit) => permit.active).length,
         roleExemptions: enabledExemptionNames(settings).length,
         filtersEnabled: [
@@ -262,7 +289,9 @@ export class ModerationService {
         ].filter(Boolean).length,
         enforcementFilters: enabledEnforcementFilterNames(settings).length,
         timeoutSeconds: settings.timeoutSeconds,
-        hits: hits.length
+        hits: hits.length,
+        hitsByFilter,
+        hitsByAction
       }
     };
   }
@@ -676,6 +705,110 @@ export class ModerationService {
     return this.getState();
   }
 
+  listBlockedLinks(): ModerationBlockedLink[] {
+    return (this.db
+      .prepare(
+        `
+          SELECT *
+          FROM moderation_blocked_links
+          ORDER BY domain ASC
+        `
+      )
+      .all() as ModerationBlockedLinkRow[]).map(blockedLinkFromRow);
+  }
+
+  saveBlockedLink(input: unknown, actor: ChatMessage) {
+    const body = input as { id?: number; domain?: unknown; enabled?: unknown };
+    const existing = body.id ? this.requireBlockedLinkRow(Number(body.id)) : undefined;
+    const domain = normalizeAllowedDomain(body.domain ?? existing?.domain, "Blocked domain");
+    const enabled = body.enabled === undefined
+      ? existing ? existing.enabled === 1 : true
+      : Boolean(body.enabled);
+    const now = timestamp();
+    const current = this.findBlockedLink(domain);
+
+    if (current && current.id !== existing?.id) {
+      throw new Error(`Blocked domain "${domain}" already exists.`);
+    }
+
+    if (existing) {
+      this.db
+        .prepare(
+          `
+            UPDATE moderation_blocked_links
+            SET domain = @domain,
+                enabled = @enabled,
+                updated_at = @updatedAt
+            WHERE id = @id
+          `
+        )
+        .run({ id: existing.id, domain, enabled: enabled ? 1 : 0, updatedAt: now });
+    } else {
+      this.db
+        .prepare(
+          `
+            INSERT INTO moderation_blocked_links (domain, enabled, created_at, updated_at)
+            VALUES (@domain, @enabled, @createdAt, @updatedAt)
+          `
+        )
+        .run({ domain, enabled: enabled ? 1 : 0, createdAt: now, updatedAt: now });
+    }
+
+    const saved = this.findBlockedLink(domain);
+
+    writeAuditLog(
+      this.db,
+      actor,
+      existing ? "moderation.blocked_link_update" : "moderation.blocked_link_create",
+      `moderation_blocked_link:${saved?.id ?? domain}`,
+      {
+        domain,
+        enabled
+      }
+    );
+
+    return this.getState();
+  }
+
+  setBlockedLinkEnabled(id: number, enabled: boolean, actor: ChatMessage) {
+    const row = this.requireBlockedLinkRow(id);
+    const now = timestamp();
+
+    this.db
+      .prepare(
+        `
+          UPDATE moderation_blocked_links
+          SET enabled = @enabled,
+              updated_at = @updatedAt
+          WHERE id = @id
+        `
+      )
+      .run({ id, enabled: enabled ? 1 : 0, updatedAt: now });
+
+    writeAuditLog(
+      this.db,
+      actor,
+      enabled ? "moderation.blocked_link_enable" : "moderation.blocked_link_disable",
+      `moderation_blocked_link:${id}`,
+      {
+        domain: row.domain
+      }
+    );
+
+    return this.getState();
+  }
+
+  deleteBlockedLink(id: number, actor: ChatMessage) {
+    const row = this.requireBlockedLinkRow(id);
+
+    this.db.prepare("DELETE FROM moderation_blocked_links WHERE id = ?").run(id);
+    writeAuditLog(this.db, actor, "moderation.blocked_link_delete", `moderation_blocked_link:${id}`, {
+      domain: row.domain
+    });
+
+    return this.getState();
+  }
+
   listLinkPermits(limit = 25): ModerationLinkPermit[] {
     const safeLimit = parseSafeInteger(limit, {
       field: "Moderation link permit limit",
@@ -820,6 +953,11 @@ export class ModerationService {
         filterTypes: matches.map((match) => match.type),
         action,
         filterActions,
+        matches: matches.map((match) => ({
+          filterType: match.type,
+          action: match.action,
+          detail: match.detail
+        })),
         detail,
         warningMessage,
         timeoutSeconds: action === "timeout" ? settings.timeoutSeconds : undefined
@@ -948,7 +1086,6 @@ export class ModerationService {
     options: { consumePermits?: boolean }
   ) {
     const text = message.text.trim();
-    const lower = text.toLowerCase();
     const matches: Array<{
       type: ModerationFilterType;
       action: ModerationAction;
@@ -958,13 +1095,15 @@ export class ModerationService {
     let consumedPermit: ModerationEvaluation["consumedPermit"] | undefined;
 
     if (settings.blockedTermsEnabled) {
-      const term = this.enabledTerms().find((entry) => lower.includes(entry.term.toLowerCase()));
+      const term = this.enabledTerms()
+        .map((entry) => matchBlockedTerm(text, entry.term))
+        .find((entry) => Boolean(entry));
 
       if (term) {
         matches.push({
           type: "blocked_term",
           action: settings.blockedTermsAction,
-          detail: `blocked term: ${term.term}`
+          detail: `blocked phrase: ${term.term} (${term.mode})`
         });
       }
     }
@@ -978,7 +1117,9 @@ export class ModerationService {
         matches.push({
           type: "link",
           action: settings.linkFilterAction,
-          detail: `link detected: ${linkResult.blocked.join(", ")}`
+          detail: linkResult.explicitBlocked.length
+            ? `blocked domain: ${linkResult.explicitBlocked.join(", ")}`
+            : `link detected: ${linkResult.blocked.join(", ")}`
         });
       }
     }
@@ -1004,6 +1145,10 @@ export class ModerationService {
 
   private enabledAllowedLinks() {
     return this.listAllowedLinks().filter((link) => link.enabled);
+  }
+
+  private enabledBlockedLinks() {
+    return this.listBlockedLinks().filter((link) => link.enabled);
   }
 
   private recordHit(
@@ -1093,30 +1238,42 @@ export class ModerationService {
       return {
         allowed: [],
         blocked: [],
+        explicitBlocked: [],
         consumedPermit: undefined
       };
     }
 
     const allowedEntries = this.enabledAllowedLinks();
+    const blockedEntries = this.enabledBlockedLinks();
+    const explicitBlocked = domains.filter((domain) =>
+      blockedEntries.some((entry) => domainMatchesAllowed(domain, entry.domain))
+    );
     const allowed = domains.filter((domain) =>
+      !explicitBlocked.includes(domain) &&
       allowedEntries.some((entry) => domainMatchesAllowed(domain, entry.domain))
     );
-    const stillBlocked = domains.filter((domain) => !allowed.includes(domain));
+    const untrusted = domains.filter((domain) =>
+      !allowed.includes(domain) &&
+      !explicitBlocked.includes(domain)
+    );
+    const stillBlocked = unique([...explicitBlocked, ...untrusted]);
 
     if (!stillBlocked.length) {
       return {
         allowed,
         blocked: [],
+        explicitBlocked: [],
         consumedPermit: undefined
       };
     }
 
     const permit = this.activeLinkPermit(message.userLogin);
 
-    if (!permit) {
+    if (!permit || explicitBlocked.length) {
       return {
         allowed,
         blocked: stillBlocked,
+        explicitBlocked,
         consumedPermit: undefined
       };
     }
@@ -1134,6 +1291,7 @@ export class ModerationService {
     return {
       allowed,
       blocked: [],
+      explicitBlocked: [],
       consumedPermit
     };
   }
@@ -1258,6 +1416,26 @@ export class ModerationService {
 
     return row ? allowedLinkFromRow(row) : undefined;
   }
+
+  private requireBlockedLinkRow(id: number) {
+    const row = this.db
+      .prepare("SELECT * FROM moderation_blocked_links WHERE id = ?")
+      .get(id) as ModerationBlockedLinkRow | undefined;
+
+    if (!row) {
+      throw new Error(`Blocked domain #${id} was not found.`);
+    }
+
+    return row;
+  }
+
+  private findBlockedLink(domain: string) {
+    const row = this.db
+      .prepare("SELECT * FROM moderation_blocked_links WHERE domain = ?")
+      .get(domain) as ModerationBlockedLinkRow | undefined;
+
+    return row ? blockedLinkFromRow(row) : undefined;
+  }
 }
 
 const defaultSettings = (): ModerationSettings => ({
@@ -1341,6 +1519,14 @@ const allowedLinkFromRow = (row: ModerationAllowedLinkRow): ModerationAllowedLin
   updatedAt: row.updated_at
 });
 
+const blockedLinkFromRow = (row: ModerationBlockedLinkRow): ModerationBlockedLink => ({
+  id: row.id,
+  domain: row.domain,
+  enabled: row.enabled === 1,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at
+});
+
 const linkPermitFromRow = (row: ModerationLinkPermitRow): ModerationLinkPermit => ({
   id: row.id,
   userLogin: row.user_login,
@@ -1361,19 +1547,19 @@ const normalizeBlockedTerm = (value: unknown) => {
   return term;
 };
 
-const normalizeAllowedDomain = (value: unknown) => {
+const normalizeAllowedDomain = (value: unknown, field = "Allowed domain") => {
   let domain = sanitizeText(value, {
-    field: "Allowed domain",
+    field,
     maxLength: moderationLimits.domainLength,
     required: true
   }).toLowerCase();
 
-  assertNoSecretLikeContent(domain, "Allowed domain");
+  assertNoSecretLikeContent(domain, field);
   domain = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[/?#]/)[0] ?? "";
   domain = domain.replace(/:\d+$/, "").trim();
 
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(domain)) {
-    throw new Error("Allowed domain must be a valid domain, such as example.com.");
+    throw new Error(`${field} must be a valid domain, such as example.com.`);
   }
 
   return domain;
@@ -1465,6 +1651,20 @@ const enabledEnforcementFilterNames = (settings: ModerationSettings) => [
     : undefined
 ].filter(Boolean);
 
+const summarizeHitsByFilter = (hits: ModerationHit[]) =>
+  hits.reduce<Record<string, number>>((summary, hit) => {
+    for (const filterType of hit.filterType.split(",").map((item) => item.trim()).filter(Boolean)) {
+      summary[filterType] = (summary[filterType] ?? 0) + 1;
+    }
+    return summary;
+  }, {});
+
+const summarizeHitsByAction = (hits: ModerationHit[]) =>
+  hits.reduce<Record<string, number>>((summary, hit) => {
+    summary[hit.action] = (summary[hit.action] ?? 0) + 1;
+    return summary;
+  }, {});
+
 const actionRank: Record<ModerationAction, number> = {
   warn: 0,
   delete: 1,
@@ -1494,6 +1694,32 @@ const unique = <T>(items: T[]) => [...new Set(items)];
 
 const domainMatchesAllowed = (domain: string, allowedDomain: string) =>
   domain === allowedDomain || domain.endsWith(`.${allowedDomain}`);
+
+const matchBlockedTerm = (text: string, term: string) => {
+  const normalized = term.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const wildcard = normalized.includes("*");
+  const escaped = escapeRegex(normalized)
+    .replace(/\\\*/g, "[\\p{L}\\p{N}_-]*");
+  const flexibleSpaces = escaped.replace(/\s+/g, "\\s+");
+  const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])${flexibleSpaces}(?=$|[^\\p{L}\\p{N}_])`, "iu");
+
+  if (!regex.test(text)) {
+    return undefined;
+  }
+
+  return {
+    term: normalized,
+    mode: wildcard ? "wildcard" : normalized.includes(" ") ? "phrase" : "whole-word"
+  };
+};
+
+const escapeRegex = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const isExcessiveCaps = (text: string, settings: ModerationSettings) => {
   const letters = [...text].filter((char) => /[a-z]/i.test(char));

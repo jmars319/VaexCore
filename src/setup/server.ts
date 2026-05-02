@@ -361,6 +361,24 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/moderation/blocked-links") {
+    const body = await readJson(request);
+    sendJson(response, 200, saveModerationBlockedLink(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/blocked-links/enable") {
+    const body = (await readJson(request)) as { id?: number; enabled?: boolean };
+    sendJson(response, 200, setModerationBlockedLinkEnabled(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/moderation/blocked-links/delete") {
+    const body = (await readJson(request)) as { id?: number };
+    sendJson(response, 200, deleteModerationBlockedLink(body.id));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/moderation/link-permits") {
     const body = await readJson(request);
     sendJson(response, 200, grantModerationLinkPermit(body));
@@ -3150,6 +3168,49 @@ const deleteModerationAllowedLink = (id: number | undefined) => {
   }
 };
 
+const saveModerationBlockedLink = (body: unknown) => {
+  try {
+    return moderationService.saveBlockedLink(body, localUiActor);
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Blocked domain save failed")
+    };
+  }
+};
+
+const setModerationBlockedLinkEnabled = (body: { id?: number; enabled?: boolean }) => {
+  try {
+    return moderationService.setBlockedLinkEnabled(
+      parseSafeInteger(body.id, { field: "Blocked domain ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      Boolean(body.enabled),
+      localUiActor
+    );
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Blocked domain update failed")
+    };
+  }
+};
+
+const deleteModerationBlockedLink = (id: number | undefined) => {
+  try {
+    return moderationService.deleteBlockedLink(
+      parseSafeInteger(id, { field: "Blocked domain ID", min: 1, max: Number.MAX_SAFE_INTEGER }),
+      localUiActor
+    );
+  } catch (error) {
+    return {
+      ...getModerationState(),
+      ok: false,
+      error: safeErrorMessage(error, "Blocked domain delete failed")
+    };
+  }
+};
+
 const grantModerationLinkPermit = (body: unknown) => {
   try {
     return moderationService.grantLinkPermit(body, localUiActor);
@@ -3174,11 +3235,21 @@ const simulateModeration = (body: {
       text: body.text || ""
     });
     const result = moderationService.evaluate(actor, { consumePermits: false });
+    const enforcement = getModerationEnforcementStatus();
+    const enforcementPlan = result.hit
+      ? moderationService.planEnforcement(actor, result.hit, {
+          canDeleteMessages: enforcement.deleteMessages.available,
+          canTimeoutUsers: enforcement.timeoutUsers.available,
+          deleteUnavailableReason: enforcement.deleteMessages.reason,
+          timeoutUnavailableReason: enforcement.timeoutUsers.reason
+        })
+      : undefined;
 
     return {
       ...getModerationState(),
       ok: true,
-      result
+      result,
+      enforcementPlan
     };
   } catch (error) {
     return {

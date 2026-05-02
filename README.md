@@ -246,9 +246,11 @@ Automatic timer delivery runs in the live bot runtime and uses the same outbound
 Open `Moderation` to configure lightweight local filters. Moderation filters support:
 
 - feature-gated rollout with `off`, `test`, and `live` modes
-- blocked phrases/words
+- blocked phrases/words with boundary-aware matching by default
+- `*` wildcard support when intentionally broader phrase matching is needed
 - link detection
 - allowed link domains
+- blocked link domains
 - temporary link permits for a named chatter
 - excessive caps detection
 - repeated message detection
@@ -260,7 +262,7 @@ Open `Moderation` to configure lightweight local filters. Moderation filters sup
 - local simulation before going live
 - recent moderation hit history and audit entries
 
-All moderation filters default off, and the `moderation_filters` feature gate defaults off. VaexCore does not ban automatically and does not use ML moderation or public blocklists. Protected bot commands and the active giveaway entry keyword are exempt so `!enter`, giveaway controls, and core commands stay predictable. Allowed domains and temporary link permits apply to the local link filter before enforcement is planned.
+All moderation filters default off, and the `moderation_filters` feature gate defaults off. VaexCore does not ban automatically and does not use ML moderation or public blocklists. Protected bot commands and the active giveaway entry keyword are exempt so `!enter`, giveaway controls, and core commands stay predictable. Blocked domains, allowed domains, and temporary link permits apply to the local link filter before enforcement is planned.
 
 Delete and timeout actions only run in live EventSub chat after the feature gate is live, the message is not from a broadcaster or moderator, the needed Twitch IDs are present, and the OAuth token has the matching optional moderation scope. If any of those checks fail, moderation fails open, audits the blocked enforcement action, and warning messages still use the approved outbound queue.
 
@@ -378,7 +380,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Commands` stores local-only custom chat commands in SQLite, with disabled starter presets, aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
 - `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness, clear queue health, and optional chat activity thresholds before sending.
-- `Moderation` stores local-only filter settings, per-filter actions, blocked phrases, allowed link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, audits enforcement outcomes, and exempts protected commands plus active giveaway entry commands.
+- `Moderation` stores local-only filter settings, per-filter actions, blocked phrases, allowed and blocked link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, audits enforcement outcomes, and exempts protected commands plus active giveaway entry commands.
 - `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and moderation filters start `off` until explicitly enabled.
 - `Stream Night Presets` apply audited feature-gate bundles for giveaway-only nights, local bot rehearsals, timer-focused streams, or full local bot replacement mode.
 - `Development Guidelines` live in `docs/development-guidelines.md` and define the project rules for preserving the stable core, local-first behavior, secret redaction, feature gates, audit retention, diagnostics, and release discipline.
@@ -390,7 +392,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:commands` runs a temp-database custom command check covering reserved names, aliases, placeholders, permissions, cooldowns, disabled commands, preview, import/export, usage history, and audit logs.
 - `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
 - `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, chat activity thresholds, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
-- `npm run smoke:moderation` checks moderation feature-gate behavior, disabled-by-default filters, trusted role exemptions, blocked phrases, allowed domains, temporary link permits, links, caps, repeat and symbol detection, protected command exemptions, recent hits, and audit logging.
+- `npm run smoke:moderation` checks moderation feature-gate behavior, disabled-by-default filters, trusted role exemptions, boundary-aware and wildcard blocked phrases, allowed and blocked domains, temporary link permits, links, caps, repeat and symbol detection, protected command exemptions, recent hits, and audit logging.
 - `npm run smoke:replacement` checks the bot replacement path across stream presets, starter commands, timer presets, moderation rehearsal, live confirmation guards, protected `!enter`, and audit logging.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.

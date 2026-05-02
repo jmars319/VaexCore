@@ -54,6 +54,7 @@ async function runSmoke() {
   assert(appJs.includes("moderator:manage:chat_messages"), "browser UI exposes moderation delete scope status");
   assert(appJs.includes("Run moderation test"), "browser UI can test moderation filters");
   assert(appJs.includes("Allowed Link Domains"), "browser UI exposes moderation link allowlist");
+  assert(appJs.includes("Blocked Link Domains"), "browser UI exposes moderation link blocklist");
   assert(appJs.includes("Temporary Link Permits"), "browser UI exposes moderation link permits");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");
   assert(appJs.includes("Open Twitch Developer Console"), "setup guide includes Twitch Developer Console link");

@@ -6,6 +6,7 @@ export type {
   ModerationEnforcementPlan,
   ModerationEvaluation,
   ModerationAllowedLink,
+  ModerationBlockedLink,
   ModerationFilterType,
   ModerationHit,
   ModerationLinkPermit,

@@ -31,6 +31,8 @@ async function runSmoke() {
   assert(appJs.includes("Save moderation settings"), "Moderation tab exposes settings save");
   assert(appJs.includes("Trusted Roles"), "Moderation tab exposes trusted role exemptions");
   assert(appJs.includes("Allowed Link Domains"), "Moderation tab exposes allowed link domains");
+  assert(appJs.includes("Blocked Link Domains"), "Moderation tab exposes blocked link domains");
+  assert(appJs.includes("boundary-aware matching"), "Moderation tab explains safer phrase matching");
   assert(appJs.includes("Temporary Link Permits"), "Moderation tab exposes link permits");
   assert(appJs.includes("Timeout seconds"), "Moderation tab exposes timeout duration");
   assert(appJs.includes("moderator:manage:chat_messages"), "Moderation tab exposes delete scope status");
@@ -49,6 +51,7 @@ async function runSmoke() {
   assert(initial.settings.exemptSubscribers === false, "subscriber exemption defaults off");
   assert(initial.enforcement.deleteMessages.available === false, "delete enforcement is unavailable without setup");
   assert(initial.enforcement.timeoutUsers.available === false, "timeout enforcement is unavailable without setup");
+  assert(initial.summary.enabledBlockedLinks === 0, "blocked link domains start empty");
 
   const term = await post("/api/moderation/terms", {
     term: "spoiler",
@@ -56,6 +59,12 @@ async function runSmoke() {
   });
   assert(term.ok === true, "blocked phrase can be saved");
   assert(term.terms.some((item) => item.term === "spoiler" && item.enabled), "blocked phrase is enabled");
+
+  const wildcardTerm = await post("/api/moderation/terms", {
+    term: "scam*",
+    enabled: true
+  });
+  assert(wildcardTerm.ok === true, "wildcard blocked phrase can be saved");
 
   const saved = await post("/api/moderation/settings", {
     blockedTermsEnabled: true,
@@ -94,6 +103,13 @@ async function runSmoke() {
   assert(allowedDomain.ok === true, "allowed link domain can be saved");
   assert(allowedDomain.allowedLinks.some((item) => item.domain === "example.com" && item.enabled), "allowed link domain is normalized");
 
+  const blockedDomain = await post("/api/moderation/blocked-links", {
+    domain: "https://blocked.example/path",
+    enabled: true
+  });
+  assert(blockedDomain.ok === true, "blocked link domain can be saved");
+  assert(blockedDomain.blockedLinks.some((item) => item.domain === "blocked.example" && item.enabled), "blocked link domain is normalized");
+
   const offResult = await post("/api/moderation/simulate", {
     actor: "viewer",
     role: "viewer",
@@ -114,7 +130,23 @@ async function runSmoke() {
   });
   assert(blocked.result.hit.filterTypes.includes("blocked_term"), "blocked phrase hit is detected");
   assert(blocked.result.hit.action === "delete", "blocked phrase can resolve to delete action");
+  assert(blocked.result.hit.matches.some((match) => match.detail.includes("whole-word")), "blocked phrase reports whole-word matching");
   assert(blocked.result.hit.warningMessage.includes("viewer"), "warning message renders user placeholder");
+  assert(blocked.enforcementPlan.status === "blocked", "local moderation test explains enforcement block");
+
+  const safeSubstring = await post("/api/moderation/simulate", {
+    actor: "viewer",
+    role: "viewer",
+    text: "this is educational"
+  });
+  assert(!safeSubstring.result.hit?.filterTypes.includes("blocked_term"), "blocked phrase does not match inside unrelated words");
+
+  const wildcardBlocked = await post("/api/moderation/simulate", {
+    actor: "viewer",
+    role: "viewer",
+    text: "this looks scammy"
+  });
+  assert(wildcardBlocked.result.hit.filterTypes.includes("blocked_term"), "wildcard blocked phrase detects intentional broad match");
 
   const moderator = await post("/api/moderation/simulate", {
     actor: "channelmod",
@@ -131,6 +163,14 @@ async function runSmoke() {
   assert(link.result.hit.filterTypes.includes("link"), "link filter hit is detected");
   assert(link.result.hit.action === "timeout", "link filter can resolve to timeout action");
   assert(link.result.hit.timeoutSeconds === 90, "timeout action reports bounded duration");
+
+  const blockedLink = await post("/api/moderation/simulate", {
+    actor: "viewer",
+    role: "viewer",
+    text: "visit blocked.example please"
+  });
+  assert(blockedLink.result.hit.filterTypes.includes("link"), "blocked domain hit is detected");
+  assert(blockedLink.result.hit.detail.includes("blocked domain"), "blocked domain detail is explicit");
 
   const allowedLink = await post("/api/moderation/simulate", {
     actor: "viewer",
@@ -192,6 +232,7 @@ async function runSmoke() {
   assert(audit.logs.some((log) => log.action === "moderation.term_create"), "blocked phrase create is audited");
   assert(audit.logs.some((log) => log.action === "moderation.settings_update"), "moderation settings update is audited");
   assert(audit.logs.some((log) => log.action === "moderation.allowed_link_create"), "allowed link create is audited");
+  assert(audit.logs.some((log) => log.action === "moderation.blocked_link_create"), "blocked link create is audited");
   assert(audit.logs.some((log) => log.action === "moderation.link_permit_create"), "link permit create is audited");
   assert(audit.logs.some((log) => log.action === "moderation.hit"), "moderation hit is audited");
 

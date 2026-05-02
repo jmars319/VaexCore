@@ -31,9 +31,10 @@ const state = {
   moderation: null,
   moderationTerms: [],
   moderationAllowedLinks: [],
+  moderationBlockedLinks: [],
   moderationLinkPermits: [],
   moderationHits: [],
-  moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 },
+  moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, blockedLinks: 0, enabledBlockedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 },
   moderationEnforcement: null,
   moderationFeatureGate: null,
   streamPresets: [],
@@ -64,6 +65,7 @@ const state = {
   moderationDraft: {},
   moderationTermDraft: {},
   moderationAllowedLinkDraft: {},
+  moderationBlockedLinkDraft: {},
   moderationPermitDraft: {},
   moderationTestResult: null,
   giveawayDraft: {},
@@ -162,6 +164,9 @@ const api = {
   saveModerationAllowedLink: (body) => api.post("/api/moderation/allowed-links", body),
   enableModerationAllowedLink: (id, enabled) => api.post("/api/moderation/allowed-links/enable", { id, enabled }),
   deleteModerationAllowedLink: (id) => api.post("/api/moderation/allowed-links/delete", { id }),
+  saveModerationBlockedLink: (body) => api.post("/api/moderation/blocked-links", body),
+  enableModerationBlockedLink: (id, enabled) => api.post("/api/moderation/blocked-links/enable", { id, enabled }),
+  deleteModerationBlockedLink: (id) => api.post("/api/moderation/blocked-links/delete", { id }),
   grantModerationLinkPermit: (body) => api.post("/api/moderation/link-permits", body),
   simulateModeration: (body) => api.post("/api/moderation/simulate", body),
   giveawayAction: (name, body = {}) => api.post(`/api/giveaway/${name}`, withEcho(body)),
@@ -1140,6 +1145,7 @@ function renderModeration() {
   const hits = state.moderationHits || [];
   const terms = state.moderationTerms || [];
   const allowedLinks = state.moderationAllowedLinks || [];
+  const blockedLinks = state.moderationBlockedLinks || [];
   const linkPermits = state.moderationLinkPermits || [];
   const enforcement = state.moderationEnforcement || {};
 
@@ -1155,6 +1161,7 @@ function renderModeration() {
         ["Filters enabled", state.moderationSummary.filtersEnabled || 0, Number(state.moderationSummary.filtersEnabled || 0) > 0],
         ["Blocked phrases", `${state.moderationSummary.enabledTerms || 0}/${state.moderationSummary.terms || 0}`, true],
         ["Allowed domains", `${state.moderationSummary.enabledAllowedLinks || 0}/${state.moderationSummary.allowedLinks || 0}`, true],
+        ["Blocked domains", `${state.moderationSummary.enabledBlockedLinks || 0}/${state.moderationSummary.blockedLinks || 0}`, true],
         ["Active permits", state.moderationSummary.activeLinkPermits || 0, true],
         ["Enforced filters", state.moderationSummary.enforcementFilters || 0, true],
         ["Recent hits", state.moderationSummary.hits || 0, true]
@@ -1247,6 +1254,7 @@ function renderModeration() {
           "Enabled"
         ])
       ]),
+      callout("Plain words and phrases use boundary-aware matching. Use * only when you intentionally want wildcard matching.", "muted"),
       h("div", { className: "actions" }, [
         actionButton("Save phrase", { id: "saveModerationTerm", variant: "secondary", onClick: saveModerationTerm })
       ]),
@@ -1256,6 +1264,26 @@ function renderModeration() {
         h("div", { className: "actions inline-actions table-actions" }, [
           actionButton(term.enabled ? "Disable" : "Enable", { id: `moderation-term-enable-${term.id}`, variant: "secondary", busyKey: "moderationTermEnable", onClick: () => toggleModerationTerm(term.id, !term.enabled) }),
           actionButton("Delete", { id: `moderation-term-delete-${term.id}`, variant: "danger", busyKey: "moderationTermDelete", onClick: () => deleteModerationTerm(term.id, term.term) })
+        ])
+      ]))
+    ]),
+    card("Blocked Link Domains", [
+      h("div", { className: "grid" }, [
+        formRow("Domain", h("input", { id: "moderationBlockedDomain", placeholder: "bad.example", onInput: updateModerationBlockedLinkDraft })),
+        h("label", { className: "inline-check editor-check" }, [
+          h("input", { id: "moderationBlockedDomainEnabled", type: "checkbox", onChange: updateModerationBlockedLinkDraft }),
+          "Enabled"
+        ])
+      ]),
+      h("div", { className: "actions" }, [
+        actionButton("Save blocked domain", { id: "saveModerationBlockedLink", variant: "secondary", onClick: saveModerationBlockedLink })
+      ]),
+      dataTable(["Domain", "State", "Actions"], blockedLinks.map((link) => [
+        link.domain,
+        statusChip(link.enabled ? "enabled" : "disabled"),
+        h("div", { className: "actions inline-actions table-actions" }, [
+          actionButton(link.enabled ? "Disable" : "Enable", { id: `moderation-blocked-link-enable-${link.id}`, variant: "secondary", busyKey: "moderationBlockedLinkEnable", onClick: () => toggleModerationBlockedLink(link.id, !link.enabled) }),
+          actionButton("Delete", { id: `moderation-blocked-link-delete-${link.id}`, variant: "danger", busyKey: "moderationBlockedLinkDelete", onClick: () => deleteModerationBlockedLink(link.id, link.domain) })
         ])
       ]))
     ]),
@@ -2695,9 +2723,10 @@ function setModerationState(result = {}) {
   state.moderation = result;
   state.moderationTerms = result.terms || [];
   state.moderationAllowedLinks = result.allowedLinks || [];
+  state.moderationBlockedLinks = result.blockedLinks || [];
   state.moderationLinkPermits = result.linkPermits || [];
   state.moderationHits = result.hits || [];
-  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 };
+  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, blockedLinks: 0, enabledBlockedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 };
   state.moderationEnforcement = result.enforcement || null;
   state.moderationFeatureGate = result.featureGate || state.moderationFeatureGate;
 }
@@ -2989,6 +3018,35 @@ async function deleteModerationAllowedLink(id, domain) {
   }, { skipRefresh: true, success: "Allowed domain deleted." });
 }
 
+async function saveModerationBlockedLink() {
+  await runAction("saveModerationBlockedLink", async () => {
+    const result = await api.saveModerationBlockedLink(readModerationBlockedLinkPayload());
+    setModerationState(result);
+    state.moderationBlockedLinkDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Blocked domain saved." });
+}
+
+async function toggleModerationBlockedLink(id, enabled) {
+  await runAction("moderationBlockedLinkEnable", async () => {
+    const result = await api.enableModerationBlockedLink(id, enabled);
+    setModerationState(result);
+    return result;
+  }, { skipRefresh: true, success: enabled ? "Blocked domain enabled." : "Blocked domain disabled." });
+}
+
+async function deleteModerationBlockedLink(id, domain) {
+  if (!confirm(`Delete blocked domain "${domain}"?`)) {
+    return;
+  }
+
+  await runAction("moderationBlockedLinkDelete", async () => {
+    const result = await api.deleteModerationBlockedLink(id);
+    setModerationState(result);
+    return result;
+  }, { skipRefresh: true, success: "Blocked domain deleted." });
+}
+
 async function grantModerationLinkPermit() {
   await runAction("grantModerationLinkPermit", async () => {
     const result = await api.grantModerationLinkPermit(readModerationPermitPayload());
@@ -3195,6 +3253,11 @@ function updateModerationAllowedLinkDraft(event) {
   state.moderationAllowedLinkDraft[event.target.id] = value;
 }
 
+function updateModerationBlockedLinkDraft(event) {
+  const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  state.moderationBlockedLinkDraft[event.target.id] = value;
+}
+
 function updateModerationPermitDraft(event) {
   state.moderationPermitDraft[event.target.id] = event.target.value;
 }
@@ -3347,6 +3410,13 @@ function readModerationAllowedLinkPayload() {
   return {
     domain: field("moderationAllowedDomain")?.value || "",
     enabled: Boolean(field("moderationAllowedDomainEnabled")?.checked)
+  };
+}
+
+function readModerationBlockedLinkPayload() {
+  return {
+    domain: field("moderationBlockedDomain")?.value || "",
+    enabled: Boolean(field("moderationBlockedDomainEnabled")?.checked)
   };
 }
 
@@ -3696,7 +3766,9 @@ function renderTestResult() {
 }
 
 function renderModerationTestResult() {
-  const result = state.moderationTestResult?.result;
+  const test = state.moderationTestResult || {};
+  const result = test.result;
+  const plan = test.enforcementPlan;
 
   if (!result) {
     return null;
@@ -3707,7 +3779,9 @@ function renderModerationTestResult() {
       ["Result", result.hit ? "hit" : result.skipped ? "skipped" : "clear", !result.hit],
       ["Action", result.hit?.action || "none", !result.hit],
       ["Filter actions", (result.hit?.filterActions || []).map((item) => `${item.filterType}:${item.action}`).join(", ") || "none", !result.hit],
+      ["Matched rules", (result.hit?.matches || []).map((item) => item.detail).join("; ") || "none", !result.hit],
       ["Timeout", result.hit?.timeoutSeconds ? `${result.hit.timeoutSeconds}s` : "none", !result.hit],
+      ["Enforcement", plan ? `${plan.status}: ${plan.reason}` : "none", !result.hit || plan?.status === "skipped"],
       ["Allowed links", (result.allowedLinks || []).join(", ") || "none", !result.hit],
       ["Permit", result.consumedPermit ? `available for ${result.consumedPermit.userLogin}` : "none", !result.hit],
       ["Reason", result.hit?.detail || result.reason || "none", !result.hit]
@@ -3775,6 +3849,8 @@ function syncFormValues() {
   setChecked("moderationTermEnabled", Boolean(draftValue(state.moderationTermDraft, "moderationTermEnabled", true)));
   setValue("moderationAllowedDomain", draftValue(state.moderationAllowedLinkDraft, "moderationAllowedDomain", ""));
   setChecked("moderationAllowedDomainEnabled", Boolean(draftValue(state.moderationAllowedLinkDraft, "moderationAllowedDomainEnabled", true)));
+  setValue("moderationBlockedDomain", draftValue(state.moderationBlockedLinkDraft, "moderationBlockedDomain", ""));
+  setChecked("moderationBlockedDomainEnabled", Boolean(draftValue(state.moderationBlockedLinkDraft, "moderationBlockedDomainEnabled", true)));
   setValue("moderationPermitUser", draftValue(state.moderationPermitDraft, "moderationPermitUser", ""));
   setValue("moderationPermitMinutes", draftValue(state.moderationPermitDraft, "moderationPermitMinutes", 5));
   setValue("moderationTestActor", field("moderationTestActor")?.value || "viewer");
