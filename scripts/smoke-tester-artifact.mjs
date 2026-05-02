@@ -82,8 +82,12 @@ async function runSmoke() {
 
   const shell = await text("/");
   assert(shell.includes("/ui/app.js"), "setup shell loads static UI");
+  assert(shell.includes("/ui/logo.jpg"), "setup shell loads logo asset");
 
   const appJs = await text("/ui/app.js");
+  const logo = await binary("/ui/logo.jpg");
+  assert(logo.contentType === "image/jpeg", "tester artifact serves logo as JPEG");
+  assert(logo.byteLength > 1000, "tester artifact logo is not empty");
   assert(appJs.includes("Setup Guide"), "setup guide code is present in tester artifact");
   assert(appJs.includes("Diagnostics"), "diagnostics UI code is present in tester artifact");
   assert(appJs.includes("Copy support bundle"), "support bundle UI code is present in tester artifact");
@@ -99,6 +103,7 @@ async function runSmoke() {
   assert(diagnostics.database.driver === "better-sqlite3", "tester artifact uses better-sqlite3");
   assert(diagnostics.setupUi.appJs === true, "tester artifact sees app.js");
   assert(diagnostics.setupUi.stylesCss === true, "tester artifact sees styles.css");
+  assert(diagnostics.setupUi.logoJpg === true, "tester artifact sees logo.jpg");
 
   if (scenario === "clean-install") {
     assert(diagnostics.firstRun.cleanInstall === true, "tester artifact starts as clean install with isolated data");
@@ -247,6 +252,16 @@ async function text(path) {
   const response = await fetch(`${setupUrl}${path}`);
   assert(response.ok, `${path} returned ${response.status}`);
   return response.text();
+}
+
+async function binary(path) {
+  const response = await fetch(`${setupUrl}${path}`);
+  assert(response.ok, `${path} returned ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  return {
+    byteLength: bytes.byteLength,
+    contentType: response.headers.get("content-type")
+  };
 }
 
 async function json(path) {

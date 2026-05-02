@@ -32,9 +32,14 @@ async function runSmoke() {
   const shell = await text("/");
   assert(shell.includes("/ui/app.js"), "setup shell references app.js");
   assert(shell.includes("/ui/styles.css"), "setup shell references styles.css");
+  assert(shell.includes("/ui/logo.jpg"), "setup shell references logo asset");
 
   const appJs = await text("/ui/app.js");
   const styles = await text("/ui/styles.css");
+  const logo = await binary("/ui/logo.jpg");
+  assert(logo.contentType === "image/jpeg", "logo asset is served as a JPEG");
+  assert(logo.byteLength > 1000, "logo asset is not empty");
+  assert(appJs.includes("/ui/logo.jpg"), "header renders logo asset");
   assert(appJs.includes("CommandRouter") === false, "browser UI does not duplicate router logic");
   assert(appJs.includes("Dashboard") && appJs.includes("Giveaways"), "browser UI has tabs");
   assert(appJs.includes("Command Library"), "browser UI exposes custom command library");
@@ -162,9 +167,12 @@ async function runSmoke() {
   assert(styles.includes(".runtime-log"), "bot runtime log styles loaded");
   assert(styles.includes(".state-banner"), "live mode state styles loaded");
   assert(styles.includes(".failure-log"), "outbound failure log styles loaded");
+  assert(styles.includes(".brand-logo"), "logo header styles loaded");
 
   const initialConfig = await json("/api/config");
   assertSafeConfig(initialConfig);
+  const initialDiagnostics = await json("/api/diagnostics");
+  assert(initialDiagnostics.setupUi.logoJpg === true, "diagnostics sees logo asset");
   const initialStatus = await json("/api/status");
   assert(initialStatus.runtime.queueHealth.status === "clear", "queue health starts clear");
   assert(initialStatus.runtime.queueHealth.nextAction.includes("Outbound queue"), "queue health explains next action");
@@ -655,6 +663,16 @@ async function text(path) {
   const response = await fetch(`${baseUrl}${path}`);
   assert(response.ok, `${path} returned ${response.status}`);
   return response.text();
+}
+
+async function binary(path) {
+  const response = await fetch(`${baseUrl}${path}`);
+  assert(response.ok, `${path} returned ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  return {
+    byteLength: bytes.byteLength,
+    contentType: response.headers.get("content-type")
+  };
 }
 
 async function json(path, options = {}) {

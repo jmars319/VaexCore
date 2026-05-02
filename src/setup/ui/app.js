@@ -243,9 +243,16 @@ function renderHeader() {
   const runtime = state.status?.runtime;
   const giveaway = state.status?.giveaway;
   return h("header", { className: "topbar" }, [
-    h("div", {}, [
-      h("h1", { text: "vaexcore console" }),
-      h("p", { className: "subtitle", text: "Local Twitch operations console" })
+    h("div", { className: "brand-lockup" }, [
+      h("img", {
+        className: "brand-logo",
+        src: "/ui/logo.jpg",
+        alt: "vaexcore console"
+      }),
+      h("div", {}, [
+        h("h1", { text: "vaexcore console" }),
+        h("p", { className: "subtitle", text: "Local Twitch operations console" })
+      ])
     ]),
     h("div", { className: "header-status" }, [
       statusPill("Mode", runtime?.mode || "loading"),
@@ -1860,7 +1867,8 @@ function renderDiagnostics() {
         ["Database", database.ok ? "ok" : "failed", database.ok],
         ["SQLite", database.driver || "unknown", database.driver === "better-sqlite3"],
         ["app.js", setupUi.appJs ? "present" : "missing", setupUi.appJs],
-        ["styles.css", setupUi.stylesCss ? "present" : "missing", setupUi.stylesCss]
+        ["styles.css", setupUi.stylesCss ? "present" : "missing", setupUi.stylesCss],
+        ["logo.jpg", setupUi.logoJpg ? "present" : "missing", setupUi.logoJpg]
       ]),
       database.error ? callout(database.error, database.ok ? "muted" : "bad") : null
     ]),

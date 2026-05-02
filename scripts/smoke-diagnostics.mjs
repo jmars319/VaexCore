@@ -57,6 +57,7 @@ async function runSmoke() {
   assert(diagnostics.database.driver === "better-sqlite3", "diagnostics reports better-sqlite3 driver");
   assert(diagnostics.setupUi.appJs === true, "diagnostics sees app.js");
   assert(diagnostics.setupUi.stylesCss === true, "diagnostics sees styles.css");
+  assert(diagnostics.setupUi.logoJpg === true, "diagnostics sees logo.jpg");
   assert(diagnostics.config.hasRefreshToken === true, "diagnostics reports refresh availability");
   assert(Array.isArray(diagnostics.checks), "diagnostics returns checks");
   assert(diagnostics.checks.some((check) => check.name === "OAuth refresh" && check.ok), "diagnostics checks OAuth refresh");

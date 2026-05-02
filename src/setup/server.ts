@@ -1695,7 +1695,8 @@ const getSetupUiDiagnostics = () => {
   return {
     dir,
     appJs: existsSync(join(dir, "app.js")),
-    stylesCss: existsSync(join(dir, "styles.css"))
+    stylesCss: existsSync(join(dir, "styles.css")),
+    logoJpg: existsSync(join(dir, "logo.jpg"))
   };
 };
 
@@ -5151,11 +5152,7 @@ const sendStaticUiAsset = (response: ServerResponse, pathname: string) => {
     return;
   }
 
-  const contentType = extname(filePath) === ".css"
-    ? "text/css; charset=utf-8"
-    : extname(filePath) === ".js"
-      ? "text/javascript; charset=utf-8"
-      : "application/octet-stream";
+  const contentType = getStaticUiAssetContentType(filePath);
 
   response.writeHead(200, {
     ...securityHeaders,
@@ -5163,6 +5160,26 @@ const sendStaticUiAsset = (response: ServerResponse, pathname: string) => {
     "Cache-Control": "no-store"
   });
   response.end(readFileSync(filePath));
+};
+
+const getStaticUiAssetContentType = (filePath: string) => {
+  switch (extname(filePath).toLowerCase()) {
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".js":
+      return "text/javascript; charset=utf-8";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".svg":
+      return "image/svg+xml";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
 };
 
 const getSetupUiDir = () => {
@@ -5320,6 +5337,7 @@ const setupShellHtml = String.raw`<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>vaexcore console</title>
+    <link rel="icon" href="/ui/logo.jpg" />
     <link rel="stylesheet" href="/ui/styles.css" />
   </head>
   <body>

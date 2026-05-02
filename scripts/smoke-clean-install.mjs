@@ -41,6 +41,7 @@ async function runSmoke() {
   assert(diagnostics.firstRun.recoverySteps.length >= 3, "first-run recovery steps are present");
   assert(diagnostics.database.ok === true, "clean install database initializes");
   assert(diagnostics.setupUi.appJs === true, "clean install diagnostics sees UI assets");
+  assert(diagnostics.setupUi.logoJpg === true, "clean install diagnostics sees logo asset");
   assertSafePayload(diagnostics);
 
   const blockedStart = await json("/api/bot/start", { method: "POST" });

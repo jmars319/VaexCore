@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added the vaexcore console logo to the macOS app icon, local app header, favicon, diagnostics asset checks, and packaged setup UI bundle.
 - Product naming: renamed the visible app and release metadata to `vaexcore console`, with hyphenated unsigned artifact filenames and legacy app-data fallback for existing installs.
 - Milestone 45: viewer-facing utility command presets with categorized starter commands, disabled utility packs for common channel/support commands, conflict-aware pack creation, UI pack controls, and expanded custom command smoke coverage.
 - Milestone 44: operator-grade moderation filter polish with boundary-aware blocked phrase matching, intentional wildcard phrases, blocked link domains, clearer local test enforcement plans, recent hit summaries by filter/action, and expanded smoke coverage.

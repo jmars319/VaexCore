@@ -46,6 +46,7 @@ assert(listing.includes(`${productName}.app/Contents/MacOS/${productName}`), "zi
 assert(listing.includes(`${productName}.app/Contents/Resources/app/dist-bundle/setup-server.js`), "zip contains setup server bundle");
 assert(listing.includes(`${productName}.app/Contents/Resources/app/dist-bundle/setup-ui/app.js`), "zip contains setup UI app asset");
 assert(listing.includes(`${productName}.app/Contents/Resources/app/dist-bundle/setup-ui/styles.css`), "zip contains setup UI styles");
+assert(listing.includes(`${productName}.app/Contents/Resources/app/dist-bundle/setup-ui/logo.jpg`), "zip contains setup UI logo");
 assert(listing.includes(`${productName}.app/Contents/Resources/app/node_modules/better-sqlite3/`), "zip contains better-sqlite3 module");
 
 const plistPath = join(appPath, "Contents/Info.plist");
