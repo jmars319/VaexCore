@@ -12,6 +12,7 @@ assert(
   "package.json version must be semver-like"
 );
 assert(changelog.includes(`## ${version}`), `CHANGELOG.md must contain a section for ${version}`);
+assert(changelog.includes("Milestone 40"), "CHANGELOG.md must mention Milestone 40");
 assert(changelog.includes("Milestone 39"), "CHANGELOG.md must mention Milestone 39");
 assert(changelog.includes("Milestone 38"), "CHANGELOG.md must mention Milestone 38");
 assert(changelog.includes("Milestone 37"), "CHANGELOG.md must mention Milestone 37");
@@ -40,6 +41,7 @@ assert(readme.includes("smoke:commands"), "README must document custom command s
 assert(readme.includes("smoke:guardrails"), "README must document operational guardrails smoke");
 assert(readme.includes("smoke:timers"), "README must document timers smoke");
 assert(readme.includes("smoke:moderation"), "README must document moderation smoke");
+assert(readme.includes("smoke:nightbot"), "README must document Nightbot replacement smoke");
 assert(readme.includes("smoke:giveaway-live"), "README must document giveaway live smoke");
 assert(readme.includes("development-guidelines.md"), "README must link to development guidelines");
 assert(testerGuide.includes("tester artifact dry run"), "tester guide must mention tester artifact dry run");
@@ -55,6 +57,7 @@ assert(packageJson.scripts?.["smoke:commands"], "package.json must define smoke:
 assert(packageJson.scripts?.["smoke:guardrails"], "package.json must define smoke:guardrails");
 assert(packageJson.scripts?.["smoke:timers"], "package.json must define smoke:timers");
 assert(packageJson.scripts?.["smoke:moderation"], "package.json must define smoke:moderation");
+assert(packageJson.scripts?.["smoke:nightbot"], "package.json must define smoke:nightbot");
 assert(packageJson.scripts?.["smoke:giveaway-live"], "package.json must define smoke:giveaway-live");
 
 console.log(`release metadata ok for ${packageJson.name}@${version}`);

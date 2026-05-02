@@ -384,6 +384,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
 - `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
 - `npm run smoke:moderation` checks moderation feature-gate behavior, disabled-by-default filters, trusted role exemptions, blocked phrases, allowed domains, temporary link permits, links, caps, repeat and symbol detection, protected command exemptions, recent hits, and audit logging.
+- `npm run smoke:nightbot` checks the Nightbot replacement path across stream presets, starter commands, timer presets, moderation rehearsal, live confirmation guards, protected `!enter`, and audit logging.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
 - `npm run smoke:diagnostics` checks the local diagnostics route, setup assets, database driver, token-refresh readiness flags, and report redaction.
