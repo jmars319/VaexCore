@@ -48,11 +48,37 @@ async function runApiSmoke() {
   assert(appJs.includes("Timers"), "Timers tab renders");
   assert(appJs.includes("Save timer"), "Timers tab exposes save");
   assert(appJs.includes("Send now"), "Timers tab exposes manual send");
+  assert(appJs.includes("Preset Starters"), "Timers tab exposes presets");
+  assert(appJs.includes("Export timers JSON"), "Timers tab exposes export");
+  assert(appJs.includes("Import timers JSON"), "Timers tab exposes import");
 
   const initial = await json("/api/timers");
   assert(initial.ok === true, "timer route returns ok");
   assert(initial.featureGate.mode === "off", "timers feature gate defaults off");
   assert(initial.summary.total === 0, "timer list starts empty");
+  assert(initial.presets.some((preset) => preset.id === "discord"), "timer presets are returned");
+  assert(initial.readiness.checks.some((check) => check.name === "Feature gate"), "timer readiness includes gate detail");
+
+  const preset = await post("/api/timers/preset", {
+    id: "schedule"
+  });
+  assert(preset.ok === true, "timer preset can create a timer");
+  assert(preset.timer.enabled === false, "timer preset starts disabled");
+
+  const exported = await json("/api/timers/export");
+  assert(exported.version === 1, "timer export has version");
+  assert(exported.timers.some((timer) => timer.name === "Stream schedule"), "timer export includes preset timer");
+
+  const imported = await post("/api/timers/import", {
+    timers: [{
+      name: "Imported reminder",
+      message: "Imported timer message",
+      intervalMinutes: 10,
+      enabled: false
+    }]
+  });
+  assert(imported.ok === true, "timer import succeeds");
+  assert(imported.timers.some((timer) => timer.name === "Imported reminder"), "timer import saves timer");
 
   const tooFast = await post("/api/timers", {
     name: "Too fast",

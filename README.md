@@ -216,9 +216,11 @@ Open `Timers` to manage scheduled chat messages stored locally in SQLite. Timers
 
 - feature-gated rollout with `off`, `test`, and `live` modes
 - enable/disable without deleting the timer definition
+- preset starters for common Discord, socials, schedule, and command reminders
+- JSON import/export for timer backup or manual Nightbot-style migration
 - minimum 5-minute intervals
 - bounded, redacted timer messages
-- next fire time, last sent time, last status, and send count
+- next fire time, last sent time, last status, send count, and clear blocked/due/scheduled explanations
 - manual `Send now` only when timers are live, the bot is live-ready, and the outbound queue is clear
 - audit entries for create, update, delete, enable, and disable actions
 

@@ -12,6 +12,7 @@ assert(
   "package.json version must be semver-like"
 );
 assert(changelog.includes(`## ${version}`), `CHANGELOG.md must contain a section for ${version}`);
+assert(changelog.includes("Milestone 36"), "CHANGELOG.md must mention Milestone 36");
 assert(changelog.includes("Milestone 35"), "CHANGELOG.md must mention Milestone 35");
 assert(changelog.includes("Milestone 34"), "CHANGELOG.md must mention Milestone 34");
 assert(changelog.includes("Milestone 33"), "CHANGELOG.md must mention Milestone 33");

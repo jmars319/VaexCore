@@ -26,6 +26,7 @@ const state = {
   timerSummary: { total: 0, enabled: 0, disabled: 0, sent: 0 },
   timerFeatureGate: null,
   timerReadiness: { ok: false, reason: "" },
+  timerPresets: [],
   moderation: null,
   moderationTerms: [],
   moderationHits: [],
@@ -136,7 +137,10 @@ const api = {
   importCommands: (body) => api.post("/api/commands/import", body),
   previewCommand: (body) => api.post("/api/commands/preview", body),
   timers: () => api.get("/api/timers"),
+  exportTimers: () => api.get("/api/timers/export"),
   saveTimer: (body) => api.post("/api/timers", body),
+  importTimers: (body) => api.post("/api/timers/import", body),
+  applyTimerPreset: (id) => api.post("/api/timers/preset", { id }),
   enableTimer: (id, enabled) => api.post("/api/timers/enable", { id, enabled }),
   deleteTimer: (id) => api.post("/api/timers/delete", { id }),
   sendTimerNow: (id) => api.post("/api/timers/send-now", { id }),
@@ -957,16 +961,20 @@ function renderTimers() {
       ])
     ),
     renderFeatureGateCard("timers"),
+    renderTimerReadinessCard(),
+    renderTimerPresetCard(),
     card("Timer Library", [
       statusGrid([
         ["Total", state.timerSummary.total || 0, true],
         ["Enabled", state.timerSummary.enabled || 0, true],
         ["Disabled", state.timerSummary.disabled || 0, Number(state.timerSummary.disabled || 0) === 0],
         ["Sent", state.timerSummary.sent || 0, true],
+        ["Blocked", state.timerSummary.blocked || 0, Number(state.timerSummary.blocked || 0) === 0],
+        ["Next fire", state.timerSummary.nextFireAt || "none", true],
         ["Readiness", readiness.ok ? "ready" : "blocked", Boolean(readiness.ok)]
       ]),
       readiness.reason ? callout(readiness.reason, readiness.ok ? "ok" : "warn") : null,
-      dataTable(["Timer", "State", "Interval", "Last Sent", "Next Fire", "Status", "Actions"], timers.map((timer) => [
+      dataTable(["Timer", "State", "Interval", "Last Sent", "Next Fire", "Status", "Why / Next Action", "Actions"], timers.map((timer) => [
         timer.name,
         statusChip(timer.enabled ? "enabled" : "disabled"),
         `${timer.intervalMinutes}m`,
@@ -975,6 +983,9 @@ function renderTimers() {
         timer.lastStatus === "blocked" && timer.lastError
           ? `${timer.lastStatus}: ${timer.lastError}`
           : timer.lastStatus || "never",
+        timer.inspection
+          ? `${timer.inspection.detail} ${timer.inspection.nextAction || ""}`.trim()
+          : "",
         h("div", { className: "actions inline-actions table-actions" }, [
           actionButton("Edit", { id: `timer-edit-${timer.id}`, variant: "secondary", onClick: () => editTimer(timer.id) }),
           actionButton(timer.enabled ? "Disable" : "Enable", { id: `timer-enable-${timer.id}`, variant: "secondary", busyKey: "timerEnable", onClick: () => toggleTimer(timer.id, !timer.enabled) }),
@@ -1005,8 +1016,54 @@ function renderTimers() {
         selected ? actionButton("Send now", { id: "sendSelectedTimer", variant: "secondary", busyKey: "timerSend", disabled: !selected.enabled || !readiness.ok, onClick: () => sendTimerNow(selected.id) }) : null
       ])
     ]),
+    card("Import And Export", [
+      h("div", { className: "actions" }, [
+        actionButton("Export timers JSON", { id: "exportTimers", variant: "secondary", onClick: exportTimers }),
+        actionButton("Import timers JSON", { id: "importTimers", variant: "secondary", onClick: importTimers })
+      ]),
+      formRow("Import JSON", h("textarea", {
+        id: "timerImportJson",
+        className: "command-import",
+        placeholder: "{\"timers\":[...]}"
+      }))
+    ]),
     message()
   ];
+}
+
+function renderTimerReadinessCard() {
+  const readiness = state.timerReadiness || {};
+  const checks = readiness.checks || [];
+
+  return card("Live Timer Readiness", [
+    statusGrid([
+      ["Feature gate", readiness.gateMode || featureGate("timers").mode || "off", readiness.gateMode === "live"],
+      ["Summary", readiness.ok ? "ready" : "blocked", Boolean(readiness.ok)],
+      ["Next action", readiness.nextAction || readiness.reason || "Review timer setup.", Boolean(readiness.ok)]
+    ]),
+    checks.length
+      ? dataTable(["Check", "Status", "Detail"], checks.map((check) => [
+          check.name,
+          statusChip(check.ok ? "ok" : "blocked"),
+          check.detail || ""
+        ]))
+      : null
+  ]);
+}
+
+function renderTimerPresetCard() {
+  const presets = state.timerPresets || [];
+
+  return card("Preset Starters", [
+    presets.length
+      ? dataTable(["Preset", "Interval", "Message", "Actions"], presets.map((preset) => [
+          preset.name,
+          `${preset.intervalMinutes}m`,
+          formatMessagePreview(preset.message),
+          actionButton("Create disabled", { id: `timer-preset-${preset.id}`, variant: "secondary", busyKey: "timerPreset", onClick: () => applyTimerPreset(preset.id) })
+        ]))
+      : callout("No timer presets are available.", "muted")
+  ]);
 }
 
 function renderModeration() {
@@ -2457,9 +2514,10 @@ function setCommandState(result = {}) {
 
 function setTimerState(result = {}) {
   state.timers = result.timers || [];
-  state.timerSummary = result.summary || { total: 0, enabled: 0, disabled: 0, sent: 0 };
+  state.timerSummary = result.summary || { total: 0, enabled: 0, disabled: 0, sent: 0, blocked: 0, nextFireAt: "" };
   state.timerFeatureGate = result.featureGate || state.timerFeatureGate;
   state.timerReadiness = result.readiness || state.timerReadiness;
+  state.timerPresets = result.presets || state.timerPresets || [];
 
   if (state.selectedTimerId && !state.timers.some((timer) => Number(timer.id) === Number(state.selectedTimerId))) {
     state.selectedTimerId = null;
@@ -2628,6 +2686,44 @@ async function sendTimerNow(id) {
     setTimerState(result);
     return result;
   }, { skipRefresh: true, success: "Timer queued." });
+}
+
+async function applyTimerPreset(id) {
+  await runAction("timerPreset", async () => {
+    const result = await api.applyTimerPreset(id);
+    setTimerState(result);
+    state.selectedTimerId = result.timer?.id ?? state.selectedTimerId;
+    state.timerDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Timer preset created disabled." });
+}
+
+async function exportTimers() {
+  await runAction("exportTimers", async () => {
+    const exported = await api.exportTimers();
+    downloadTextFile(
+      `vaexcore-timers-${new Date().toISOString().slice(0, 10)}.json`,
+      `${JSON.stringify(exported, null, 2)}\n`,
+      "application/json"
+    );
+    return { ok: true };
+  }, { skipRefresh: true, success: "Timers exported." });
+}
+
+async function importTimers() {
+  const raw = field("timerImportJson")?.value || "";
+  if (!raw.trim()) {
+    state.message = { text: "Paste exported timer JSON before importing.", tone: "warn" };
+    render();
+    return;
+  }
+
+  await runAction("importTimers", async () => {
+    const result = await api.importTimers(JSON.parse(raw));
+    setTimerState(result);
+    state.timerDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Timers imported." });
 }
 
 async function saveModerationSettings() {

@@ -46,6 +46,8 @@ async function runSmoke() {
   assert(appJs.includes("setFeatureGate"), "browser UI can update feature gates");
   assert(appJs.includes("Schedule local stream messages"), "browser UI exposes timers");
   assert(appJs.includes("Save timer"), "browser UI can save timers");
+  assert(appJs.includes("Preset Starters"), "browser UI exposes timer presets");
+  assert(appJs.includes("Export timers JSON"), "browser UI can export timers");
   assert(appJs.includes("Lightweight local filters"), "browser UI exposes moderation filters");
   assert(appJs.includes("Run moderation test"), "browser UI can test moderation filters");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");

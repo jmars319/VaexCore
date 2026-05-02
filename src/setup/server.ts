@@ -260,9 +260,26 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/timers/export") {
+    sendJson(response, 200, exportTimers());
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/timers") {
     const body = await readJson(request);
     sendJson(response, 200, saveTimer(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/timers/import") {
+    const body = await readJson(request);
+    sendJson(response, 200, importTimers(body));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/timers/preset") {
+    const body = (await readJson(request)) as { id?: string };
+    sendJson(response, 200, createTimerFromPreset(body.id));
     return;
   }
 
@@ -2536,19 +2553,110 @@ const setFeatureGate = (body: { key?: FeatureKey; mode?: FeatureGateMode }) => {
 
 const getTimers = () => {
   const timers = timersService.listTimers();
+  const readiness = getTimerSendReadiness();
 
   return {
     ok: true,
-    timers,
+    timers: timers.map((timer) => ({
+      ...timer,
+      inspection: inspectTimer(timer, readiness)
+    })),
     featureGate: featureGates.get("timers"),
-    readiness: getTimerSendReadiness(),
+    readiness,
+    presets: timerPresetDefinitions,
     summary: {
       total: timers.length,
       enabled: timers.filter((timer) => timer.enabled).length,
       disabled: timers.filter((timer) => !timer.enabled).length,
-      sent: timers.reduce((total, timer) => total + timer.fireCount, 0)
+      sent: timers.reduce((total, timer) => total + timer.fireCount, 0),
+      blocked: timers.filter((timer) => timer.lastStatus === "blocked").length,
+      nextFireAt: timers
+        .filter((timer) => timer.enabled && timer.nextFireAt)
+        .map((timer) => timer.nextFireAt)
+        .sort()[0] ?? ""
     }
   };
+};
+
+const exportTimers = () => ({
+  version: 1,
+  exportedAt: new Date().toISOString(),
+  timers: timersService.listTimers().map((timer) => ({
+    name: timer.name,
+    message: timer.message,
+    intervalMinutes: timer.intervalMinutes,
+    enabled: timer.enabled,
+    fireCount: timer.fireCount,
+    lastSentAt: timer.lastSentAt
+  }))
+});
+
+const importTimers = (body: unknown) => {
+  try {
+    const payload = body as { timers?: unknown[] };
+    const entries = Array.isArray(payload.timers) ? payload.timers.slice(0, 50) : [];
+
+    if (entries.length === 0) {
+      throw new Error("Import payload must include at least one timer.");
+    }
+
+    const saved = entries.map((entry) => {
+      const input = entry as Record<string, unknown>;
+      const name = String(input.name ?? "").trim().toLowerCase();
+      const existing = timersService.listTimers().find((timer) => timer.name.toLowerCase() === name);
+      return timersService.saveTimer({
+        ...input,
+        id: existing?.id
+      }, localUiActor);
+    });
+
+    return {
+      ...getTimers(),
+      ok: true,
+      imported: saved.length
+    };
+  } catch (error) {
+    return {
+      ...getTimers(),
+      ok: false,
+      error: safeErrorMessage(error, "Timer import failed")
+    };
+  }
+};
+
+const createTimerFromPreset = (id: string | undefined) => {
+  try {
+    const preset = timerPresetDefinitions.find((item) => item.id === id);
+
+    if (!preset) {
+      throw new Error("Unknown timer preset.");
+    }
+
+    const existing = timersService.listTimers().find((timer) => timer.name.toLowerCase() === preset.name.toLowerCase());
+
+    if (existing) {
+      throw new Error(`Timer "${preset.name}" already exists.`);
+    }
+
+    const timer = timersService.saveTimer({
+      name: preset.name,
+      message: preset.message,
+      intervalMinutes: preset.intervalMinutes,
+      enabled: false
+    }, localUiActor);
+
+    return {
+      ...getTimers(),
+      ok: true,
+      timer
+    };
+  } catch (error) {
+    return {
+      ...getTimers(),
+      ok: false,
+      error: safeErrorMessage(error, "Timer preset failed")
+    };
+  }
 };
 
 const saveTimer = (body: unknown) => {
@@ -2667,6 +2775,90 @@ const sendTimerNow = async (id: number | undefined) => {
   }
 };
 
+const timerPresetDefinitions = [
+  {
+    id: "discord",
+    name: "Discord reminder",
+    intervalMinutes: 15,
+    message: "Join the Discord for stream updates: https://example.com"
+  },
+  {
+    id: "socials",
+    name: "Social links",
+    intervalMinutes: 20,
+    message: "Follow socials and find links here: https://example.com"
+  },
+  {
+    id: "schedule",
+    name: "Stream schedule",
+    intervalMinutes: 30,
+    message: "Stream schedule: check the channel panels for upcoming streams."
+  },
+  {
+    id: "commands",
+    name: "Command reminder",
+    intervalMinutes: 25,
+    message: "Try !gstatus during giveaways, or ask a mod for current channel commands."
+  }
+] as const;
+
+const inspectTimer = (
+  timer: ReturnType<TimersService["listTimers"]>[number],
+  readiness = getTimerSendReadiness()
+) => {
+  if (!timer.enabled) {
+    return {
+      status: "disabled",
+      detail: "Timer is saved but disabled.",
+      nextAction: "Enable when you want it to participate in live delivery."
+    };
+  }
+
+  if (!readiness.ok) {
+    return {
+      status: "blocked",
+      detail: readiness.reason,
+      nextAction: readiness.nextAction
+    };
+  }
+
+  if (timer.lastStatus === "blocked" && timer.lastError) {
+    return {
+      status: "recovering",
+      detail: timer.lastError,
+      nextAction: timer.nextFireAt
+        ? `Will retry after ${timer.nextFireAt}.`
+        : "Disable and re-enable the timer to schedule the next send."
+    };
+  }
+
+  if (!timer.nextFireAt) {
+    return {
+      status: "unscheduled",
+      detail: "Timer is enabled but has no next fire time.",
+      nextAction: "Disable and re-enable the timer to reschedule it."
+    };
+  }
+
+  const nextFireMs = Date.parse(timer.nextFireAt);
+
+  if (Number.isFinite(nextFireMs) && nextFireMs <= Date.now()) {
+    return {
+      status: "due",
+      detail: "Timer is due and will send on the next scheduler tick if the bot remains live-ready.",
+      nextAction: "Wait for the scheduler tick or use Send now."
+    };
+  }
+
+  return {
+    status: "scheduled",
+    detail: timer.nextFireAt
+      ? `Next send is scheduled for ${timer.nextFireAt}.`
+      : "Timer is waiting for its next schedule.",
+    nextAction: "No action needed."
+  };
+};
+
 const getModerationState = () => moderationService.getState();
 
 const saveModerationSettings = (body: unknown) => {
@@ -2753,50 +2945,108 @@ const simulateModeration = (body: {
 
 const getTimerSendReadiness = () => {
   const gate = featureGates.get("timers");
+  const queue = chatQueue.snapshot();
+  const queueHealth = summarizeQueueHealth(queue, outboundHistory.summary());
+  const checks = [
+    {
+      name: "Feature gate",
+      ok: gate.mode === "live",
+      detail: gate.mode === "live"
+        ? "Timers are live."
+        : gate.mode === "test"
+          ? "Timers are in test mode and will not send to Twitch chat."
+          : "Timers are off."
+    },
+    {
+      name: "Live bot",
+      ok: Boolean(botProcess.child && getBotProcessSnapshot().running),
+      detail: botProcess.child && getBotProcessSnapshot().running
+        ? "Live bot is running."
+        : "Start the live bot before timers can send."
+    },
+    {
+      name: "EventSub chat",
+      ok: botProcess.eventSubConnected && botProcess.chatSubscriptionActive,
+      detail: botProcess.eventSubConnected && botProcess.chatSubscriptionActive
+        ? "EventSub chat is connected."
+        : "Timers wait for EventSub chat to be connected."
+    },
+    {
+      name: "Live chat confirmation",
+      ok: botProcess.liveChatConfirmed,
+      detail: botProcess.liveChatConfirmed
+        ? "Live chat was confirmed with !ping."
+        : "Timers wait for live chat confirmation. Type !ping in chat."
+    },
+    {
+      name: "Outbound queue",
+      ok: queueHealth.status === "clear",
+      detail: queueHealth.status === "clear"
+        ? "Outbound queue is clear."
+        : queueHealth.nextAction
+    }
+  ];
 
   if (gate.mode !== "live") {
     return {
       ok: false,
       reason: gate.mode === "test"
         ? "Timers are in test mode and will not send to Twitch chat."
-        : "Timers are off. Move the Timers feature gate to Live before sending."
+        : "Timers are off. Move the Timers feature gate to Live before sending.",
+      nextAction: gate.mode === "test"
+        ? "Move Timers to Live when you are ready for Twitch delivery."
+        : "Use the Timers feature gate card to switch to Live.",
+      gateMode: gate.mode,
+      checks
     };
   }
 
   if (!botProcess.child || !getBotProcessSnapshot().running) {
     return {
       ok: false,
-      reason: "Start the live bot before timers can send."
+      reason: "Start the live bot before timers can send.",
+      nextAction: "Start Bot from the setup console.",
+      gateMode: gate.mode,
+      checks
     };
   }
 
   if (!botProcess.eventSubConnected || !botProcess.chatSubscriptionActive) {
     return {
       ok: false,
-      reason: "Timers wait for EventSub chat to be connected."
+      reason: "Timers wait for EventSub chat to be connected.",
+      nextAction: "Wait for EventSub chat subscription to connect or restart the bot.",
+      gateMode: gate.mode,
+      checks
     };
   }
 
   if (!botProcess.liveChatConfirmed) {
     return {
       ok: false,
-      reason: "Timers wait for live chat confirmation. Type !ping in chat."
+      reason: "Timers wait for live chat confirmation. Type !ping in chat.",
+      nextAction: "Type !ping in Twitch chat and wait for pong.",
+      gateMode: gate.mode,
+      checks
     };
   }
-
-  const queue = chatQueue.snapshot();
-  const queueHealth = summarizeQueueHealth(queue, outboundHistory.summary());
 
   if (queueHealth.status !== "clear") {
     return {
       ok: false,
-      reason: queueHealth.nextAction
+      reason: queueHealth.nextAction,
+      nextAction: queueHealth.nextAction,
+      gateMode: gate.mode,
+      checks
     };
   }
 
   return {
     ok: true,
-    reason: "Timers can queue."
+    reason: "Timers can queue.",
+    nextAction: "No action needed.",
+    gateMode: gate.mode,
+    checks
   };
 };
 
