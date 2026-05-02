@@ -22,7 +22,7 @@ const steps = [
   ["Operational guardrails smoke", ["npm", "run", "smoke:guardrails"]],
   ["Timers smoke", ["npm", "run", "smoke:timers"]],
   ["Moderation smoke", ["npm", "run", "smoke:moderation"]],
-  ["Nightbot replacement smoke", ["npm", "run", "smoke:nightbot"]],
+  ["Bot replacement smoke", ["npm", "run", "smoke:replacement"]],
   ["Token refresh smoke", ["npm", "run", "smoke:token-refresh"]],
   ["Giveaway readiness smoke", ["npm", "run", "smoke:giveaway"]],
   ["Giveaway live rehearsal", ["npm", "run", "smoke:giveaway-live"]],

@@ -195,9 +195,9 @@ Major optional modules use local feature gates with `off`, `test`, and `live` mo
 Dashboard and Live Mode include `Stream Night Presets` for common operating modes:
 
 - `Giveaway Night`: custom commands live, timers off, moderation off
-- `Nightbot Rehearsal`: custom commands live, timers and moderation in local test mode
+- `Local Bot Rehearsal`: custom commands live, timers and moderation in local test mode
 - `Timers Live`: custom commands and timers live, moderation in local test mode
-- `Nightbot Replacement`: custom commands, timers, and warn-only moderation live
+- `Bot Replacement`: custom commands, timers, and warn-only moderation live
 
 Presets only change feature gates, write audit entries, and require explicit confirmation before enabling timers or moderation in live chat.
 
@@ -227,7 +227,7 @@ Open `Timers` to manage scheduled chat messages stored locally in SQLite. Timers
 - feature-gated rollout with `off`, `test`, and `live` modes
 - enable/disable without deleting the timer definition
 - preset starters for common Discord, socials, schedule, and command reminders
-- JSON import/export for timer backup or manual Nightbot-style migration
+- JSON import/export for timer backup or manual timer migration
 - minimum 5-minute intervals
 - bounded, redacted timer messages
 - next fire time, last sent time, last status, send count, and clear blocked/due/scheduled explanations
@@ -373,7 +373,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness plus clear queue health before sending.
 - `Moderation` stores local-only warn-only filter settings, blocked phrases, allowed link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, and exempts protected commands plus active giveaway entry commands.
 - `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and moderation filters start `off` until explicitly enabled.
-- `Stream Night Presets` apply audited feature-gate bundles for giveaway-only nights, Nightbot-style rehearsals, timer-focused streams, or full local Nightbot replacement mode.
+- `Stream Night Presets` apply audited feature-gate bundles for giveaway-only nights, local bot rehearsals, timer-focused streams, or full local bot replacement mode.
 - `Development Guidelines` live in `docs/development-guidelines.md` and define the project rules for preserving the stable core, local-first behavior, secret redaction, feature gates, audit retention, diagnostics, and release discipline.
 - `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
 - `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.
@@ -384,7 +384,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `npm run smoke:guardrails` checks protected command validation, feature gate behavior, custom command secret rejection, diagnostics/support feature-gate reporting, audit redaction, and audit retention.
 - `npm run smoke:timers` checks timer feature-gate behavior, minimum intervals, secret rejection, audit logging, live-readiness blocking, and scheduler no-spam behavior.
 - `npm run smoke:moderation` checks moderation feature-gate behavior, disabled-by-default filters, trusted role exemptions, blocked phrases, allowed domains, temporary link permits, links, caps, repeat and symbol detection, protected command exemptions, recent hits, and audit logging.
-- `npm run smoke:nightbot` checks the Nightbot replacement path across stream presets, starter commands, timer presets, moderation rehearsal, live confirmation guards, protected `!enter`, and audit logging.
+- `npm run smoke:replacement` checks the bot replacement path across stream presets, starter commands, timer presets, moderation rehearsal, live confirmation guards, protected `!enter`, and audit logging.
 - `npm run smoke:cli-env` proves a refresh-capable `.env` can bootstrap the local OAuth store while access-token-only `.env` files remain supported.
 - `npm run smoke:token-refresh` runs a mocked Twitch OAuth check proving an expired access token refreshes, stores the rotated refresh token, keeps secrets out of `/api/config`, and sends chat with the refreshed token.
 - `npm run smoke:diagnostics` checks the local diagnostics route, setup assets, database driver, token-refresh readiness flags, and report redaction.

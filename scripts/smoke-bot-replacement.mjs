@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const tempDir = mkdtempSync(join(tmpdir(), "vaexcore-nightbot-smoke-"));
+const tempDir = mkdtempSync(join(tmpdir(), "vaexcore-replacement-smoke-"));
 const smokeDbPath = join(tempDir, "data/vaexcore.sqlite");
 
 process.env.VAEXCORE_CONFIG_DIR = tempDir;
@@ -18,7 +18,7 @@ const baseUrl = handle.url;
 
 try {
   await runSmoke();
-  console.log("nightbot replacement smoke passed");
+  console.log("bot replacement smoke passed");
 } finally {
   await handle.stop();
   rmSync(tempDir, { recursive: true, force: true });
@@ -32,10 +32,10 @@ async function runSmoke() {
   assert(appJs.includes("Allowed Link Domains"), "moderation allowlist is visible");
 
   const initial = await json("/api/stream-presets");
-  assert(initial.presets.some((preset) => preset.id === "nightbot-replacement"), "Nightbot replacement preset exists");
+  assert(initial.presets.some((preset) => preset.id === "bot-replacement"), "bot replacement preset exists");
 
-  const rehearsal = await post("/api/stream-presets/apply", { id: "nightbot-rehearsal" });
-  assert(rehearsal.ok === true, "Nightbot rehearsal preset applies");
+  const rehearsal = await post("/api/stream-presets/apply", { id: "local-bot-rehearsal" });
+  assert(rehearsal.ok === true, "local bot rehearsal preset applies");
   assert(gateMode(rehearsal, "custom_commands") === "live", "commands are live in rehearsal preset");
   assert(gateMode(rehearsal, "timers") === "test", "timers are test-only in rehearsal preset");
   assert(gateMode(rehearsal, "moderation_filters") === "test", "moderation is test-only in rehearsal preset");
@@ -82,13 +82,13 @@ async function runSmoke() {
   });
   assert(moderationHit.result.hit.filterTypes.includes("blocked_term"), "moderation detects blocked phrase in rehearsal");
 
-  const unconfirmedLive = await post("/api/stream-presets/apply", { id: "nightbot-replacement" });
+  const unconfirmedLive = await post("/api/stream-presets/apply", { id: "bot-replacement" });
   assert(unconfirmedLive.ok === false, "live replacement preset requires confirmation");
   const livePreset = await post("/api/stream-presets/apply", {
-    id: "nightbot-replacement",
+    id: "bot-replacement",
     confirmed: true
   });
-  assert(livePreset.ok === true, "confirmed Nightbot replacement preset applies");
+  assert(livePreset.ok === true, "confirmed bot replacement preset applies");
   assert(gateMode(livePreset, "timers") === "live", "timers move to live after confirmation");
   assert(gateMode(livePreset, "moderation_filters") === "live", "moderation moves to live after confirmation");
 

@@ -15,7 +15,7 @@ You need:
 
 This build is unsigned and not notarized. macOS may warn that the developer cannot be verified. Only run a build that came directly from the maintainer.
 
-Before sharing the zip, the maintainer should have run the tester artifact dry run, tester update preservation check, operational guardrails smoke, timers smoke, moderation smoke, and Nightbot replacement smoke. Those dry runs launch the extracted app from the zip, check the local setup UI, confirm Diagnostics and support bundle redaction, verify packaged SQLite reports `better-sqlite3`, prove an existing local setup survives app replacement, and confirm protected commands, feature gates, timers, moderation filters, stream presets, and audit redaction behave safely.
+Before sharing the zip, the maintainer should have run the tester artifact dry run, tester update preservation check, operational guardrails smoke, timers smoke, moderation smoke, and bot replacement smoke. Those dry runs launch the extracted app from the zip, check the local setup UI, confirm Diagnostics and support bundle redaction, verify packaged SQLite reports `better-sqlite3`, prove an existing local setup survives app replacement, and confirm protected commands, feature gates, timers, moderation filters, stream presets, and audit redaction behave safely.
 
 ## Install
 
@@ -95,9 +95,9 @@ Do not put prize codes into VaexCore. Deliver prizes manually outside the app.
 
 Open `Commands`, create a simple command such as `!discord`, add one response, click `Preview response`, then `Run test command`. For live use, start the bot and type the command in Twitch chat after `!ping` confirms live chat.
 
-## Nightbot Replacement Test
+## Bot Replacement Test
 
-Open `Dashboard` or `Live Mode`, apply `Nightbot Rehearsal`, then use starter commands, timer presets, and moderation local tests before enabling live timers or live moderation. `Nightbot Replacement` requires confirmation because it moves timers and warn-only moderation into live chat.
+Open `Dashboard` or `Live Mode`, apply `Local Bot Rehearsal`, then use starter commands, timer presets, and moderation local tests before enabling live timers or live moderation. `Bot Replacement` requires confirmation because it moves timers and warn-only moderation into live chat.
 
 ## Send A Support Bundle
 

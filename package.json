@@ -1,6 +1,6 @@
 {
   "name": "vaexcore",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "VaexCore is a quiet Twitch operations bot for commands, moderation, giveaways, and stream control without the usual clutter.",
   "type": "module",
@@ -29,7 +29,7 @@
     "smoke:guardrails": "npm run build && tsx scripts/smoke-operational-guardrails.mjs",
     "smoke:timers": "npm run build && tsx scripts/smoke-timers.mjs",
     "smoke:moderation": "npm run build && node scripts/smoke-moderation.mjs",
-    "smoke:nightbot": "npm run build && node scripts/smoke-nightbot-replacement.mjs",
+    "smoke:replacement": "npm run build && node scripts/smoke-bot-replacement.mjs",
     "smoke:giveaway": "npm run build && node scripts/smoke-giveaway-readiness.mjs",
     "smoke:giveaway-live": "npm run build && node scripts/smoke-giveaway-live.mjs",
     "smoke:token-refresh": "npm run build && node scripts/smoke-token-refresh.mjs",

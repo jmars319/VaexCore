@@ -3523,8 +3523,8 @@ const streamPresetDefinitions = [
     }
   },
   {
-    id: "nightbot-rehearsal",
-    label: "Nightbot Rehearsal",
+    id: "local-bot-rehearsal",
+    label: "Local Bot Rehearsal",
     description: "Keep custom commands live and move timers/moderation into local test mode.",
     modes: {
       custom_commands: "live",
@@ -3543,8 +3543,8 @@ const streamPresetDefinitions = [
     }
   },
   {
-    id: "nightbot-replacement",
-    label: "Nightbot Replacement",
+    id: "bot-replacement",
+    label: "Bot Replacement",
     description: "Enable custom commands, timers, and warn-only moderation for live Twitch chat.",
     modes: {
       custom_commands: "live",

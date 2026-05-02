@@ -1,12 +1,18 @@
 # Changelog
 
+## 0.1.2 - Bot replacement readiness release
+
+Current release state: unsigned tester release for local bot replacement rehearsal and stream-ready feature gates.
+
+- Milestone 41: neutral bot replacement release cut with no third-party bot naming in UI, docs, scripts, or release logs, plus a packaged-app release rehearsal for the 0.1.2 unsigned tester artifact.
+
 ## 0.1.1 - Versioned unsigned tester release
 
 Current release state: clean-main unsigned tester cut for wider local testing.
 
-- Milestone 40: release/tester readiness for the Nightbot replacement feature wave with an integrated smoke covering stream presets, starter commands, timer presets, moderation rehearsal, live confirmation guards, protected giveaway commands, and tester guide updates.
-- Milestone 39: stream-night presets for audited feature-gate bundles covering giveaway-only operation, Nightbot rehearsal, timers-live mode, and full Nightbot replacement mode with explicit live-feature confirmation and smoke coverage.
-- Milestone 38: command ergonomics with disabled starter presets for common Nightbot-style commands, preset conflict inspection, UI creation flow, local service reuse, and expanded custom command smoke coverage.
+- Milestone 40: release/tester readiness for the bot replacement feature wave with an integrated smoke covering stream presets, starter commands, timer presets, moderation rehearsal, live confirmation guards, protected giveaway commands, and tester guide updates.
+- Milestone 39: stream-night presets for audited feature-gate bundles covering giveaway-only operation, local bot rehearsal, timers-live mode, and full local bot replacement mode with explicit live-feature confirmation and smoke coverage.
+- Milestone 38: command ergonomics with disabled starter presets for common streamer utility commands, preset conflict inspection, UI creation flow, local service reuse, and expanded custom command smoke coverage.
 - Milestone 37: moderation filters v2 with trusted-role exemptions, allowed link domains, temporary link permits, richer moderation state summaries, UI controls, audited operator actions, and expanded smoke coverage.
 - Milestone 36: timer live polish with preset starters, timer JSON import/export, richer live-readiness checks, next-action explanations for blocked or scheduled timers, and expanded timer smoke coverage.
 - Milestone 35: giveaway live-readiness audit with a stream-night rehearsal smoke for chat and UI lifecycle paths, duplicate entries, insufficient entrants, reroll, manual claim/delivery, restart persistence, audit logs, outbound assurance, and custom command/timer/moderation interference checks.
