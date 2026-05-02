@@ -461,6 +461,17 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/bot-config/export") {
+    sendJson(response, 200, exportBotConfigBundle());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/bot-config/import") {
+    const body = await readJson(request);
+    sendJson(response, 200, importBotConfigBundle(body));
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/commands") {
     sendJson(response, 200, getCustomCommands());
     return;
@@ -2957,6 +2968,295 @@ const sendOperatorMessage = async (body: { id?: string; confirmed?: boolean }) =
     sentPreset: template.id
   };
 };
+
+const exportBotConfigBundle = () => {
+  const moderation = moderationService.getState();
+  const reminder = getGiveawayReminder().reminder;
+
+  return {
+    ok: true,
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    includesSecrets: false,
+    note: "Safe bot behavior only. Twitch OAuth tokens, client secrets, runtime history, active giveaways, and prize data are excluded.",
+    commands: customCommandsService.exportCommands().commands,
+    timers: exportTimers().timers,
+    moderation: {
+      settings: safeModerationSettings(moderation.settings),
+      terms: moderation.terms.map((term) => ({
+        term: term.term,
+        enabled: term.enabled
+      })),
+      allowedLinks: moderation.allowedLinks.map((link) => ({
+        domain: link.domain,
+        enabled: link.enabled
+      })),
+      blockedLinks: moderation.blockedLinks.map((link) => ({
+        domain: link.domain,
+        enabled: link.enabled
+      }))
+    },
+    operatorMacros: operatorMessages.list().map((template) => ({
+      id: template.id,
+      template: template.template
+    })),
+    giveawayTemplates: giveawayTemplates.list().map((template) => ({
+      action: template.action,
+      template: template.template
+    })),
+    giveawayReminder: {
+      enabled: reminder.enabled,
+      intervalMinutes: reminder.intervalMinutes
+    }
+  };
+};
+
+const importBotConfigBundle = (body: unknown) => {
+  try {
+    const payload = body as Record<string, unknown>;
+    const imported = {
+      commands: 0,
+      timers: 0,
+      moderationSettings: 0,
+      moderationTerms: 0,
+      moderationAllowedLinks: 0,
+      moderationBlockedLinks: 0,
+      operatorMacros: 0,
+      giveawayTemplates: 0,
+      giveawayReminder: 0
+    };
+
+    const commandEntries = bundleArray(payload.commands);
+    if (commandEntries.length) {
+      imported.commands = customCommandsService.importCommands(
+        { commands: commandEntries },
+        localUiActor,
+        { reservedNames: getCustomCommandReservedNames() }
+      ).length;
+    }
+
+    const timerEntries = bundleArray(payload.timers);
+    if (timerEntries.length) {
+      imported.timers = importTimerEntries(timerEntries);
+    }
+
+    const moderationPayload = payload.moderation as Record<string, unknown> | undefined;
+    if (moderationPayload && typeof moderationPayload === "object") {
+      if (moderationPayload.settings && typeof moderationPayload.settings === "object") {
+        moderationService.saveSettings(moderationPayload.settings, localUiActor);
+        imported.moderationSettings = 1;
+      }
+
+      imported.moderationTerms = importModerationTerms(bundleArray(moderationPayload.terms));
+      imported.moderationAllowedLinks = importModerationLinks(
+        bundleArray(moderationPayload.allowedLinks),
+        "allowed"
+      );
+      imported.moderationBlockedLinks = importModerationLinks(
+        bundleArray(moderationPayload.blockedLinks),
+        "blocked"
+      );
+    }
+
+    imported.operatorMacros = importOperatorMacros(
+      payload.operatorMacros ?? payload.operatorMessages
+    );
+    imported.giveawayTemplates = importGiveawayTemplates(payload.giveawayTemplates);
+
+    if (payload.giveawayReminder && typeof payload.giveawayReminder === "object") {
+      setGiveawayReminder(payload.giveawayReminder);
+      imported.giveawayReminder = 1;
+    }
+
+    if (!Object.values(imported).some((count) => count > 0)) {
+      throw new Error("Import payload did not include commands, timers, moderation, operator macros, or giveaway templates.");
+    }
+
+    writeAuditLog(db, localUiActor, "bot_config.import", "bot_config", imported);
+
+    return {
+      ...exportBotConfigBundle(),
+      ok: true,
+      imported
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: safeErrorMessage(error, "Bot config import failed")
+    };
+  }
+};
+
+const importTimerEntries = (entries: unknown[]) => {
+  const saved = entries.slice(0, 50).map((entry) => {
+    const input = entry as Record<string, unknown>;
+    const name = String(input.name ?? "").trim().toLowerCase();
+    const existing = timersService
+      .listTimers()
+      .find((timer) => timer.name.toLowerCase() === name);
+
+    return timersService.saveTimer({
+      ...input,
+      id: existing?.id
+    }, localUiActor);
+  });
+
+  return saved.length;
+};
+
+const importModerationTerms = (entries: unknown[]) => {
+  let imported = 0;
+
+  for (const entry of entries.slice(0, 100)) {
+    const input = entry as Record<string, unknown>;
+    const term = String(input.term ?? "").trim().toLowerCase();
+    const existing = moderationService.listTerms().find((item) => item.term === term);
+
+    moderationService.saveTerm({
+      ...input,
+      id: existing?.id
+    }, localUiActor);
+    imported += 1;
+  }
+
+  return imported;
+};
+
+const importModerationLinks = (entries: unknown[], type: "allowed" | "blocked") => {
+  let imported = 0;
+
+  for (const entry of entries.slice(0, 100)) {
+    const input = entry as Record<string, unknown>;
+    const domain = normalizeBundleDomain(input.domain);
+
+    if (type === "allowed") {
+      const existing = moderationService
+        .listAllowedLinks()
+        .find((item) => item.domain === domain);
+
+      moderationService.saveAllowedLink({
+        ...input,
+        id: existing?.id
+      }, localUiActor);
+    } else {
+      const existing = moderationService
+        .listBlockedLinks()
+        .find((item) => item.domain === domain);
+
+      moderationService.saveBlockedLink({
+        ...input,
+        id: existing?.id
+      }, localUiActor);
+    }
+
+    imported += 1;
+  }
+
+  return imported;
+};
+
+const importOperatorMacros = (input: unknown) => {
+  const templates = bundleTemplateMap(input, "id", "template");
+
+  if (Object.keys(templates).length === 0) {
+    return 0;
+  }
+
+  operatorMessages.save({ templates });
+  return Object.keys(templates).length;
+};
+
+const importGiveawayTemplates = (input: unknown) => {
+  const templates = bundleTemplateMap(input, "action", "template");
+
+  if (Object.keys(templates).length === 0) {
+    return 0;
+  }
+
+  giveawayTemplates.save({ templates });
+  return Object.keys(templates).length;
+};
+
+const bundleArray = (input: unknown) => {
+  if (Array.isArray(input)) {
+    return input;
+  }
+
+  if (input && typeof input === "object") {
+    const body = input as Record<string, unknown>;
+    if (Array.isArray(body.commands)) return body.commands;
+    if (Array.isArray(body.timers)) return body.timers;
+  }
+
+  return [];
+};
+
+const bundleTemplateMap = (
+  input: unknown,
+  keyField: string,
+  templateField: string
+) => {
+  if (Array.isArray(input)) {
+    return input.reduce<Record<string, unknown>>((templates, entry) => {
+      const row = entry as Record<string, unknown>;
+      const key = typeof row[keyField] === "string" ? row[keyField] : "";
+
+      if (key) {
+        templates[key] = row[templateField];
+      }
+
+      return templates;
+    }, {});
+  }
+
+  if (input && typeof input === "object") {
+    return input as Record<string, unknown>;
+  }
+
+  return {};
+};
+
+const normalizeBundleDomain = (value: unknown) => {
+  const domain = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split(/[/?#]/)[0] ?? "";
+
+  return domain
+    .replace(/:\d+$/, "")
+    .trim();
+};
+
+const safeModerationSettings = (settings: ReturnType<ModerationService["getSettings"]>) => ({
+  blockedTermsEnabled: settings.blockedTermsEnabled,
+  linkFilterEnabled: settings.linkFilterEnabled,
+  capsFilterEnabled: settings.capsFilterEnabled,
+  repeatFilterEnabled: settings.repeatFilterEnabled,
+  symbolFilterEnabled: settings.symbolFilterEnabled,
+  blockedTermsAction: settings.blockedTermsAction,
+  linkFilterAction: settings.linkFilterAction,
+  capsFilterAction: settings.capsFilterAction,
+  repeatFilterAction: settings.repeatFilterAction,
+  symbolFilterAction: settings.symbolFilterAction,
+  timeoutSeconds: settings.timeoutSeconds,
+  warningMessage: settings.warningMessage,
+  capsMinLength: settings.capsMinLength,
+  capsRatio: settings.capsRatio,
+  repeatWindowSeconds: settings.repeatWindowSeconds,
+  repeatLimit: settings.repeatLimit,
+  symbolMinLength: settings.symbolMinLength,
+  symbolRatio: settings.symbolRatio,
+  escalationEnabled: settings.escalationEnabled,
+  escalationWindowSeconds: settings.escalationWindowSeconds,
+  escalationDeleteAfter: settings.escalationDeleteAfter,
+  escalationTimeoutAfter: settings.escalationTimeoutAfter,
+  exemptBroadcaster: settings.exemptBroadcaster,
+  exemptModerators: settings.exemptModerators,
+  exemptVips: settings.exemptVips,
+  exemptSubscribers: settings.exemptSubscribers
+});
 
 const getFeatureGates = () => ({
   ok: true,

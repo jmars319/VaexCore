@@ -237,6 +237,8 @@ const api = {
   saveOperatorMessages: (templates) => api.post("/api/operator-messages", { templates }),
   resetOperatorMessages: () => api.post("/api/operator-messages/reset"),
   sendOperatorMessage: (id, confirmed = false) => api.post("/api/operator-messages/send", { id, confirmed }),
+  exportBotConfig: () => api.get("/api/bot-config/export"),
+  importBotConfig: (body) => api.post("/api/bot-config/import", body),
   commands: () => api.get("/api/commands"),
   saveCommand: (body) => api.post("/api/commands", body),
   enableCommand: (id, enabled) => api.post("/api/commands/enable", { id, enabled }),
@@ -1532,6 +1534,7 @@ function renderModeration() {
         ["Blocked domains", `${state.moderationSummary.enabledBlockedLinks || 0}/${state.moderationSummary.blockedLinks || 0}`, true],
         ["Active permits", state.moderationSummary.activeLinkPermits || 0, true],
         ["Enforced filters", state.moderationSummary.enforcementFilters || 0, true],
+        ["Escalation", state.moderationSummary.escalation || "off", Boolean(state.moderationSummary.escalation && state.moderationSummary.escalation !== "off")],
         ["Recent hits", state.moderationSummary.hits || 0, true]
       ]),
       h("h3", { text: "Actions" }),
@@ -1589,6 +1592,17 @@ function renderModeration() {
         formRow("Repeat window seconds", h("input", { id: "repeatWindowSeconds", type: "number", min: "5", max: "600", onInput: updateModerationDraft })),
         formRow("Symbol min length", h("input", { id: "symbolMinLength", type: "number", min: "5", max: "450", onInput: updateModerationDraft })),
         formRow("Symbol ratio", h("input", { id: "symbolRatio", type: "number", min: "0.1", max: "1", step: "0.05", onInput: updateModerationDraft }))
+      ]),
+      h("h3", { text: "Escalation" }),
+      callout("Optional repeat-hit escalation upgrades the same user's recent moderation hits from warn to delete to timeout. It never bypasses trusted-role exemptions or scope checks.", "muted"),
+      h("div", { className: "grid four" }, [
+        h("label", { className: "inline-check editor-check" }, [
+          h("input", { id: "escalationEnabled", type: "checkbox", onChange: updateModerationDraft }),
+          "Enable escalation"
+        ]),
+        formRow("Window seconds", h("input", { id: "escalationWindowSeconds", type: "number", min: "30", max: "3600", onInput: updateModerationDraft })),
+        formRow("Delete after hits", h("input", { id: "escalationDeleteAfter", type: "number", min: "2", max: "25", onInput: updateModerationDraft })),
+        formRow("Timeout after hits", h("input", { id: "escalationTimeoutAfter", type: "number", min: "2", max: "25", onInput: updateModerationDraft }))
       ]),
       h("h3", { text: "Trusted Roles" }),
       h("div", { className: "grid four" }, [
@@ -1786,8 +1800,9 @@ function renderGiveaways() {
 
 function renderChatTools() {
   return [
-    sectionHeader("Chat Tools", "Send operator messages and verify outbound chat without changing giveaway state."),
+    sectionHeader("Chat Tools", "Send operator macros and verify outbound chat without changing giveaway state."),
     renderOperatorMessagesCard(),
+    renderBotConfigBundleCard(),
     card("Outbound Chat", [
       formRow("Message text", h("textarea", { id: "chatMessage", placeholder: "Message to send to Twitch chat" })),
       h("div", { className: "actions" }, [
@@ -1808,8 +1823,8 @@ function renderChatTools() {
 function renderOperatorMessagesCard() {
   const templates = state.operatorMessages || [];
 
-  return card("Operator Messages", [
-    callout("Local presets only. They do not store prize codes and every send uses the normal outbound queue, history, and recovery flow.", "muted"),
+  return card("Operator Macros", [
+    callout("Reusable local chat macros only. They do not store prize codes and every send uses the normal outbound queue, history, and recovery flow.", "muted"),
     h("div", { className: "template-list" }, templates.map((template) =>
       h("div", { className: "template-row operator-template-row" }, [
         h("span", {}, [
@@ -1833,9 +1848,24 @@ function renderOperatorMessagesCard() {
       ])
     )),
     h("div", { className: "actions" }, [
-      actionButton("Save operator messages", { id: "saveOperatorMessages", variant: "secondary", onClick: saveOperatorMessages }),
-      actionButton("Reset operator messages", { id: "resetOperatorMessages", variant: "secondary", onClick: resetOperatorMessages })
+      actionButton("Save operator macros", { id: "saveOperatorMessages", variant: "secondary", onClick: saveOperatorMessages }),
+      actionButton("Reset operator macros", { id: "resetOperatorMessages", variant: "secondary", onClick: resetOperatorMessages })
     ])
+  ]);
+}
+
+function renderBotConfigBundleCard() {
+  return card("Bot Config Backup", [
+    callout("Exports reusable bot behavior only: commands, timers, moderation rules, operator macros, giveaway message templates, and reminder settings. Twitch secrets, OAuth tokens, active giveaways, prize data, and runtime history are excluded.", "info"),
+    h("div", { className: "actions" }, [
+      actionButton("Export safe bot config", { id: "exportBotConfig", variant: "secondary", onClick: exportBotConfigBundle }),
+      actionButton("Import safe bot config", { id: "importBotConfig", variant: "secondary", onClick: importBotConfigBundle })
+    ]),
+    formRow("Import JSON", h("textarea", {
+      id: "botConfigImportJson",
+      className: "command-import",
+      placeholder: "{\"version\":1,\"commands\":[...],\"timers\":[...],\"moderation\":{...}}"
+    }))
   ]);
 }
 
@@ -3129,13 +3159,14 @@ async function refreshAll() {
 }
 
 async function refreshAfterAction() {
-  const [status, launchPreparation, giveaway, commands, timers, moderation, operatorMessages, reminder, audit, outbound, featureGateResult, streamPresetResult] = await Promise.all([api.status(), api.launchPreparation(), api.giveaway(), api.commands(), api.timers(), api.moderation(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates(), api.streamPresets()]);
+  const [status, launchPreparation, giveaway, commands, timers, moderation, templates, operatorMessages, reminder, audit, outbound, featureGateResult, streamPresetResult] = await Promise.all([api.status(), api.launchPreparation(), api.giveaway(), api.commands(), api.timers(), api.moderation(), api.templates(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates(), api.streamPresets()]);
   state.status = status;
   syncLaunchPreparation(launchPreparation);
   state.giveaway = giveaway;
   setCommandState(commands);
   setTimerState(timers);
   setModerationState(moderation);
+  state.templates = templates.templates || [];
   state.operatorMessages = operatorMessages.templates || [];
   state.reminder = reminder.reminder || {};
   state.auditLogs = audit.logs || [];
@@ -3744,6 +3775,31 @@ async function importCustomCommands() {
   }, { skipRefresh: true, success: "Custom commands imported." });
 }
 
+async function exportBotConfigBundle() {
+  await runAction("exportBotConfig", async () => {
+    const exported = await api.exportBotConfig();
+    downloadTextFile(
+      `vaexcore-safe-bot-config-${new Date().toISOString().slice(0, 10)}.json`,
+      `${JSON.stringify(exported, null, 2)}\n`,
+      "application/json"
+    );
+    return { ok: true };
+  }, { skipRefresh: true, success: "Safe bot config exported." });
+}
+
+async function importBotConfigBundle() {
+  const raw = field("botConfigImportJson")?.value || "";
+  if (!raw.trim()) {
+    state.message = { text: "Paste exported safe bot config JSON before importing.", tone: "warn" };
+    render();
+    return;
+  }
+
+  await runAction("importBotConfig", async () => api.importBotConfig(JSON.parse(raw)), {
+    success: "Safe bot config imported."
+  });
+}
+
 async function saveSettings() {
   const payload = readSettingsPayload();
 
@@ -3942,6 +3998,10 @@ function readModerationSettingsPayload() {
     repeatWindowSeconds: Number(field("repeatWindowSeconds")?.value || 30),
     symbolMinLength: Number(field("symbolMinLength")?.value || 12),
     symbolRatio: Number(field("symbolRatio")?.value || 0.6),
+    escalationEnabled: Boolean(field("escalationEnabled")?.checked),
+    escalationWindowSeconds: Number(field("escalationWindowSeconds")?.value || 300),
+    escalationDeleteAfter: Number(field("escalationDeleteAfter")?.value || 2),
+    escalationTimeoutAfter: Number(field("escalationTimeoutAfter")?.value || 3),
     exemptBroadcaster: Boolean(field("exemptBroadcaster")?.checked),
     exemptModerators: Boolean(field("exemptModerators")?.checked),
     exemptVips: Boolean(field("exemptVips")?.checked),
@@ -4356,6 +4416,7 @@ function renderModerationTestResult() {
       ["Action", result.hit?.action || "none", !result.hit],
       ["Filter actions", (result.hit?.filterActions || []).map((item) => `${item.filterType}:${item.action}`).join(", ") || "none", !result.hit],
       ["Matched rules", (result.hit?.matches || []).map((item) => item.detail).join("; ") || "none", !result.hit],
+      ["Escalation", result.hit?.escalation?.reason || "none", !result.hit || !result.hit.escalation],
       ["Timeout", result.hit?.timeoutSeconds ? `${result.hit.timeoutSeconds}s` : "none", !result.hit],
       ["Enforcement", plan ? `${plan.status}: ${plan.reason}` : "none", !result.hit || plan?.status === "skipped"],
       ["Allowed links", (result.allowedLinks || []).join(", ") || "none", !result.hit],
@@ -4417,6 +4478,10 @@ function syncFormValues() {
   setValue("repeatWindowSeconds", moderationValue("repeatWindowSeconds", moderationSettings.repeatWindowSeconds || 30));
   setValue("symbolMinLength", moderationValue("symbolMinLength", moderationSettings.symbolMinLength || 12));
   setValue("symbolRatio", moderationValue("symbolRatio", moderationSettings.symbolRatio || 0.6));
+  setChecked("escalationEnabled", Boolean(moderationValue("escalationEnabled", moderationSettings.escalationEnabled ?? false)));
+  setValue("escalationWindowSeconds", moderationValue("escalationWindowSeconds", moderationSettings.escalationWindowSeconds || 300));
+  setValue("escalationDeleteAfter", moderationValue("escalationDeleteAfter", moderationSettings.escalationDeleteAfter || 2));
+  setValue("escalationTimeoutAfter", moderationValue("escalationTimeoutAfter", moderationSettings.escalationTimeoutAfter || 3));
   setChecked("exemptBroadcaster", Boolean(moderationValue("exemptBroadcaster", moderationSettings.exemptBroadcaster ?? true)));
   setChecked("exemptModerators", Boolean(moderationValue("exemptModerators", moderationSettings.exemptModerators ?? true)));
   setChecked("exemptVips", Boolean(moderationValue("exemptVips", moderationSettings.exemptVips ?? false)));

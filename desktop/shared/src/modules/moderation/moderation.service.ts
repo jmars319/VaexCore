@@ -22,7 +22,10 @@ const moderationLimits = {
   repeatMemoryMax: 50,
   warningCooldownMs: 60_000,
   timeoutMinSeconds: 10,
-  timeoutMaxSeconds: 1200
+  timeoutMaxSeconds: 1200,
+  escalationMinWindowSeconds: 30,
+  escalationMaxWindowSeconds: 3600,
+  escalationMaxHitCount: 25
 } as const;
 
 export type ModerationFilterType =
@@ -54,6 +57,10 @@ export type ModerationSettings = {
   repeatLimit: number;
   symbolMinLength: number;
   symbolRatio: number;
+  escalationEnabled: boolean;
+  escalationWindowSeconds: number;
+  escalationDeleteAfter: number;
+  escalationTimeoutAfter: number;
   exemptBroadcaster: boolean;
   exemptModerators: boolean;
   exemptVips: boolean;
@@ -126,6 +133,10 @@ type ModerationSettingsRow = {
   repeat_limit: number;
   symbol_min_length: number;
   symbol_ratio: number;
+  escalation_enabled: number;
+  escalation_window_seconds: number;
+  escalation_delete_after: number;
+  escalation_timeout_after: number;
   exempt_broadcaster: number;
   exempt_moderators: number;
   exempt_vips: number;
@@ -204,6 +215,12 @@ export type ModerationEvaluation = {
       action: ModerationAction;
       detail: string;
     }>;
+    escalation?: {
+      hitsInWindow: number;
+      windowSeconds: number;
+      action: ModerationAction;
+      reason: string;
+    };
     detail: string;
     warningMessage: string;
     timeoutSeconds?: number;
@@ -288,6 +305,9 @@ export class ModerationService {
           settings.symbolFilterEnabled
         ].filter(Boolean).length,
         enforcementFilters: enabledEnforcementFilterNames(settings).length,
+        escalation: settings.escalationEnabled
+          ? `${settings.escalationDeleteAfter}/${settings.escalationTimeoutAfter} in ${settings.escalationWindowSeconds}s`
+          : "off",
         timeoutSeconds: settings.timeoutSeconds,
         hits: hits.length,
         hitsByFilter,
@@ -371,12 +391,36 @@ export class ModerationService {
         max: limits.chatMessageLength
       }),
       symbolRatio: ratioValue(body.symbolRatio, current.symbolRatio, "Symbol ratio"),
+      escalationEnabled: booleanValue(body.escalationEnabled, current.escalationEnabled),
+      escalationWindowSeconds: parseSafeInteger(body.escalationWindowSeconds, {
+        field: "Escalation window",
+        fallback: current.escalationWindowSeconds,
+        min: moderationLimits.escalationMinWindowSeconds,
+        max: moderationLimits.escalationMaxWindowSeconds
+      }),
+      escalationDeleteAfter: parseSafeInteger(body.escalationDeleteAfter, {
+        field: "Escalation delete threshold",
+        fallback: current.escalationDeleteAfter,
+        min: 2,
+        max: moderationLimits.escalationMaxHitCount
+      }),
+      escalationTimeoutAfter: parseSafeInteger(body.escalationTimeoutAfter, {
+        field: "Escalation timeout threshold",
+        fallback: current.escalationTimeoutAfter,
+        min: 2,
+        max: moderationLimits.escalationMaxHitCount
+      }),
       exemptBroadcaster: booleanValue(body.exemptBroadcaster, current.exemptBroadcaster),
       exemptModerators: booleanValue(body.exemptModerators, current.exemptModerators),
       exemptVips: booleanValue(body.exemptVips, current.exemptVips),
       exemptSubscribers: booleanValue(body.exemptSubscribers, current.exemptSubscribers),
       updatedAt: timestamp()
     };
+
+    settings.escalationTimeoutAfter = Math.max(
+      settings.escalationDeleteAfter,
+      settings.escalationTimeoutAfter
+    );
 
     this.db
       .prepare(
@@ -402,6 +446,10 @@ export class ModerationService {
             repeat_limit,
             symbol_min_length,
             symbol_ratio,
+            escalation_enabled,
+            escalation_window_seconds,
+            escalation_delete_after,
+            escalation_timeout_after,
             exempt_broadcaster,
             exempt_moderators,
             exempt_vips,
@@ -428,6 +476,10 @@ export class ModerationService {
             @repeatLimit,
             @symbolMinLength,
             @symbolRatio,
+            @escalationEnabled,
+            @escalationWindowSeconds,
+            @escalationDeleteAfter,
+            @escalationTimeoutAfter,
             @exemptBroadcaster,
             @exemptModerators,
             @exemptVips,
@@ -454,6 +506,10 @@ export class ModerationService {
             repeat_limit = excluded.repeat_limit,
             symbol_min_length = excluded.symbol_min_length,
             symbol_ratio = excluded.symbol_ratio,
+            escalation_enabled = excluded.escalation_enabled,
+            escalation_window_seconds = excluded.escalation_window_seconds,
+            escalation_delete_after = excluded.escalation_delete_after,
+            escalation_timeout_after = excluded.escalation_timeout_after,
             exempt_broadcaster = excluded.exempt_broadcaster,
             exempt_moderators = excluded.exempt_moderators,
             exempt_vips = excluded.exempt_vips,
@@ -480,6 +536,10 @@ export class ModerationService {
         repeatLimit: settings.repeatLimit,
         symbolMinLength: settings.symbolMinLength,
         symbolRatio: settings.symbolRatio,
+        escalationEnabled: settings.escalationEnabled ? 1 : 0,
+        escalationWindowSeconds: settings.escalationWindowSeconds,
+        escalationDeleteAfter: settings.escalationDeleteAfter,
+        escalationTimeoutAfter: settings.escalationTimeoutAfter,
         exemptBroadcaster: settings.exemptBroadcaster ? 1 : 0,
         exemptModerators: settings.exemptModerators ? 1 : 0,
         exemptVips: settings.exemptVips ? 1 : 0,
@@ -491,6 +551,10 @@ export class ModerationService {
       filtersEnabled: enabledFilterNames(settings),
       roleExemptions: enabledExemptionNames(settings),
       enforcementFilters: enabledEnforcementFilterNames(settings),
+      escalationEnabled: settings.escalationEnabled,
+      escalationDeleteAfter: settings.escalationDeleteAfter,
+      escalationTimeoutAfter: settings.escalationTimeoutAfter,
+      escalationWindowSeconds: settings.escalationWindowSeconds,
       timeoutSeconds: settings.timeoutSeconds
     });
 
@@ -930,15 +994,23 @@ export class ModerationService {
       };
     }
 
-    const detail = sanitizeText(matches.map((match) => match.detail).join("; "), {
-      field: "Moderation detail",
-      maxLength: moderationLimits.detailLength
-    });
     const filterActions = matches.map((match) => ({
       filterType: match.type,
       action: match.action
     }));
-    const action = strongestAction(filterActions.map((match) => match.action));
+    const baseAction = strongestAction(filterActions.map((match) => match.action));
+    const escalation = this.resolveEscalation(message, settings, baseAction);
+    const action = escalation.action;
+    const detailParts = matches.map((match) => match.detail);
+
+    if (escalation.applied) {
+      detailParts.push(escalation.reason);
+    }
+
+    const detail = sanitizeText(detailParts.join("; "), {
+      field: "Moderation detail",
+      maxLength: moderationLimits.detailLength
+    });
     const warningMessage = renderWarning(settings.warningMessage, message, detail);
 
     if (options.record !== false) {
@@ -958,6 +1030,14 @@ export class ModerationService {
           action: match.action,
           detail: match.detail
         })),
+        escalation: escalation.applied
+          ? {
+              hitsInWindow: escalation.hitsInWindow,
+              windowSeconds: settings.escalationWindowSeconds,
+              action,
+              reason: escalation.reason
+            }
+          : undefined,
         detail,
         warningMessage,
         timeoutSeconds: action === "timeout" ? settings.timeoutSeconds : undefined
@@ -1201,6 +1281,60 @@ export class ModerationService {
       messagePreview: preview,
       warningPreview: messagePreview(warningMessage)
     }, { createdAt: now });
+  }
+
+  private resolveEscalation(
+    message: ChatMessage,
+    settings: ModerationSettings,
+    baseAction: ModerationAction
+  ) {
+    if (!settings.escalationEnabled) {
+      return {
+        action: baseAction,
+        applied: false,
+        hitsInWindow: 0,
+        reason: ""
+      };
+    }
+
+    const hitsInWindow = this.countRecentHitsForUser(
+      message,
+      settings.escalationWindowSeconds
+    ) + 1;
+    const escalationAction = hitsInWindow >= settings.escalationTimeoutAfter
+      ? "timeout"
+      : hitsInWindow >= settings.escalationDeleteAfter
+        ? "delete"
+        : undefined;
+    const action = escalationAction
+      ? strongestAction([baseAction, escalationAction])
+      : baseAction;
+    const applied = action !== baseAction;
+
+    return {
+      action,
+      applied,
+      hitsInWindow,
+      reason: applied
+        ? `escalated to ${action}: ${hitsInWindow} hits in ${settings.escalationWindowSeconds}s`
+        : ""
+    };
+  }
+
+  private countRecentHitsForUser(message: ChatMessage, windowSeconds: number) {
+    const cutoff = new Date(Date.now() - windowSeconds * 1000).toISOString();
+    const row = this.db
+      .prepare(
+        `
+          SELECT COUNT(*) AS count
+          FROM moderation_hits
+          WHERE user_key = ?
+            AND created_at >= ?
+        `
+      )
+      .get(userKey(message), cutoff) as { count?: number } | undefined;
+
+    return Number(row?.count ?? 0);
   }
 
   private isRepeatedMessage(message: ChatMessage, settings: ModerationSettings) {
@@ -1458,6 +1592,10 @@ const defaultSettings = (): ModerationSettings => ({
   repeatLimit: 3,
   symbolMinLength: 12,
   symbolRatio: 0.6,
+  escalationEnabled: false,
+  escalationWindowSeconds: 300,
+  escalationDeleteAfter: 2,
+  escalationTimeoutAfter: 3,
   exemptBroadcaster: true,
   exemptModerators: true,
   exemptVips: false,
@@ -1485,6 +1623,13 @@ const settingsFromRow = (row: ModerationSettingsRow): ModerationSettings => ({
   repeatLimit: row.repeat_limit,
   symbolMinLength: row.symbol_min_length,
   symbolRatio: row.symbol_ratio,
+  escalationEnabled: row.escalation_enabled === 1,
+  escalationWindowSeconds: clampEscalationWindowSeconds(row.escalation_window_seconds),
+  escalationDeleteAfter: clampEscalationHitCount(row.escalation_delete_after, 2),
+  escalationTimeoutAfter: Math.max(
+    clampEscalationHitCount(row.escalation_delete_after, 2),
+    clampEscalationHitCount(row.escalation_timeout_after, 3)
+  ),
   exemptBroadcaster: row.exempt_broadcaster === 1,
   exemptModerators: row.exempt_moderators === 1,
   exemptVips: row.exempt_vips === 1,
@@ -1601,6 +1746,32 @@ const clampTimeoutSeconds = (value: unknown) => {
   return Math.min(
     moderationLimits.timeoutMaxSeconds,
     Math.max(moderationLimits.timeoutMinSeconds, Math.trunc(parsed))
+  );
+};
+
+const clampEscalationWindowSeconds = (value: unknown) => {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return 300;
+  }
+
+  return Math.min(
+    moderationLimits.escalationMaxWindowSeconds,
+    Math.max(moderationLimits.escalationMinWindowSeconds, Math.trunc(parsed))
+  );
+};
+
+const clampEscalationHitCount = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(
+    moderationLimits.escalationMaxHitCount,
+    Math.max(2, Math.trunc(parsed))
   );
 };
 

@@ -170,6 +170,10 @@ export const initializeSchema = (db: DbClient) => {
       repeat_limit INTEGER NOT NULL DEFAULT 3,
       symbol_min_length INTEGER NOT NULL DEFAULT 12,
       symbol_ratio REAL NOT NULL DEFAULT 0.6,
+      escalation_enabled INTEGER NOT NULL DEFAULT 0 CHECK (escalation_enabled IN (0, 1)),
+      escalation_window_seconds INTEGER NOT NULL DEFAULT 300,
+      escalation_delete_after INTEGER NOT NULL DEFAULT 2,
+      escalation_timeout_after INTEGER NOT NULL DEFAULT 3,
       exempt_broadcaster INTEGER NOT NULL DEFAULT 1 CHECK (exempt_broadcaster IN (0, 1)),
       exempt_moderators INTEGER NOT NULL DEFAULT 1 CHECK (exempt_moderators IN (0, 1)),
       exempt_vips INTEGER NOT NULL DEFAULT 0 CHECK (exempt_vips IN (0, 1)),
@@ -275,6 +279,10 @@ export const initializeSchema = (db: DbClient) => {
   ensureColumn(db, "moderation_settings", "repeat_filter_action", "TEXT NOT NULL DEFAULT 'warn' CHECK (repeat_filter_action IN ('warn', 'delete', 'timeout'))");
   ensureColumn(db, "moderation_settings", "symbol_filter_action", "TEXT NOT NULL DEFAULT 'warn' CHECK (symbol_filter_action IN ('warn', 'delete', 'timeout'))");
   ensureColumn(db, "moderation_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 60");
+  ensureColumn(db, "moderation_settings", "escalation_enabled", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "moderation_settings", "escalation_window_seconds", "INTEGER NOT NULL DEFAULT 300");
+  ensureColumn(db, "moderation_settings", "escalation_delete_after", "INTEGER NOT NULL DEFAULT 2");
+  ensureColumn(db, "moderation_settings", "escalation_timeout_after", "INTEGER NOT NULL DEFAULT 3");
 };
 
 const ensureColumn = (

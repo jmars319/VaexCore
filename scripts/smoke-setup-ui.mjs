@@ -81,6 +81,7 @@ async function runSmoke() {
   assert(appJs.includes("Allowed Link Domains"), "browser UI exposes moderation link allowlist");
   assert(appJs.includes("Blocked Link Domains"), "browser UI exposes moderation link blocklist");
   assert(appJs.includes("Temporary Link Permits"), "browser UI exposes moderation link permits");
+  assert(appJs.includes("Escalation"), "browser UI exposes moderation escalation settings");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");
   assert(appJs.includes("Open Twitch Developer Console"), "setup guide includes Twitch Developer Console link");
   assert(appJs.includes("settingsActionButton"), "main UI exposes compact settings launcher");
@@ -150,8 +151,11 @@ async function runSmoke() {
   assert(appJs.includes("Send Throttle"), "queue health shows send throttle");
   assert(appJs.includes("Safe To Resend"), "recovery checklist explains resend safety");
   assert(appJs.includes("Category"), "outbound failures show failure categories");
-  assert(appJs.includes("Operator Messages"), "chat tools expose operator message presets");
+  assert(appJs.includes("Operator Macros"), "chat tools expose operator macros");
   assert(appJs.includes("Requires confirmation"), "operator message presets identify high-impact sends");
+  assert(appJs.includes("Bot Config Backup"), "chat tools expose safe bot config backup");
+  assert(appJs.includes("Export safe bot config"), "chat tools can export safe bot config");
+  assert(appJs.includes("Import safe bot config"), "chat tools can import safe bot config");
   assert(appJs.includes("Diagnostics"), "setup UI exposes diagnostics tab");
   assert(appJs.includes("Copy diagnostic report"), "diagnostics report can be copied");
   assert(appJs.includes("Copy support bundle"), "diagnostics tab can copy support bundle");
@@ -179,6 +183,8 @@ async function runSmoke() {
   assert(setupServerJs.includes("retryDelayMs"), "setup server reports retry timing");
   assert(setupServerJs.includes("operator_message_templates"), "setup server stores operator message presets locally");
   assert(setupServerJs.includes("/api/operator-messages/send"), "setup server exposes operator message send route");
+  assert(setupServerJs.includes("/api/bot-config/export"), "setup server exposes safe bot config export route");
+  assert(setupServerJs.includes("includesSecrets: false"), "safe bot config export explicitly excludes secrets");
   assert(setupServerJs.includes("/api/commands"), "setup server exposes custom command routes");
   assert(setupServerJs.includes("/api/feature-gates"), "setup server exposes feature gate routes");
   assert(setupServerJs.includes("feature_gates"), "setup server persists feature gates locally");
@@ -239,8 +245,10 @@ async function runSmoke() {
   assert(initialModeration.featureGate.mode === "off", "moderation route returns feature gate");
   assert(initialModeration.summary.filtersEnabled === 0, "moderation filters default off");
   assert(initialModeration.summary.enforcementFilters === 0, "moderation enforcement defaults off");
+  assert(initialModeration.summary.escalation === "off", "moderation escalation defaults off");
   assert(initialModeration.enforcement.deleteMessages.available === false, "moderation delete enforcement reports unavailable before setup");
   assert(initialModeration.settings.exemptModerators === true, "moderation trusted role defaults are exposed");
+  assert(initialModeration.settings.escalationEnabled === false, "moderation escalation setting is exposed");
   const rehearsalPreset = await json("/api/stream-presets/apply", {
     method: "POST",
     body: { id: "local-bot-rehearsal" }
@@ -389,6 +397,7 @@ async function runSmoke() {
   const operatorMessages = await json("/api/operator-messages");
   assert(operatorMessages.ok === true, "operator message route exists");
   assert(operatorMessages.templates.some((template) => template.id === "technical-pause"), "operator messages include technical pause preset");
+  assert(operatorMessages.templates.some((template) => template.id === "brb"), "operator macros include BRB preset");
   assert(operatorMessages.templates.some((template) => template.requiresConfirmation === true), "operator messages mark high-impact presets");
   const savedOperatorMessages = await json("/api/operator-messages", {
     method: "POST",
@@ -417,6 +426,32 @@ async function runSmoke() {
     resetOperatorMessages.templates.every((template) => !template.customized),
     "operator message presets can reset to defaults"
   );
+
+  const safeBotConfig = await json("/api/bot-config/export");
+  assert(safeBotConfig.ok === true, "safe bot config export route returns ok");
+  assert(safeBotConfig.includesSecrets === false, "safe bot config export marks secrets excluded");
+  assert(Array.isArray(safeBotConfig.commands), "safe bot config export includes commands array");
+  assert(Array.isArray(safeBotConfig.timers), "safe bot config export includes timers array");
+  assert(!JSON.stringify(safeBotConfig).includes("fake-client-secret"), "safe bot config export does not leak saved client secret");
+  const importedBotConfig = await json("/api/bot-config/import", {
+    method: "POST",
+    body: {
+      timers: [{
+        name: "Bundle reminder",
+        message: "Safe imported reminder.",
+        intervalMinutes: 10,
+        minChatMessages: 2,
+        enabled: false
+      }],
+      operatorMacros: [{
+        id: "thanks",
+        template: "Imported thanks macro."
+      }]
+    }
+  });
+  assert(importedBotConfig.ok === true, "safe bot config import route returns ok");
+  assert(importedBotConfig.imported.timers === 1, "safe bot config import can import timers");
+  assert(importedBotConfig.imported.operatorMacros === 1, "safe bot config import can import operator macros");
 
   const preflight = await json("/api/preflight", { method: "POST" });
   assert(Array.isArray(preflight.checks), "preflight returns check list");

@@ -35,6 +35,7 @@ async function runSmoke() {
   assert(appJs.includes("boundary-aware matching"), "Moderation tab explains safer phrase matching");
   assert(appJs.includes("Temporary Link Permits"), "Moderation tab exposes link permits");
   assert(appJs.includes("Timeout seconds"), "Moderation tab exposes timeout duration");
+  assert(appJs.includes("Escalation"), "Moderation tab exposes repeat-hit escalation");
   assert(appJs.includes("moderator:manage:chat_messages"), "Moderation tab exposes delete scope status");
   assert(appJs.includes("moderator:manage:banned_users"), "Moderation tab exposes timeout scope status");
 
@@ -46,6 +47,8 @@ async function runSmoke() {
   assert(initial.settings.blockedTermsAction === "warn", "blocked phrase action defaults warn");
   assert(initial.settings.linkFilterAction === "warn", "link action defaults warn");
   assert(initial.settings.timeoutSeconds === 60, "timeout duration defaults safely");
+  assert(initial.settings.escalationEnabled === false, "repeat-hit escalation defaults off");
+  assert(initial.summary.escalation === "off", "repeat-hit escalation summary defaults off");
   assert(initial.settings.exemptBroadcaster === true, "broadcaster exemption defaults on");
   assert(initial.settings.exemptModerators === true, "moderator exemption defaults on");
   assert(initial.settings.exemptSubscribers === false, "subscriber exemption defaults off");
@@ -85,6 +88,10 @@ async function runSmoke() {
     repeatLimit: 3,
     symbolMinLength: 8,
     symbolRatio: 0.6,
+    escalationEnabled: true,
+    escalationWindowSeconds: 300,
+    escalationDeleteAfter: 2,
+    escalationTimeoutAfter: 3,
     exemptBroadcaster: true,
     exemptModerators: true,
     exemptVips: true,
@@ -94,6 +101,8 @@ async function runSmoke() {
   assert(saved.summary.filtersEnabled === 5, "moderation filters can be enabled");
   assert(saved.summary.enforcementFilters === 2, "delete and timeout actions can be assigned per filter");
   assert(saved.settings.timeoutSeconds === 90, "timeout duration can be saved");
+  assert(saved.settings.escalationEnabled === true, "repeat-hit escalation can be enabled");
+  assert(saved.summary.escalation === "2/3 in 300s", "repeat-hit escalation summary is readable");
   assert(saved.summary.roleExemptions === 3, "trusted role exemptions are counted");
 
   const allowedDomain = await post("/api/moderation/allowed-links", {
@@ -288,6 +297,36 @@ async function runDirectEnforcementSmoke() {
       text: "!enter blocked.example"
     }));
     assert(protectedCommand.skipped === true, "protected giveaway entry remains enforcement-exempt");
+
+    service.saveSettings({
+      linkFilterEnabled: true,
+      linkFilterAction: "warn",
+      escalationEnabled: true,
+      escalationWindowSeconds: 300,
+      escalationDeleteAfter: 2,
+      escalationTimeoutAfter: 3,
+      timeoutSeconds: 120
+    }, chatMessage({ userLogin: "operator", text: "!setup" }));
+    const escalationActor = chatMessage({
+      id: "msg-escalation-1",
+      userId: "user-escalation",
+      userLogin: "escalating",
+      text: "visit repeated.example"
+    });
+    const firstEscalationHit = service.evaluate(escalationActor);
+    const secondEscalationHit = service.evaluate({
+      ...escalationActor,
+      id: "msg-escalation-2"
+    });
+    const thirdEscalationHit = service.evaluate({
+      ...escalationActor,
+      id: "msg-escalation-3"
+    });
+    assert(firstEscalationHit.hit?.action === "warn", "escalation starts with base warn action");
+    assert(secondEscalationHit.hit?.action === "delete", "second recent hit escalates to delete");
+    assert(secondEscalationHit.hit?.escalation?.hitsInWindow === 2, "delete escalation reports hit count");
+    assert(thirdEscalationHit.hit?.action === "timeout", "third recent hit escalates to timeout");
+    assert(thirdEscalationHit.hit?.timeoutSeconds === 120, "timeout escalation preserves configured timeout duration");
 
     service.recordEnforcement(actor, evaluation.hit, {
       action: "timeout",

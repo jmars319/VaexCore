@@ -2,10 +2,14 @@ import type { DbClient } from "../db/client";
 import { limits, sanitizeChatMessage } from "./security";
 
 export type OperatorMessageTemplateId =
+  | "welcome"
+  | "brb"
   | "giveaway-soon"
   | "giveaway-reminder"
   | "manual-delivery"
   | "technical-pause"
+  | "ending-soon"
+  | "raid-transition"
   | "thanks";
 
 type OperatorMessageTemplateDefinition = {
@@ -23,6 +27,20 @@ type OperatorMessageTemplateRow = {
 };
 
 export const operatorMessageTemplateDefinitions: OperatorMessageTemplateDefinition[] = [
+  {
+    id: "welcome",
+    label: "Welcome",
+    description: "A simple opener for stream start or a fresh wave of chat.",
+    defaultTemplate: "Welcome in. Grab a spot, say hi, and enjoy the stream.",
+    requiresConfirmation: false
+  },
+  {
+    id: "brb",
+    label: "BRB",
+    description: "A calm hold message when the stream steps away briefly.",
+    defaultTemplate: "Taking a quick break. I will be right back.",
+    requiresConfirmation: false
+  },
   {
     id: "giveaway-soon",
     label: "Giveaway starting soon",
@@ -49,6 +67,20 @@ export const operatorMessageTemplateDefinitions: OperatorMessageTemplateDefiniti
     label: "Technical pause",
     description: "Use only when chat needs to know stream operations are paused.",
     defaultTemplate: "Quick technical pause. Thanks for holding while I check something.",
+    requiresConfirmation: true
+  },
+  {
+    id: "ending-soon",
+    label: "Ending soon",
+    description: "A light closing notice before wrapping the stream.",
+    defaultTemplate: "We are getting close to wrapping up. Thanks for being here tonight.",
+    requiresConfirmation: false
+  },
+  {
+    id: "raid-transition",
+    label: "Raid transition",
+    description: "A controlled handoff message before sending chat elsewhere.",
+    defaultTemplate: "Raid coming up soon. Keep it respectful and bring good energy.",
     requiresConfirmation: true
   },
   {
