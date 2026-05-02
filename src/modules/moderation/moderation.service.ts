@@ -20,7 +20,9 @@ const moderationLimits = {
   hitLimit: 100,
   linkPermitLimit: 100,
   repeatMemoryMax: 50,
-  warningCooldownMs: 60_000
+  warningCooldownMs: 60_000,
+  timeoutMinSeconds: 10,
+  timeoutMaxSeconds: 1200
 } as const;
 
 export type ModerationFilterType =
@@ -30,13 +32,21 @@ export type ModerationFilterType =
   | "repeat"
   | "symbols";
 
+export type ModerationAction = "warn" | "delete" | "timeout";
+
 export type ModerationSettings = {
   blockedTermsEnabled: boolean;
   linkFilterEnabled: boolean;
   capsFilterEnabled: boolean;
   repeatFilterEnabled: boolean;
   symbolFilterEnabled: boolean;
-  action: "warn";
+  action: ModerationAction;
+  blockedTermsAction: ModerationAction;
+  linkFilterAction: ModerationAction;
+  capsFilterAction: ModerationAction;
+  repeatFilterAction: ModerationAction;
+  symbolFilterAction: ModerationAction;
+  timeoutSeconds: number;
   warningMessage: string;
   capsMinLength: number;
   capsRatio: number;
@@ -62,7 +72,7 @@ export type ModerationTerm = {
 export type ModerationHit = {
   id: number;
   filterType: string;
-  action: "warn";
+  action: ModerationAction;
   userKey: string;
   userLogin: string;
   messagePreview: string;
@@ -94,7 +104,13 @@ type ModerationSettingsRow = {
   caps_filter_enabled: number;
   repeat_filter_enabled: number;
   symbol_filter_enabled: number;
-  action: "warn";
+  action: ModerationAction;
+  blocked_terms_action: ModerationAction;
+  link_filter_action: ModerationAction;
+  caps_filter_action: ModerationAction;
+  repeat_filter_action: ModerationAction;
+  symbol_filter_action: ModerationAction;
+  timeout_seconds: number;
   warning_message: string;
   caps_min_length: number;
   caps_ratio: number;
@@ -120,7 +136,7 @@ type ModerationTermRow = {
 type ModerationHitRow = {
   id: number;
   filter_type: string;
-  action: "warn";
+  action: ModerationAction;
   user_key: string;
   user_login: string;
   message_preview: string;
@@ -162,10 +178,44 @@ export type ModerationEvaluation = {
   };
   hit?: {
     filterTypes: ModerationFilterType[];
-    action: "warn";
+    action: ModerationAction;
+    filterActions: Array<{
+      filterType: ModerationFilterType;
+      action: ModerationAction;
+    }>;
     detail: string;
     warningMessage: string;
+    timeoutSeconds?: number;
   };
+};
+
+export type ModerationEnforcementCapabilities = {
+  canDeleteMessages: boolean;
+  canTimeoutUsers: boolean;
+  deleteUnavailableReason?: string;
+  timeoutUnavailableReason?: string;
+};
+
+export type ModerationEnforcementPlan =
+  | {
+      status: "skipped" | "blocked";
+      action: ModerationAction;
+      reason: string;
+      durationSeconds?: number;
+    }
+  | {
+      status: "ready";
+      action: "delete" | "timeout";
+      reason: string;
+      durationSeconds?: number;
+    };
+
+export type ModerationEnforcementOutcome = {
+  action: ModerationAction;
+  status: "skipped" | "blocked" | "succeeded" | "failed";
+  reason: string;
+  durationSeconds?: number;
+  statusCode?: number;
 };
 
 export class ModerationService {
@@ -210,6 +260,8 @@ export class ModerationService {
           settings.repeatFilterEnabled,
           settings.symbolFilterEnabled
         ].filter(Boolean).length,
+        enforcementFilters: enabledEnforcementFilterNames(settings).length,
+        timeoutSeconds: settings.timeoutSeconds,
         hits: hits.length
       }
     };
@@ -237,6 +289,32 @@ export class ModerationService {
       repeatFilterEnabled: booleanValue(body.repeatFilterEnabled, current.repeatFilterEnabled),
       symbolFilterEnabled: booleanValue(body.symbolFilterEnabled, current.symbolFilterEnabled),
       action: "warn",
+      blockedTermsAction: normalizeModerationAction(
+        body.blockedTermsAction ?? current.blockedTermsAction,
+        current.blockedTermsAction
+      ),
+      linkFilterAction: normalizeModerationAction(
+        body.linkFilterAction ?? current.linkFilterAction,
+        current.linkFilterAction
+      ),
+      capsFilterAction: normalizeModerationAction(
+        body.capsFilterAction ?? current.capsFilterAction,
+        current.capsFilterAction
+      ),
+      repeatFilterAction: normalizeModerationAction(
+        body.repeatFilterAction ?? current.repeatFilterAction,
+        current.repeatFilterAction
+      ),
+      symbolFilterAction: normalizeModerationAction(
+        body.symbolFilterAction ?? current.symbolFilterAction,
+        current.symbolFilterAction
+      ),
+      timeoutSeconds: parseSafeInteger(body.timeoutSeconds, {
+        field: "Timeout seconds",
+        fallback: current.timeoutSeconds,
+        min: moderationLimits.timeoutMinSeconds,
+        max: moderationLimits.timeoutMaxSeconds
+      }),
       warningMessage: normalizeWarningMessage(body.warningMessage ?? current.warningMessage),
       capsMinLength: parseSafeInteger(body.capsMinLength, {
         field: "Caps minimum length",
@@ -282,6 +360,12 @@ export class ModerationService {
             repeat_filter_enabled,
             symbol_filter_enabled,
             action,
+            blocked_terms_action,
+            link_filter_action,
+            caps_filter_action,
+            repeat_filter_action,
+            symbol_filter_action,
+            timeout_seconds,
             warning_message,
             caps_min_length,
             caps_ratio,
@@ -302,6 +386,12 @@ export class ModerationService {
             @repeatFilterEnabled,
             @symbolFilterEnabled,
             'warn',
+            @blockedTermsAction,
+            @linkFilterAction,
+            @capsFilterAction,
+            @repeatFilterAction,
+            @symbolFilterAction,
+            @timeoutSeconds,
             @warningMessage,
             @capsMinLength,
             @capsRatio,
@@ -322,6 +412,12 @@ export class ModerationService {
             repeat_filter_enabled = excluded.repeat_filter_enabled,
             symbol_filter_enabled = excluded.symbol_filter_enabled,
             action = excluded.action,
+            blocked_terms_action = excluded.blocked_terms_action,
+            link_filter_action = excluded.link_filter_action,
+            caps_filter_action = excluded.caps_filter_action,
+            repeat_filter_action = excluded.repeat_filter_action,
+            symbol_filter_action = excluded.symbol_filter_action,
+            timeout_seconds = excluded.timeout_seconds,
             warning_message = excluded.warning_message,
             caps_min_length = excluded.caps_min_length,
             caps_ratio = excluded.caps_ratio,
@@ -342,6 +438,12 @@ export class ModerationService {
         capsFilterEnabled: settings.capsFilterEnabled ? 1 : 0,
         repeatFilterEnabled: settings.repeatFilterEnabled ? 1 : 0,
         symbolFilterEnabled: settings.symbolFilterEnabled ? 1 : 0,
+        blockedTermsAction: settings.blockedTermsAction,
+        linkFilterAction: settings.linkFilterAction,
+        capsFilterAction: settings.capsFilterAction,
+        repeatFilterAction: settings.repeatFilterAction,
+        symbolFilterAction: settings.symbolFilterAction,
+        timeoutSeconds: settings.timeoutSeconds,
         warningMessage: settings.warningMessage,
         capsMinLength: settings.capsMinLength,
         capsRatio: settings.capsRatio,
@@ -358,7 +460,9 @@ export class ModerationService {
 
     writeAuditLog(this.db, actor, "moderation.settings_update", "moderation:settings", {
       filtersEnabled: enabledFilterNames(settings),
-      roleExemptions: enabledExemptionNames(settings)
+      roleExemptions: enabledExemptionNames(settings),
+      enforcementFilters: enabledEnforcementFilterNames(settings),
+      timeoutSeconds: settings.timeoutSeconds
     });
 
     return this.getState();
@@ -697,10 +801,15 @@ export class ModerationService {
       field: "Moderation detail",
       maxLength: moderationLimits.detailLength
     });
+    const filterActions = matches.map((match) => ({
+      filterType: match.type,
+      action: match.action
+    }));
+    const action = strongestAction(filterActions.map((match) => match.action));
     const warningMessage = renderWarning(settings.warningMessage, message, detail);
 
     if (options.record !== false) {
-      this.recordHit(message, matches.map((match) => match.type), detail, warningMessage);
+      this.recordHit(message, matches.map((match) => match.type), action, detail, warningMessage);
     }
 
     return {
@@ -709,11 +818,115 @@ export class ModerationService {
       consumedPermit,
       hit: {
         filterTypes: matches.map((match) => match.type),
-        action: "warn",
+        action,
+        filterActions,
         detail,
-        warningMessage
+        warningMessage,
+        timeoutSeconds: action === "timeout" ? settings.timeoutSeconds : undefined
       }
     };
+  }
+
+  planEnforcement(
+    message: ChatMessage,
+    hit: NonNullable<ModerationEvaluation["hit"]>,
+    capabilities: ModerationEnforcementCapabilities
+  ): ModerationEnforcementPlan {
+    if (hit.action === "warn") {
+      return {
+        status: "skipped",
+        action: "warn",
+        reason: "Filter action is warn only."
+      };
+    }
+
+    if (message.source !== "eventsub") {
+      return {
+        status: "blocked",
+        action: hit.action,
+        reason: "Enforcement only runs for live Twitch chat messages."
+      };
+    }
+
+    if (message.isBroadcaster || message.isMod) {
+      return {
+        status: "blocked",
+        action: hit.action,
+        reason: "Broadcaster and moderator messages are never deleted or timed out by filters."
+      };
+    }
+
+    if (hit.action === "delete") {
+      if (!message.id) {
+        return {
+          status: "blocked",
+          action: "delete",
+          reason: "Twitch message ID was missing."
+        };
+      }
+
+      if (!capabilities.canDeleteMessages) {
+        return {
+          status: "blocked",
+          action: "delete",
+          reason: capabilities.deleteUnavailableReason ?? "Delete scope is unavailable."
+        };
+      }
+
+      return {
+        status: "ready",
+        action: "delete",
+        reason: "Delete scope and message ID are available."
+      };
+    }
+
+    if (!message.userId) {
+      return {
+        status: "blocked",
+        action: "timeout",
+        reason: "Twitch user ID was missing.",
+        durationSeconds: hit.timeoutSeconds
+      };
+    }
+
+    if (!capabilities.canTimeoutUsers) {
+      return {
+        status: "blocked",
+        action: "timeout",
+        reason: capabilities.timeoutUnavailableReason ?? "Timeout scope is unavailable.",
+        durationSeconds: hit.timeoutSeconds
+      };
+    }
+
+    return {
+      status: "ready",
+      action: "timeout",
+      reason: "Timeout scope and user ID are available.",
+      durationSeconds: hit.timeoutSeconds
+    };
+  }
+
+  recordEnforcement(
+    message: ChatMessage,
+    hit: NonNullable<ModerationEvaluation["hit"]>,
+    outcome: ModerationEnforcementOutcome
+  ) {
+    const now = timestamp();
+    writeAuditLog(this.db, message, `moderation.${outcome.action}_${outcome.status}`, `moderation:${outcome.action}`, {
+      filterTypes: hit.filterTypes,
+      action: outcome.action,
+      status: outcome.status,
+      reason: sanitizeText(outcome.reason, {
+        field: "Moderation enforcement reason",
+        maxLength: moderationLimits.detailLength
+      }),
+      userLogin: message.userLogin,
+      messageId: message.id ?? "",
+      durationSeconds: outcome.durationSeconds,
+      statusCode: outcome.statusCode,
+      detail: hit.detail,
+      messagePreview: messagePreview(message.text)
+    }, { createdAt: now });
   }
 
   shouldWarn(message: ChatMessage, filterTypes: ModerationFilterType[]) {
@@ -736,7 +949,11 @@ export class ModerationService {
   ) {
     const text = message.text.trim();
     const lower = text.toLowerCase();
-    const matches: Array<{ type: ModerationFilterType; detail: string }> = [];
+    const matches: Array<{
+      type: ModerationFilterType;
+      action: ModerationAction;
+      detail: string;
+    }> = [];
     const allowedLinks: string[] = [];
     let consumedPermit: ModerationEvaluation["consumedPermit"] | undefined;
 
@@ -744,7 +961,11 @@ export class ModerationService {
       const term = this.enabledTerms().find((entry) => lower.includes(entry.term.toLowerCase()));
 
       if (term) {
-        matches.push({ type: "blocked_term", detail: `blocked term: ${term.term}` });
+        matches.push({
+          type: "blocked_term",
+          action: settings.blockedTermsAction,
+          detail: `blocked term: ${term.term}`
+        });
       }
     }
 
@@ -754,20 +975,24 @@ export class ModerationService {
       consumedPermit = linkResult.consumedPermit;
 
       if (linkResult.blocked.length) {
-        matches.push({ type: "link", detail: `link detected: ${linkResult.blocked.join(", ")}` });
+        matches.push({
+          type: "link",
+          action: settings.linkFilterAction,
+          detail: `link detected: ${linkResult.blocked.join(", ")}`
+        });
       }
     }
 
     if (settings.capsFilterEnabled && isExcessiveCaps(text, settings)) {
-      matches.push({ type: "caps", detail: "excessive caps" });
+      matches.push({ type: "caps", action: settings.capsFilterAction, detail: "excessive caps" });
     }
 
     if (settings.repeatFilterEnabled && this.isRepeatedMessage(message, settings)) {
-      matches.push({ type: "repeat", detail: "repeated message" });
+      matches.push({ type: "repeat", action: settings.repeatFilterAction, detail: "repeated message" });
     }
 
     if (settings.symbolFilterEnabled && isExcessiveSymbols(text, settings)) {
-      matches.push({ type: "symbols", detail: "excessive symbols" });
+      matches.push({ type: "symbols", action: settings.symbolFilterAction, detail: "excessive symbols" });
     }
 
     return { matches, allowedLinks, consumedPermit };
@@ -784,6 +1009,7 @@ export class ModerationService {
   private recordHit(
     message: ChatMessage,
     filterTypes: ModerationFilterType[],
+    action: ModerationAction,
     detail: string,
     warningMessage: string
   ) {
@@ -803,7 +1029,7 @@ export class ModerationService {
             created_at
           ) VALUES (
             @filterType,
-            'warn',
+            @action,
             @userKey,
             @userLogin,
             @messagePreview,
@@ -814,6 +1040,7 @@ export class ModerationService {
       )
       .run({
         filterType: filterTypes.join(","),
+        action,
         userKey: userKey(message),
         userLogin: message.userLogin,
         messagePreview: preview,
@@ -823,7 +1050,7 @@ export class ModerationService {
 
     writeAuditLog(this.db, message, "moderation.hit", `moderation:${filterTypes.join(",")}`, {
       filterTypes,
-      action: "warn",
+      action,
       userLogin: message.userLogin,
       detail,
       messagePreview: preview,
@@ -1040,6 +1267,12 @@ const defaultSettings = (): ModerationSettings => ({
   repeatFilterEnabled: false,
   symbolFilterEnabled: false,
   action: "warn",
+  blockedTermsAction: "warn",
+  linkFilterAction: "warn",
+  capsFilterAction: "warn",
+  repeatFilterAction: "warn",
+  symbolFilterAction: "warn",
+  timeoutSeconds: 60,
   warningMessage: "@{user}, please keep chat within channel guidelines.",
   capsMinLength: 20,
   capsRatio: 0.75,
@@ -1061,6 +1294,12 @@ const settingsFromRow = (row: ModerationSettingsRow): ModerationSettings => ({
   repeatFilterEnabled: row.repeat_filter_enabled === 1,
   symbolFilterEnabled: row.symbol_filter_enabled === 1,
   action: "warn",
+  blockedTermsAction: normalizeStoredModerationAction(row.blocked_terms_action),
+  linkFilterAction: normalizeStoredModerationAction(row.link_filter_action),
+  capsFilterAction: normalizeStoredModerationAction(row.caps_filter_action),
+  repeatFilterAction: normalizeStoredModerationAction(row.repeat_filter_action),
+  symbolFilterAction: normalizeStoredModerationAction(row.symbol_filter_action),
+  timeoutSeconds: clampTimeoutSeconds(row.timeout_seconds),
   warningMessage: row.warning_message,
   capsMinLength: row.caps_min_length,
   capsRatio: row.caps_ratio,
@@ -1149,6 +1388,36 @@ const normalizeWarningMessage = (value: unknown) => {
 const booleanValue = (value: unknown, fallback: boolean) =>
   value === undefined ? fallback : Boolean(value);
 
+const moderationActions = new Set<ModerationAction>(["warn", "delete", "timeout"]);
+
+const normalizeModerationAction = (value: unknown, fallback: ModerationAction) => {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  if (typeof value === "string" && moderationActions.has(value as ModerationAction)) {
+    return value as ModerationAction;
+  }
+
+  throw new Error("Moderation action must be warn, delete, or timeout.");
+};
+
+const normalizeStoredModerationAction = (value: unknown): ModerationAction =>
+  normalizeModerationAction(value, "warn");
+
+const clampTimeoutSeconds = (value: unknown) => {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return 60;
+  }
+
+  return Math.min(
+    moderationLimits.timeoutMaxSeconds,
+    Math.max(moderationLimits.timeoutMinSeconds, Math.trunc(parsed))
+  );
+};
+
 const ratioValue = (value: unknown, fallback: number, field: string) => {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -1177,6 +1446,36 @@ const enabledExemptionNames = (settings: ModerationSettings) => [
   settings.exemptVips ? "vips" : undefined,
   settings.exemptSubscribers ? "subscribers" : undefined
 ].filter(Boolean);
+
+const enabledEnforcementFilterNames = (settings: ModerationSettings) => [
+  settings.blockedTermsEnabled && settings.blockedTermsAction !== "warn"
+    ? `blocked_terms:${settings.blockedTermsAction}`
+    : undefined,
+  settings.linkFilterEnabled && settings.linkFilterAction !== "warn"
+    ? `links:${settings.linkFilterAction}`
+    : undefined,
+  settings.capsFilterEnabled && settings.capsFilterAction !== "warn"
+    ? `caps:${settings.capsFilterAction}`
+    : undefined,
+  settings.repeatFilterEnabled && settings.repeatFilterAction !== "warn"
+    ? `repeat:${settings.repeatFilterAction}`
+    : undefined,
+  settings.symbolFilterEnabled && settings.symbolFilterAction !== "warn"
+    ? `symbols:${settings.symbolFilterAction}`
+    : undefined
+].filter(Boolean);
+
+const actionRank: Record<ModerationAction, number> = {
+  warn: 0,
+  delete: 1,
+  timeout: 2
+};
+
+const strongestAction = (actions: ModerationAction[]): ModerationAction =>
+  actions.reduce<ModerationAction>(
+    (strongest, action) => actionRank[action] > actionRank[strongest] ? action : strongest,
+    "warn"
+  );
 
 const findLinkDomains = (text: string) => {
   const matches = text.matchAll(

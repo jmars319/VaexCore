@@ -6,6 +6,15 @@ import { createOutboundHistory } from "./outboundHistory";
 import { createFeatureGateStore } from "./featureGates";
 import { TwitchEventSubClient } from "../twitch/eventsub";
 import { TwitchChatSender } from "../twitch/sendMessage";
+import {
+  optionalModerationScopes,
+  validateLiveTwitch,
+  type TokenValidation
+} from "../twitch/validate";
+import {
+  TwitchModerationClient,
+  type TwitchModerationResult
+} from "../twitch/moderation";
 import type { ChatMessage } from "./chatMessage";
 import { StartupChecklist } from "./startupChecklist";
 import { createDbClient, type DbClient } from "../db/client";
@@ -15,7 +24,6 @@ import { ModerationService } from "../modules/moderation/moderation.module";
 import { TimerScheduler, TimersService } from "../modules/timers/timers.module";
 import { createRuntimeStatus, type RuntimeStatus } from "./runtimeStatus";
 import { registerStatusCommands } from "./statusCommands";
-import { validateLiveTwitch } from "../twitch/validate";
 import {
   isInvalidTwitchAccessTokenError,
   refreshStoredTwitchToken
@@ -36,8 +44,10 @@ export class VaexCoreBot {
   private readonly runtimeStatus: RuntimeStatus;
   private readonly timerScheduler: TimerScheduler;
   private readonly moderationService: ModerationService;
+  private readonly moderationClient: TwitchModerationClient;
   private pendingLivePingConfirmation = false;
   private twitchAccessToken: string;
+  private twitchTokenScopes: string[] = [];
 
   constructor(private readonly options: BotOptions) {
     this.twitchAccessToken = options.env.twitchUserAccessToken;
@@ -57,6 +67,13 @@ export class VaexCoreBot {
       onHealthyChange: (healthy) => {
         this.runtimeStatus.outboundHealthy = healthy;
       }
+    });
+    this.moderationClient = new TwitchModerationClient({
+      clientId: options.env.twitchClientId,
+      accessTokenProvider: () => this.twitchAccessToken,
+      broadcasterId: options.env.twitchBroadcasterUserId,
+      moderatorId: options.env.twitchBotUserId,
+      logger: options.logger
     });
 
     this.messageQueue = new MessageQueue({
@@ -197,7 +214,8 @@ export class VaexCoreBot {
 
   private async validateLiveTwitchWithRefresh() {
     try {
-      await this.validateLiveTwitchWithCurrentToken();
+      const validation = await this.validateLiveTwitchWithCurrentToken();
+      this.updateTokenScopes(validation.token);
       return;
     } catch (error) {
       if (!isInvalidTwitchAccessTokenError(error)) {
@@ -210,7 +228,8 @@ export class VaexCoreBot {
         throw error;
       }
 
-      await this.validateLiveTwitchWithCurrentToken();
+      const validation = await this.validateLiveTwitchWithCurrentToken();
+      this.updateTokenScopes(validation.token);
     }
   }
 
@@ -259,6 +278,7 @@ export class VaexCoreBot {
       }
 
       this.twitchAccessToken = refreshed.twitch.accessToken;
+      this.twitchTokenScopes = refreshed.twitch.scopes ?? this.twitchTokenScopes;
       this.options.logger.warn(
         { reason },
         "Twitch OAuth token refreshed for live bot runtime"
@@ -312,20 +332,121 @@ export class VaexCoreBot {
     try {
       const result = this.moderationService.evaluate(message);
 
-      if (!result.hit || !this.moderationService.shouldWarn(message, result.hit.filterTypes)) {
+      if (!result.hit) {
         return;
       }
 
-      this.messageQueue.enqueue(result.hit.warningMessage, {
-        category: "system",
-        action: "moderation:warn",
-        importance: "normal"
-      });
+      await this.enforceModeration(message, result.hit);
+
+      if (this.moderationService.shouldWarn(message, result.hit.filterTypes)) {
+        this.messageQueue.enqueue(result.hit.warningMessage, {
+          category: "system",
+          action: `moderation:${result.hit.action}`,
+          importance: "normal"
+        });
+      }
     } catch (error) {
       this.options.logger.warn(
         { error: redactSecrets(error), userLogin: message.userLogin },
         "Moderation filters failed open"
       );
     }
+  }
+
+  private async enforceModeration(
+    message: ChatMessage,
+    hit: NonNullable<ReturnType<ModerationService["evaluate"]>["hit"]>
+  ) {
+    const plan = this.moderationService.planEnforcement(
+      message,
+      hit,
+      this.moderationCapabilities()
+    );
+
+    if (plan.status === "skipped") {
+      return;
+    }
+
+    if (plan.status === "blocked") {
+      this.moderationService.recordEnforcement(message, hit, {
+        action: plan.action,
+        status: plan.status,
+        reason: plan.reason,
+        durationSeconds: plan.durationSeconds
+      });
+      return;
+    }
+
+    if (plan.action !== "delete" && plan.action !== "timeout") {
+      return;
+    }
+
+    const result = await this.runModerationApiAction(message, hit, plan.action);
+
+    this.moderationService.recordEnforcement(message, hit, {
+      action: plan.action,
+      status: result.ok ? "succeeded" : "failed",
+      reason: result.ok ? plan.reason : result.reason,
+      durationSeconds: plan.durationSeconds,
+      statusCode: result.ok ? undefined : result.status
+    });
+  }
+
+  private async runModerationApiAction(
+    message: ChatMessage,
+    hit: NonNullable<ReturnType<ModerationService["evaluate"]>["hit"]>,
+    action: "delete" | "timeout"
+  ): Promise<TwitchModerationResult> {
+    const result = action === "delete"
+      ? await this.moderationClient.deleteMessage(message.id ?? "")
+      : await this.moderationClient.timeoutUser({
+          userId: message.userId,
+          durationSeconds: hit.timeoutSeconds ?? 60,
+          reason: hit.detail
+        });
+
+    if (result.ok || result.failureCategory !== "auth") {
+      return result;
+    }
+
+    const refreshed = await this.refreshRuntimeAccessToken(`moderation ${action}`);
+
+    if (!refreshed) {
+      return result;
+    }
+
+    this.options.logger.warn(
+      { action },
+      "Moderation API auth failed; token refreshed and action will be retried once"
+    );
+
+    return action === "delete"
+      ? this.moderationClient.deleteMessage(message.id ?? "")
+      : this.moderationClient.timeoutUser({
+          userId: message.userId,
+          durationSeconds: hit.timeoutSeconds ?? 60,
+          reason: hit.detail
+        });
+  }
+
+  private moderationCapabilities() {
+    const hasScope = (scope: string) => this.twitchTokenScopes.includes(scope);
+    const deleteScope = optionalModerationScopes[0];
+    const timeoutScope = optionalModerationScopes[1];
+
+    return {
+      canDeleteMessages: hasScope(deleteScope),
+      canTimeoutUsers: hasScope(timeoutScope),
+      deleteUnavailableReason: hasScope(deleteScope)
+        ? undefined
+        : `Reconnect Twitch with ${deleteScope} to enable message deletion.`,
+      timeoutUnavailableReason: hasScope(timeoutScope)
+        ? undefined
+        : `Reconnect Twitch with ${timeoutScope} to enable timeouts.`
+    };
+  }
+
+  private updateTokenScopes(token: TokenValidation) {
+    this.twitchTokenScopes = token.scopes;
   }
 }

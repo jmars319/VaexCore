@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Milestone 42: scoped moderation enforcement with per-filter warn/delete/timeout actions, optional Twitch moderation scopes, fail-open enforcement planning, audit entries for blocked/succeeded/failed actions, UI capability status, and smoke coverage for missing-scope and protected-command behavior.
+
 ## 0.1.2 - Bot replacement readiness release
 
 Current release state: unsigned tester release for local bot replacement rehearsal and stream-ready feature gates.

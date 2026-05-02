@@ -32,14 +32,23 @@ async function runSmoke() {
   assert(appJs.includes("Trusted Roles"), "Moderation tab exposes trusted role exemptions");
   assert(appJs.includes("Allowed Link Domains"), "Moderation tab exposes allowed link domains");
   assert(appJs.includes("Temporary Link Permits"), "Moderation tab exposes link permits");
+  assert(appJs.includes("Timeout seconds"), "Moderation tab exposes timeout duration");
+  assert(appJs.includes("moderator:manage:chat_messages"), "Moderation tab exposes delete scope status");
+  assert(appJs.includes("moderator:manage:banned_users"), "Moderation tab exposes timeout scope status");
 
   const initial = await json("/api/moderation");
   assert(initial.ok === true, "moderation route returns ok");
   assert(initial.featureGate.mode === "off", "moderation feature gate defaults off");
   assert(initial.summary.filtersEnabled === 0, "all moderation filters default off");
+  assert(initial.summary.enforcementFilters === 0, "enforcement actions default off");
+  assert(initial.settings.blockedTermsAction === "warn", "blocked phrase action defaults warn");
+  assert(initial.settings.linkFilterAction === "warn", "link action defaults warn");
+  assert(initial.settings.timeoutSeconds === 60, "timeout duration defaults safely");
   assert(initial.settings.exemptBroadcaster === true, "broadcaster exemption defaults on");
   assert(initial.settings.exemptModerators === true, "moderator exemption defaults on");
   assert(initial.settings.exemptSubscribers === false, "subscriber exemption defaults off");
+  assert(initial.enforcement.deleteMessages.available === false, "delete enforcement is unavailable without setup");
+  assert(initial.enforcement.timeoutUsers.available === false, "timeout enforcement is unavailable without setup");
 
   const term = await post("/api/moderation/terms", {
     term: "spoiler",
@@ -54,6 +63,12 @@ async function runSmoke() {
     capsFilterEnabled: true,
     repeatFilterEnabled: true,
     symbolFilterEnabled: true,
+    blockedTermsAction: "delete",
+    linkFilterAction: "timeout",
+    capsFilterAction: "warn",
+    repeatFilterAction: "warn",
+    symbolFilterAction: "warn",
+    timeoutSeconds: 90,
     warningMessage: "@{user}, warning: {reason}",
     capsMinLength: 8,
     capsRatio: 0.75,
@@ -68,6 +83,8 @@ async function runSmoke() {
   });
   assert(saved.ok === true, "moderation settings save");
   assert(saved.summary.filtersEnabled === 5, "moderation filters can be enabled");
+  assert(saved.summary.enforcementFilters === 2, "delete and timeout actions can be assigned per filter");
+  assert(saved.settings.timeoutSeconds === 90, "timeout duration can be saved");
   assert(saved.summary.roleExemptions === 3, "trusted role exemptions are counted");
 
   const allowedDomain = await post("/api/moderation/allowed-links", {
@@ -96,6 +113,7 @@ async function runSmoke() {
     text: "this has a spoiler"
   });
   assert(blocked.result.hit.filterTypes.includes("blocked_term"), "blocked phrase hit is detected");
+  assert(blocked.result.hit.action === "delete", "blocked phrase can resolve to delete action");
   assert(blocked.result.hit.warningMessage.includes("viewer"), "warning message renders user placeholder");
 
   const moderator = await post("/api/moderation/simulate", {
@@ -111,6 +129,8 @@ async function runSmoke() {
     text: "visit bad-example.net please"
   });
   assert(link.result.hit.filterTypes.includes("link"), "link filter hit is detected");
+  assert(link.result.hit.action === "timeout", "link filter can resolve to timeout action");
+  assert(link.result.hit.timeoutSeconds === 90, "timeout action reports bounded duration");
 
   const allowedLink = await post("/api/moderation/simulate", {
     actor: "viewer",
@@ -174,6 +194,91 @@ async function runSmoke() {
   assert(audit.logs.some((log) => log.action === "moderation.allowed_link_create"), "allowed link create is audited");
   assert(audit.logs.some((log) => log.action === "moderation.link_permit_create"), "link permit create is audited");
   assert(audit.logs.some((log) => log.action === "moderation.hit"), "moderation hit is audited");
+
+  await runDirectEnforcementSmoke();
+}
+
+async function runDirectEnforcementSmoke() {
+  const directDir = mkdtempSync(join(tmpdir(), "vaexcore-moderation-direct-"));
+  const directDbPath = join(directDir, "data/vaexcore.sqlite");
+  const { createDbClient } = await import(pathToFileURL(resolve("src/db/client.ts")).href);
+  const { createFeatureGateStore } = await import(pathToFileURL(resolve("src/core/featureGates.ts")).href);
+  const { ModerationService } = await import(pathToFileURL(resolve("src/modules/moderation/moderation.module.ts")).href);
+  const db = createDbClient(`file:${directDbPath}`);
+  const featureGates = createFeatureGateStore(db);
+  const actor = chatMessage({
+    id: "msg-1",
+    userId: "user-1",
+    userLogin: "viewer",
+    text: "visit blocked.example"
+  });
+
+  try {
+    featureGates.setMode("moderation_filters", "live", chatMessage({ userLogin: "operator", text: "!setup" }));
+    const service = new ModerationService(db, { featureGates, commandPrefix: "!" });
+    service.saveSettings({
+      linkFilterEnabled: true,
+      linkFilterAction: "timeout",
+      timeoutSeconds: 120
+    }, chatMessage({ userLogin: "operator", text: "!setup" }));
+
+    const evaluation = service.evaluate(actor);
+    assert(evaluation.hit?.action === "timeout", "direct service resolves timeout action");
+
+    const missingScope = service.planEnforcement(actor, evaluation.hit, {
+      canDeleteMessages: false,
+      canTimeoutUsers: false,
+      timeoutUnavailableReason: "missing timeout scope"
+    });
+    assert(missingScope.status === "blocked", "timeout enforcement blocks without scope");
+    assert(missingScope.reason.includes("missing timeout scope"), "missing-scope reason is actionable");
+
+    const ready = service.planEnforcement(actor, evaluation.hit, {
+      canDeleteMessages: false,
+      canTimeoutUsers: true
+    });
+    assert(ready.status === "ready", "timeout enforcement is ready with scope and user ID");
+    assert(ready.durationSeconds === 120, "timeout plan preserves configured duration");
+
+    const protectedCommand = service.evaluate(chatMessage({
+      id: "msg-2",
+      userId: "user-2",
+      userLogin: "viewer",
+      text: "!enter blocked.example"
+    }));
+    assert(protectedCommand.skipped === true, "protected giveaway entry remains enforcement-exempt");
+
+    service.recordEnforcement(actor, evaluation.hit, {
+      action: "timeout",
+      status: "blocked",
+      reason: "missing timeout scope",
+      durationSeconds: 120
+    });
+    const auditRows = db.prepare("SELECT action FROM audit_logs").all();
+    assert(auditRows.some((row) => row.action === "moderation.timeout_blocked"), "blocked enforcement is audited");
+  } finally {
+    db.close();
+    rmSync(directDir, { recursive: true, force: true });
+  }
+}
+
+function chatMessage(overrides = {}) {
+  const userLogin = overrides.userLogin || "viewer";
+  return {
+    id: overrides.id || "local-message",
+    text: overrides.text || "hello",
+    userId: overrides.userId || `id-${userLogin}`,
+    userLogin,
+    userDisplayName: userLogin,
+    broadcasterUserId: "broadcaster-id",
+    badges: [],
+    isBroadcaster: false,
+    isMod: false,
+    isVip: false,
+    isSubscriber: false,
+    source: overrides.source || "eventsub",
+    receivedAt: new Date()
+  };
 }
 
 async function post(path, body = {}) {

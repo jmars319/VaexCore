@@ -97,7 +97,7 @@ Open `Commands`, create a simple command such as `!discord`, add one response, c
 
 ## Bot Replacement Test
 
-Open `Dashboard` or `Live Mode`, apply `Local Bot Rehearsal`, then use starter commands, timer presets, and moderation local tests before enabling live timers or live moderation. `Bot Replacement` requires confirmation because it moves timers and warn-only moderation into live chat.
+Open `Dashboard` or `Live Mode`, apply `Local Bot Rehearsal`, then use starter commands, timer presets, and moderation local tests before enabling live timers or live moderation. `Bot Replacement` requires confirmation because it moves timers and scoped moderation into live chat. Delete and timeout actions stay unavailable until the optional Twitch moderation scopes are granted.
 
 ## Send A Support Bundle
 

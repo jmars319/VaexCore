@@ -1,6 +1,6 @@
 export const explainTwitchHttpError = async (
   response: Response,
-  context: "eventsub_chat_subscription" | "send_chat_message",
+  context: TwitchHttpErrorContext,
   alreadyReadBody?: string
 ) => {
   const body = alreadyReadBody ?? await response.text();
@@ -11,7 +11,7 @@ export const explainTwitchHttpError = async (
 
 const getHint = (
   status: number,
-  context: "eventsub_chat_subscription" | "send_chat_message"
+  context: TwitchHttpErrorContext
 ) => {
   if (context === "eventsub_chat_subscription") {
     if (status === 401 || status === 403) {
@@ -23,6 +23,28 @@ const getHint = (
     }
 
     return "Failed to create EventSub chat subscription.";
+  }
+
+  if (context === "moderation_delete") {
+    if (status === 401 || status === 403) {
+      return [
+        "Failed to delete Twitch chat message.",
+        "Reconnect Twitch with moderator:manage:chat_messages and verify the bot account moderates the channel."
+      ].join(" ");
+    }
+
+    return "Failed to delete Twitch chat message.";
+  }
+
+  if (context === "moderation_timeout") {
+    if (status === 401 || status === 403) {
+      return [
+        "Failed to timeout Twitch chat user.",
+        "Reconnect Twitch with moderator:manage:banned_users and verify the bot account moderates the channel."
+      ].join(" ");
+    }
+
+    return "Failed to timeout Twitch chat user.";
   }
 
   if (status === 401 || status === 403) {
@@ -39,3 +61,9 @@ const getHint = (
 
   return "Failed to send Twitch chat message.";
 };
+
+type TwitchHttpErrorContext =
+  | "eventsub_chat_subscription"
+  | "send_chat_message"
+  | "moderation_delete"
+  | "moderation_timeout";

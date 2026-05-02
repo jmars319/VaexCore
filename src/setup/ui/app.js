@@ -33,7 +33,8 @@ const state = {
   moderationAllowedLinks: [],
   moderationLinkPermits: [],
   moderationHits: [],
-  moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, hits: 0 },
+  moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 },
+  moderationEnforcement: null,
   moderationFeatureGate: null,
   streamPresets: [],
   featureGates: [],
@@ -1135,9 +1136,10 @@ function renderModeration() {
   const terms = state.moderationTerms || [];
   const allowedLinks = state.moderationAllowedLinks || [];
   const linkPermits = state.moderationLinkPermits || [];
+  const enforcement = state.moderationEnforcement || {};
 
   return [
-    sectionHeader("Moderation", "Lightweight local filters with warn-only actions and protected command exemptions.",
+    sectionHeader("Moderation", "Lightweight local filters with scoped warn, delete, and timeout actions.",
       h("div", { className: "actions section-actions" }, [
         actionButton("Refresh", { id: "refreshModeration", variant: "secondary", busyKey: "refresh", onClick: refreshAll })
       ])
@@ -1149,9 +1151,30 @@ function renderModeration() {
         ["Blocked phrases", `${state.moderationSummary.enabledTerms || 0}/${state.moderationSummary.terms || 0}`, true],
         ["Allowed domains", `${state.moderationSummary.enabledAllowedLinks || 0}/${state.moderationSummary.allowedLinks || 0}`, true],
         ["Active permits", state.moderationSummary.activeLinkPermits || 0, true],
-        ["Action", "warn only", true],
+        ["Enforced filters", state.moderationSummary.enforcementFilters || 0, true],
         ["Recent hits", state.moderationSummary.hits || 0, true]
       ]),
+      h("h3", { text: "Actions" }),
+      h("div", { className: "grid three" }, [
+        formRow("Blocked phrases", moderationActionSelect("blockedTermsAction")),
+        formRow("Links", moderationActionSelect("linkFilterAction")),
+        formRow("Excessive caps", moderationActionSelect("capsFilterAction")),
+        formRow("Repeated messages", moderationActionSelect("repeatFilterAction")),
+        formRow("Symbol spam", moderationActionSelect("symbolFilterAction")),
+        formRow("Timeout seconds", h("input", {
+          id: "timeoutSeconds",
+          type: "number",
+          min: "10",
+          max: "1200",
+          onInput: updateModerationDraft
+        }))
+      ]),
+      statusGrid([
+        ["Delete scope", enforcement.deleteMessages?.available ? "available" : "unavailable", Boolean(enforcement.deleteMessages?.available)],
+        ["Timeout scope", enforcement.timeoutUsers?.available ? "available" : "unavailable", Boolean(enforcement.timeoutUsers?.available)],
+        ["Live mode", enforcement.mode || "off", enforcement.mode === "live"]
+      ]),
+      callout(enforcement.nextAction || "Warn-only moderation works without optional enforcement scopes.", enforcement.missingScopes?.length ? "warn" : "info"),
       h("div", { className: "grid three" }, [
         h("label", { className: "inline-check" }, [
           h("input", { id: "blockedTermsEnabled", type: "checkbox", onChange: updateModerationDraft }),
@@ -1206,7 +1229,7 @@ function renderModeration() {
           "Subscribers"
         ])
       ]),
-      callout("Moderation filters fail open and do not ban. Protected bot commands and active giveaway entry commands are exempt.", "info"),
+      callout("Moderation filters fail open and never ban. Protected bot commands and active giveaway entry commands are exempt. Warnings always use the outbound queue.", "info"),
       h("div", { className: "actions" }, [
         actionButton("Save moderation settings", { id: "saveModerationSettings", onClick: saveModerationSettings })
       ])
@@ -1296,6 +1319,14 @@ function renderModeration() {
     ]),
     message()
   ];
+}
+
+function moderationActionSelect(id) {
+  return h("select", { id, onChange: updateModerationDraft }, [
+    option("warn", "warn"),
+    option("delete", "delete"),
+    option("timeout", "timeout")
+  ]);
 }
 
 function renderGiveaways() {
@@ -1577,7 +1608,7 @@ function renderSetupGuide() {
         complete: progress.twitchConnected,
         disabled: !canConnect,
         children: [
-          h("p", { text: "Click Connect Twitch while logged into the Bot Login account to authorize VaexCore." }),
+          h("p", { text: "Click Connect Twitch while logged into the Bot Login account to authorize VaexCore for chat and optional scoped moderation actions." }),
           h("div", { className: "actions" }, [
             connectButton(config, "secondary", !canConnect),
             config.hasAccessToken ? actionButton("Disconnect Twitch", { id: "guideDisconnectTwitch", variant: "secondary", busyKey: "disconnectTwitch", onClick: disconnectTwitch }) : null
@@ -1587,7 +1618,9 @@ function renderSetupGuide() {
             ["Refresh token", config.hasRefreshToken ? "available" : "missing", config.hasRefreshToken],
             ["Bot account detected", config.hasBotUserId ? config.botLogin || "yes" : "not yet", config.hasBotUserId],
             ["user:read:chat", hasScope("user:read:chat") ? "granted" : "missing", hasScope("user:read:chat")],
-            ["user:write:chat", hasScope("user:write:chat") ? "granted" : "missing", hasScope("user:write:chat")]
+            ["user:write:chat", hasScope("user:write:chat") ? "granted" : "missing", hasScope("user:write:chat")],
+            ["moderator:manage:chat_messages", hasScope("moderator:manage:chat_messages") ? "granted" : "optional", true],
+            ["moderator:manage:banned_users", hasScope("moderator:manage:banned_users") ? "granted" : "optional", true]
           ]),
           config.hasAccessToken ? callout("VaexCore will refresh expired Twitch access tokens automatically. If refresh fails, disconnect and reconnect Twitch.", "info") : null,
           botLoginReconnectCallout(config),
@@ -2659,7 +2692,8 @@ function setModerationState(result = {}) {
   state.moderationAllowedLinks = result.allowedLinks || [];
   state.moderationLinkPermits = result.linkPermits || [];
   state.moderationHits = result.hits || [];
-  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, hits: 0 };
+  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 };
+  state.moderationEnforcement = result.enforcement || null;
   state.moderationFeatureGate = result.featureGate || state.moderationFeatureGate;
 }
 
@@ -3275,6 +3309,12 @@ function readModerationSettingsPayload() {
     capsFilterEnabled: Boolean(field("capsFilterEnabled")?.checked),
     repeatFilterEnabled: Boolean(field("repeatFilterEnabled")?.checked),
     symbolFilterEnabled: Boolean(field("symbolFilterEnabled")?.checked),
+    blockedTermsAction: field("blockedTermsAction")?.value || "warn",
+    linkFilterAction: field("linkFilterAction")?.value || "warn",
+    capsFilterAction: field("capsFilterAction")?.value || "warn",
+    repeatFilterAction: field("repeatFilterAction")?.value || "warn",
+    symbolFilterAction: field("symbolFilterAction")?.value || "warn",
+    timeoutSeconds: Number(field("timeoutSeconds")?.value || 60),
     warningMessage: field("moderationWarningMessage")?.value || "",
     capsMinLength: Number(field("capsMinLength")?.value || 20),
     capsRatio: Number(field("capsRatio")?.value || 0.75),
@@ -3659,6 +3699,8 @@ function renderModerationTestResult() {
     statusGrid([
       ["Result", result.hit ? "hit" : result.skipped ? "skipped" : "clear", !result.hit],
       ["Action", result.hit?.action || "none", !result.hit],
+      ["Filter actions", (result.hit?.filterActions || []).map((item) => `${item.filterType}:${item.action}`).join(", ") || "none", !result.hit],
+      ["Timeout", result.hit?.timeoutSeconds ? `${result.hit.timeoutSeconds}s` : "none", !result.hit],
       ["Allowed links", (result.allowedLinks || []).join(", ") || "none", !result.hit],
       ["Permit", result.consumedPermit ? `available for ${result.consumedPermit.userLogin}` : "none", !result.hit],
       ["Reason", result.hit?.detail || result.reason || "none", !result.hit]
@@ -3704,6 +3746,12 @@ function syncFormValues() {
   setChecked("capsFilterEnabled", Boolean(moderationValue("capsFilterEnabled", moderationSettings.capsFilterEnabled)));
   setChecked("repeatFilterEnabled", Boolean(moderationValue("repeatFilterEnabled", moderationSettings.repeatFilterEnabled)));
   setChecked("symbolFilterEnabled", Boolean(moderationValue("symbolFilterEnabled", moderationSettings.symbolFilterEnabled)));
+  setValue("blockedTermsAction", moderationValue("blockedTermsAction", moderationSettings.blockedTermsAction || "warn"));
+  setValue("linkFilterAction", moderationValue("linkFilterAction", moderationSettings.linkFilterAction || "warn"));
+  setValue("capsFilterAction", moderationValue("capsFilterAction", moderationSettings.capsFilterAction || "warn"));
+  setValue("repeatFilterAction", moderationValue("repeatFilterAction", moderationSettings.repeatFilterAction || "warn"));
+  setValue("symbolFilterAction", moderationValue("symbolFilterAction", moderationSettings.symbolFilterAction || "warn"));
+  setValue("timeoutSeconds", moderationValue("timeoutSeconds", moderationSettings.timeoutSeconds || 60));
   setValue("moderationWarningMessage", moderationValue("moderationWarningMessage", moderationSettings.warningMessage || "@{user}, please keep chat within channel guidelines."));
   setValue("capsMinLength", moderationValue("capsMinLength", moderationSettings.capsMinLength || 20));
   setValue("capsRatio", moderationValue("capsRatio", moderationSettings.capsRatio || 0.75));

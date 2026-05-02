@@ -1,5 +1,9 @@
 export { ModerationService } from "./moderation.service";
 export type {
+  ModerationAction,
+  ModerationEnforcementCapabilities,
+  ModerationEnforcementOutcome,
+  ModerationEnforcementPlan,
   ModerationEvaluation,
   ModerationAllowedLink,
   ModerationFilterType,

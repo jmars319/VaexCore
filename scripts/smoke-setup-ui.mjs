@@ -49,7 +49,8 @@ async function runSmoke() {
   assert(appJs.includes("Save timer"), "browser UI can save timers");
   assert(appJs.includes("Preset Starters"), "browser UI exposes timer presets");
   assert(appJs.includes("Export timers JSON"), "browser UI can export timers");
-  assert(appJs.includes("Lightweight local filters"), "browser UI exposes moderation filters");
+  assert(appJs.includes("scoped warn, delete, and timeout actions"), "browser UI exposes moderation filters");
+  assert(appJs.includes("moderator:manage:chat_messages"), "browser UI exposes moderation delete scope status");
   assert(appJs.includes("Run moderation test"), "browser UI can test moderation filters");
   assert(appJs.includes("Allowed Link Domains"), "browser UI exposes moderation link allowlist");
   assert(appJs.includes("Temporary Link Permits"), "browser UI exposes moderation link permits");
@@ -184,6 +185,8 @@ async function runSmoke() {
   assert(initialModeration.ok === true, "moderation route exists");
   assert(initialModeration.featureGate.mode === "off", "moderation route returns feature gate");
   assert(initialModeration.summary.filtersEnabled === 0, "moderation filters default off");
+  assert(initialModeration.summary.enforcementFilters === 0, "moderation enforcement defaults off");
+  assert(initialModeration.enforcement.deleteMessages.available === false, "moderation delete enforcement reports unavailable before setup");
   assert(initialModeration.settings.exemptModerators === true, "moderation trusted role defaults are exposed");
   const rehearsalPreset = await json("/api/stream-presets/apply", {
     method: "POST",
@@ -300,6 +303,7 @@ async function runSmoke() {
   assert(authStart.status === 302, "OAuth start route exists");
   assert(authStart.headers.get("location")?.startsWith("https://id.twitch.tv/"), "OAuth start redirects to Twitch");
   assert(authStart.headers.get("location")?.includes("force_verify=true"), "OAuth start forces account verification");
+  assert(authStart.headers.get("location")?.includes("moderator%3Amanage%3Achat_messages"), "OAuth start requests optional delete scope");
 
   const authCallback = await fetch(`${baseUrl}/auth/twitch/callback?error=access_denied`, {
     redirect: "manual"

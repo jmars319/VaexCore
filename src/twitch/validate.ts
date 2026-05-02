@@ -3,6 +3,10 @@ import { createTwitchHeaders, type TwitchAuthOptions } from "./auth";
 import type { TwitchUser } from "./users";
 
 export const requiredTwitchScopes = ["user:read:chat", "user:write:chat"] as const;
+export const optionalModerationScopes = [
+  "moderator:manage:chat_messages",
+  "moderator:manage:banned_users"
+] as const;
 
 export type TokenValidation = {
   client_id: string;

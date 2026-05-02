@@ -44,7 +44,7 @@ export const featureGateDefinitions: FeatureGateDefinition[] = [
   {
     key: "moderation_filters",
     label: "Moderation filters",
-    description: "Local warn-only chat filters for blocked phrases, links, caps, repeats, and symbols.",
+    description: "Scoped chat filters for blocked phrases, links, caps, repeats, and symbols.",
     defaultMode: "off"
   }
 ];

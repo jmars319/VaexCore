@@ -72,6 +72,7 @@ import {
 import { TwitchChatSender } from "../twitch/sendMessage";
 import {
   getTwitchUserByLogin,
+  optionalModerationScopes,
   requiredTwitchScopes,
   validateToken
 } from "../twitch/validate";
@@ -772,6 +773,7 @@ const getSafeConfig = () => {
     botLogin: twitch.botLogin ?? "",
     redirectUri: twitch.redirectUri ?? defaultRedirectUri,
     requiredScopes: requiredTwitchScopes,
+    optionalModerationScopes,
     scopes: twitch.scopes,
     tokenExpiresAt: twitch.tokenExpiresAt ?? "",
     tokenValidatedAt: twitch.tokenValidatedAt ?? "",
@@ -855,7 +857,7 @@ const redirectToTwitch = (response: ServerResponse) => {
   authorizeUrl.searchParams.set("client_id", twitch.clientId);
   authorizeUrl.searchParams.set("redirect_uri", twitch.redirectUri ?? defaultRedirectUri);
   authorizeUrl.searchParams.set("response_type", "code");
-  authorizeUrl.searchParams.set("scope", requiredTwitchScopes.join(" "));
+  authorizeUrl.searchParams.set("scope", [...requiredTwitchScopes, ...optionalModerationScopes].join(" "));
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("force_verify", "true");
 
@@ -996,6 +998,17 @@ const validateSetup = async () => {
   } else {
     pass("Required scopes", token.scopes.join(", "));
   }
+
+  const missingModerationScopes = optionalModerationScopes.filter(
+    (scope) => !token.scopes.includes(scope)
+  );
+
+  pass(
+    "Moderation enforcement scopes",
+    missingModerationScopes.length
+      ? `Warn-only moderation works. Reconnect Twitch to grant optional scope(s): ${missingModerationScopes.join(", ")}.`
+      : "Delete and timeout enforcement scopes are present."
+  );
 
   const botLogin = activeTwitch.botLogin ?? twitch.botLogin;
   const broadcasterLogin = activeTwitch.broadcasterLogin ?? twitch.broadcasterLogin;
@@ -2956,7 +2969,53 @@ const inspectTimer = (
   };
 };
 
-const getModerationState = () => moderationService.getState();
+const getModerationState = () => ({
+  ...moderationService.getState(),
+  enforcement: getModerationEnforcementStatus()
+});
+
+const getModerationEnforcementStatus = () => {
+  const twitch = readLocalSecrets().twitch;
+  const hasScope = (scope: string) => (twitch.scopes ?? []).includes(scope);
+  const deleteScope = optionalModerationScopes[0];
+  const timeoutScope = optionalModerationScopes[1];
+  const identityReady = Boolean(
+    twitch.accessToken &&
+    twitch.clientId &&
+    twitch.broadcasterUserId &&
+    twitch.botUserId
+  );
+  const deleteReady = identityReady && hasScope(deleteScope);
+  const timeoutReady = identityReady && hasScope(timeoutScope);
+  const missingScopes = optionalModerationScopes.filter((scope) => !hasScope(scope));
+
+  return {
+    ok: true,
+    mode: featureGates.get("moderation_filters").mode,
+    deleteMessages: {
+      available: deleteReady,
+      scope: deleteScope,
+      reason: deleteReady
+        ? "Message deletion is available for live moderation hits."
+        : identityReady
+          ? `Reconnect Twitch with ${deleteScope} to enable message deletion.`
+          : "Complete Twitch setup and validation before message deletion can run."
+    },
+    timeoutUsers: {
+      available: timeoutReady,
+      scope: timeoutScope,
+      reason: timeoutReady
+        ? "Timeouts are available for live moderation hits."
+        : identityReady
+          ? `Reconnect Twitch with ${timeoutScope} to enable timeouts.`
+          : "Complete Twitch setup and validation before timeouts can run."
+    },
+    missingScopes,
+    nextAction: missingScopes.length
+      ? `Reconnect Twitch to grant optional moderation scope(s): ${missingScopes.join(", ")}.`
+      : "Choose delete or timeout actions per filter, test locally, then enable moderation live."
+  };
+};
 
 const saveModerationSettings = (body: unknown) => {
   try {

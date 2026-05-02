@@ -18,6 +18,8 @@ VaexCore is a quiet Twitch operations bot for commands, moderation, giveaways, a
 - A user access token for the bot account with:
   - `user:read:chat`
   - `user:write:chat`
+  - optional for moderation enforcement: `moderator:manage:chat_messages`
+  - optional for moderation enforcement: `moderator:manage:banned_users`
 
 ## Setup
 
@@ -43,6 +45,8 @@ The Twitch user access token must belong to the bot user and include these scope
 
 - `user:read:chat`
 - `user:write:chat`
+
+Optional moderation enforcement needs `moderator:manage:chat_messages` for deleting a hit message and `moderator:manage:banned_users` for timeouts. Missing optional moderation scopes do not block startup; VaexCore falls back to warning-only behavior and shows the reconnect step in the Moderation tab.
 
 `npm run check:env` validates that required values are present and catches local formatting mistakes, such as using an `oauth:` prefix. If `TWITCH_CLIENT_SECRET` and `TWITCH_REFRESH_TOKEN` are present, VaexCore imports them into the local OAuth store so future CLI starts can refresh expired access tokens. It cannot verify token scopes offline; Twitch confirms those when VaexCore creates the chat subscription and sends a message.
 
@@ -153,7 +157,7 @@ VaexCore LIVE MODE -- waiting for chat confirmation (!ping)
 Common live errors:
 
 - `401`: bad, expired, revoked, or wrong-account token. Generate a fresh user access token.
-- `403`: missing scopes. Re-auth the bot token with `user:read:chat` and `user:write:chat`.
+- `403`: missing scopes. Re-auth the bot token with the chat scopes; moderation delete/timeout actions also need their optional moderation scopes.
 - No chat messages received: check EventSub subscription logs, broadcaster ID, bot user ID, and token ownership.
 
 Enable `VAEXCORE_DEBUG=true` only when debugging. It logs truncated raw EventSub payloads and normalized chat messages.
@@ -180,7 +184,7 @@ The console is organized into durable sections:
 - `Live Mode`: compact stream-night state, live runbook, status-to-chat, panic resend, outbound failure logs, and recap copy.
 - `Commands`: create, edit, test, import, export, and audit local custom chat commands.
 - `Timers`: create, enable, disable, and monitor scheduled chat messages behind live readiness and queue guardrails.
-- `Moderation`: configure lightweight warn-only filters, blocked phrases, local simulations, and recent moderation hits.
+- `Moderation`: configure lightweight scoped filters, blocked phrases, local simulations, and recent moderation hits.
 - `Giveaways`: start, close, draw, reroll, claim, deliver, end giveaways, manage reminder timing, edit giveaway chat templates, and review the latest recap.
 - `Chat Tools`: send chat messages, send test messages, edit local operator message presets, and control optional chat echo.
 - `Testing`: simulate entrants and commands before using a live stream.
@@ -197,7 +201,7 @@ Dashboard and Live Mode include `Stream Night Presets` for common operating mode
 - `Giveaway Night`: custom commands live, timers off, moderation off
 - `Local Bot Rehearsal`: custom commands live, timers and moderation in local test mode
 - `Timers Live`: custom commands and timers live, moderation in local test mode
-- `Bot Replacement`: custom commands, timers, and warn-only moderation live
+- `Bot Replacement`: custom commands, timers, and scoped moderation live
 
 Presets only change feature gates, write audit entries, and require explicit confirmation before enabling timers or moderation in live chat.
 
@@ -249,13 +253,15 @@ Open `Moderation` to configure lightweight local filters. Moderation filters sup
 - repeated message detection
 - excessive symbol spam detection
 - trusted role exemptions for broadcaster, moderators, VIPs, and subscribers
-- warn-only action using the outbound queue
+- per-filter actions: warn, delete message, or timeout
+- scoped enforcement checks for Twitch delete and timeout permissions
+- warning messages using the outbound queue
 - local simulation before going live
 - recent moderation hit history and audit entries
 
-All moderation filters default off, and the `moderation_filters` feature gate defaults off. VaexCore does not ban automatically and does not use ML moderation or public blocklists. Protected bot commands and the active giveaway entry keyword are exempt so `!enter`, giveaway controls, and core commands stay predictable. Allowed domains and temporary link permits apply only to the local warn-only link filter.
+All moderation filters default off, and the `moderation_filters` feature gate defaults off. VaexCore does not ban automatically and does not use ML moderation or public blocklists. Protected bot commands and the active giveaway entry keyword are exempt so `!enter`, giveaway controls, and core commands stay predictable. Allowed domains and temporary link permits apply to the local link filter before enforcement is planned.
 
-Delete/timeout enforcement is intentionally not enabled yet because VaexCore does not currently have a properly scoped Twitch moderation API client. Current moderation responses are warnings only, and every warning uses the approved outbound queue.
+Delete and timeout actions only run in live EventSub chat after the feature gate is live, the message is not from a broadcaster or moderator, the needed Twitch IDs are present, and the OAuth token has the matching optional moderation scope. If any of those checks fail, moderation fails open, audits the blocked enforcement action, and warning messages still use the approved outbound queue.
 
 ## First-Time Setup (No Twitch Experience Required)
 
@@ -268,7 +274,7 @@ Open `Settings`, then use `Setup Guide`.
 3. Enter Twitch usernames.
    `Broadcaster Login` is the channel VaexCore operates in. `Bot Login` is the account that sends messages. They can be the same account or separate accounts. If they are separate, the Bot Login must be the account that grants OAuth in the next step.
 4. Connect Twitch.
-   Click `Connect Twitch` while logged into the Bot Login account and approve `user:read:chat` and `user:write:chat`. The Client ID and Client Secret belong to the Twitch Developer App, not to one authorized Twitch user.
+   Click `Connect Twitch` while logged into the Bot Login account and approve the chat scopes. Approve the optional moderation scopes too if you want delete or timeout enforcement. The Client ID and Client Secret belong to the Twitch Developer App, not to one authorized Twitch user.
    If Twitch authorizes the wrong account, click `Disconnect Twitch`, switch Twitch accounts in the browser, then connect again.
 5. Validate setup.
    Click `Validate Setup` and confirm token, scopes, bot identity, and broadcaster identity pass. VaexCore stores Twitch OAuth tokens locally and refreshes expired access tokens automatically when Twitch returns `401 Unauthorized`; if refresh fails, disconnect and reconnect Twitch.
@@ -317,14 +323,14 @@ In the `Settings` section:
 2. Enter Twitch client ID and client secret.
 3. Enter broadcaster login and bot login.
 4. Save settings.
-5. Connect Twitch while logged into the bot login account and approve `user:read:chat` and `user:write:chat`.
+5. Connect Twitch while logged into the bot login account and approve the chat scopes plus optional moderation scopes if you want delete or timeout enforcement.
 6. Validate setup.
 7. Send a setup test message from `Chat Tools`.
 
 Common setup errors:
 
 - `401`: bad, expired, or revoked token. VaexCore will try to refresh it automatically when a refresh token is available; if refresh fails, connect Twitch again.
-- `403`: missing scopes. Reconnect and approve both chat scopes.
+- `403`: missing scopes. Reconnect and approve both chat scopes. Approve optional moderation scopes before using delete or timeout actions.
 - Bot identity mismatch: click `Disconnect Twitch`, log into Twitch as the configured bot login, then connect again.
 - Redirect mismatch: the Twitch Developer app redirect URI does not exactly match `http://localhost:3434/auth/twitch/callback`.
 
@@ -371,7 +377,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Operator Messages` in Chat Tools stores local-only canned chat messages in SQLite for stream-safe communication. High-impact presets require confirmation and every send uses the same outbound queue, history, retry, and recovery path as giveaway chat.
 - `Commands` stores local-only custom chat commands in SQLite, with disabled starter presets, aliases, cooldowns, permission checks, response variants, usage history, import/export, and audit logging.
 - `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness plus clear queue health before sending.
-- `Moderation` stores local-only warn-only filter settings, blocked phrases, allowed link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, and exempts protected commands plus active giveaway entry commands.
+- `Moderation` stores local-only filter settings, per-filter actions, blocked phrases, allowed link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, audits enforcement outcomes, and exempts protected commands plus active giveaway entry commands.
 - `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and moderation filters start `off` until explicitly enabled.
 - `Stream Night Presets` apply audited feature-gate bundles for giveaway-only nights, local bot rehearsals, timer-focused streams, or full local bot replacement mode.
 - `Development Guidelines` live in `docs/development-guidelines.md` and define the project rules for preserving the stable core, local-first behavior, secret redaction, feature gates, audit retention, diagnostics, and release discipline.
