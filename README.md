@@ -289,14 +289,30 @@ Open `Settings`, then use `Setup Guide`.
 
 ### Operator UI Structure
 
-The setup server API lives in `src/setup/server.ts`. The browser UI is static, componentized plain JavaScript and CSS in:
+The setup server API lives in `desktop/shared/src/setup/server.ts`. The browser UI is static, componentized plain JavaScript and CSS in:
 
 ```text
-src/setup/ui/app.js
-src/setup/ui/styles.css
+desktop/shared/src/setup/ui/app.js
+desktop/shared/src/setup/ui/styles.css
 ```
 
 This keeps the console lightweight and avoids a separate frontend framework build. `npm run setup` serves those source files directly. `npm run build` bundles the setup server and copies the same UI files into `dist-bundle/setup-ui` for the Electron app.
+
+### Platform Layout
+
+The repo is arranged so platform conversion can happen without mixing packaging concerns into shared runtime code:
+
+```text
+desktop/
+  shared/   # Electron shell, local server, setup UI, bot runtime
+  macOS/    # Current macOS assets and release packaging
+  windows/  # Reserved for Windows conversion
+  linux/    # Reserved for Linux conversion
+mobile/     # Reserved for future mobile work
+web/        # Reserved for future hosted web work
+```
+
+Root npm scripts remain the stable entrypoints while the platform folders evolve.
 
 After UI changes, run:
 

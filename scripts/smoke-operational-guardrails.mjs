@@ -104,10 +104,10 @@ async function runApiSmoke() {
 }
 
 async function runDirectGuardrailSmoke() {
-  const { createDbClient } = await import(pathToFileURL(resolve("src/db/client.ts")).href);
-  const { createFeatureGateStore } = await import(pathToFileURL(resolve("src/core/featureGates.ts")).href);
-  const { writeAuditLog, getRecentAuditLogs } = await import(pathToFileURL(resolve("src/core/auditLog.ts")).href);
-  const { CustomCommandsService } = await import(pathToFileURL(resolve("src/modules/commands/commands.service.ts")).href);
+  const { createDbClient } = await import(pathToFileURL(resolve("desktop/shared/src/db/client.ts")).href);
+  const { createFeatureGateStore } = await import(pathToFileURL(resolve("desktop/shared/src/core/featureGates.ts")).href);
+  const { writeAuditLog, getRecentAuditLogs } = await import(pathToFileURL(resolve("desktop/shared/src/core/auditLog.ts")).href);
+  const { CustomCommandsService } = await import(pathToFileURL(resolve("desktop/shared/src/modules/commands/commands.service.ts")).href);
 
   const db = createDbClient(`file:${smokeDbPath}`);
   const featureGates = createFeatureGateStore(db);

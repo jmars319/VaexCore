@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { MessageQueue } from "../src/core/messageQueue.ts";
+import { MessageQueue } from "../desktop/shared/src/core/messageQueue.ts";
 
 const logger = {
   info() {},

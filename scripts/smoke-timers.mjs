@@ -146,11 +146,11 @@ async function runApiSmoke() {
 }
 
 async function runSchedulerSmoke() {
-  const { createDbClient } = await import(pathToFileURL(resolve("src/db/client.ts")).href);
-  const { createFeatureGateStore } = await import(pathToFileURL(resolve("src/core/featureGates.ts")).href);
-  const { getRecentAuditLogs } = await import(pathToFileURL(resolve("src/core/auditLog.ts")).href);
-  const { TimersService } = await import(pathToFileURL(resolve("src/modules/timers/timers.service.ts")).href);
-  const { TimerScheduler, isTimerActivityMessage } = await import(pathToFileURL(resolve("src/modules/timers/timers.runtime.ts")).href);
+  const { createDbClient } = await import(pathToFileURL(resolve("desktop/shared/src/db/client.ts")).href);
+  const { createFeatureGateStore } = await import(pathToFileURL(resolve("desktop/shared/src/core/featureGates.ts")).href);
+  const { getRecentAuditLogs } = await import(pathToFileURL(resolve("desktop/shared/src/core/auditLog.ts")).href);
+  const { TimersService } = await import(pathToFileURL(resolve("desktop/shared/src/modules/timers/timers.service.ts")).href);
+  const { TimerScheduler, isTimerActivityMessage } = await import(pathToFileURL(resolve("desktop/shared/src/modules/timers/timers.runtime.ts")).href);
 
   const db = createDbClient(`file:${smokeDbPath}`);
   const featureGates = createFeatureGateStore(db);

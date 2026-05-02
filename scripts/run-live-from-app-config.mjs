@@ -21,7 +21,7 @@ console.log("Starting live bot runtime. Keep this terminal open while vaexcore c
 
 const child = spawn(
   process.execPath,
-  [join(root, "node_modules/tsx/dist/cli.mjs"), "src/index.ts"],
+  [join(root, "node_modules/tsx/dist/cli.mjs"), "desktop/shared/src/index.ts"],
   {
     cwd: root,
     env,

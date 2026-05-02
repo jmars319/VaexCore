@@ -1,10 +1,11 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
 const { existsSync } = require("node:fs");
 const { get } = require("node:http");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 
 let mainWindow;
+let settingsWindow;
 let setupServer;
 let activeSetupUrl;
 let quitting = false;
@@ -16,6 +17,115 @@ const legacyProductName = "VaexCore";
 
 app.setName(productName);
 
+const buildApplicationMenu = () => {
+  const template = [
+    {
+      label: productName,
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        {
+          label: "Configuration Settings...",
+          accelerator: "CommandOrControl+,",
+          click: () => {
+            void createSettingsWindow();
+          }
+        },
+        { type: "separator" },
+        {
+          label: "Close Window (App Keeps Running)",
+          accelerator: "CommandOrControl+W",
+          click: () => closeMainWindow()
+        },
+        {
+          label: "Quit App (Stops Local Server)",
+          accelerator: "CommandOrControl+Q",
+          click: () => app.quit()
+        }
+      ]
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" }
+      ]
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" }
+      ]
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" }
+      ]
+    }
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+};
+
+const closeMainWindow = () => {
+  const window = BrowserWindow.getFocusedWindow() || mainWindow;
+  if (window && !window.isDestroyed()) {
+    window.close();
+  }
+};
+
+const createSettingsWindow = async (fragment = "") => {
+  if (!activeSetupUrl) {
+    return;
+  }
+
+  const settingsUrl = `${activeSetupUrl}/?window=settings${fragment}`;
+
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus();
+    if (fragment) {
+      await settingsWindow.loadURL(settingsUrl);
+    }
+    return;
+  }
+
+  settingsWindow = new BrowserWindow({
+    width: 980,
+    height: 760,
+    minWidth: 760,
+    minHeight: 620,
+    title: `${productName} Configuration Settings`,
+    backgroundColor: "#090b12",
+    icon: join(app.getAppPath(), "desktop/macOS/assets/icon.icns"),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  });
+
+  settingsWindow.on("closed", () => {
+    settingsWindow = undefined;
+  });
+
+  configureWindowOpenHandler(settingsWindow);
+  await settingsWindow.loadURL(settingsUrl);
+};
+
 const createWindow = async (url) => {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -24,7 +134,7 @@ const createWindow = async (url) => {
     minHeight: 650,
     title: productName,
     backgroundColor: "#0d1117",
-    icon: join(app.getAppPath(), "assets/icon.icns"),
+    icon: join(app.getAppPath(), "desktop/macOS/assets/icon.icns"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -32,16 +142,39 @@ const createWindow = async (url) => {
     }
   });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+  mainWindow.on("closed", () => {
+    mainWindow = undefined;
+  });
+
+  configureWindowOpenHandler(mainWindow);
+
+  await mainWindow.loadURL(url);
+};
+
+const configureWindowOpenHandler = (window) => {
+  window.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     if (targetUrl.startsWith("https://id.twitch.tv/")) {
       void shell.openExternal(targetUrl);
       return { action: "deny" };
     }
 
+    if (isSettingsUrl(targetUrl)) {
+      const parsed = new URL(targetUrl);
+      void createSettingsWindow(parsed.hash);
+      return { action: "deny" };
+    }
+
     return { action: "allow" };
   });
+};
 
-  await mainWindow.loadURL(url);
+const isSettingsUrl = (targetUrl) => {
+  try {
+    const parsed = new URL(targetUrl);
+    return parsed.origin === setupUrl && parsed.searchParams.get("window") === "settings";
+  } catch {
+    return false;
+  }
 };
 
 const startApp = async () => {
@@ -129,6 +262,7 @@ const showStartupError = (error) => {
 };
 
 app.whenReady().then(() => {
+  buildApplicationMenu();
   void startApp().catch((error) => {
     showStartupError(error);
     app.quit();

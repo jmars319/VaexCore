@@ -16,7 +16,7 @@ process.env.TWITCH_REFRESH_TOKEN = "cli-refresh-token";
 process.env.TWITCH_BROADCASTER_USER_ID = "cli-broadcaster-id";
 process.env.TWITCH_BOT_USER_ID = "cli-bot-id";
 
-const { loadEnv } = await import(pathToFileURL(resolve("src/config/env.ts")).href);
+const { loadEnv } = await import(pathToFileURL(resolve("desktop/shared/src/config/env.ts")).href);
 
 try {
   await runSmoke();

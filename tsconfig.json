@@ -4,7 +4,7 @@
     "lib": ["ES2022"],
     "module": "ES2022",
     "moduleResolution": "Bundler",
-    "rootDir": "src",
+    "rootDir": "desktop/shared/src",
     "outDir": "dist",
     "sourceMap": true,
     "strict": true,
@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["desktop/shared/src/**/*.ts"]
 }

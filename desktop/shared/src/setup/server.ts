@@ -2362,18 +2362,19 @@ const getBotProcessSnapshot = () => ({
 
 const getBotRuntimeCommand = () => {
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  const sourceRoot = resolve(currentDir, "../..");
+  const sharedRoot = resolve(currentDir, "../..");
+  const sourceRoot = resolve(sharedRoot, "../..");
   const bundledRoot = resolve(currentDir, "..");
-  const sourceIndex = join(sourceRoot, "src/index.ts");
+  const sourceIndex = join(sharedRoot, "src/index.ts");
   const tsxCli = join(sourceRoot, "node_modules/tsx/dist/cli.mjs");
   const bundledIndex = join(currentDir, "live-bot.js");
 
   if (currentDir.endsWith(join("src", "setup")) && existsSync(sourceIndex) && existsSync(tsxCli)) {
     return {
       executable: process.execPath,
-      args: [tsxCli, "src/index.ts"],
+      args: [tsxCli, "desktop/shared/src/index.ts"],
       cwd: sourceRoot,
-      display: "tsx src/index.ts"
+      display: "tsx desktop/shared/src/index.ts"
     };
   }
 
@@ -2389,9 +2390,9 @@ const getBotRuntimeCommand = () => {
   if (existsSync(sourceIndex) && existsSync(tsxCli)) {
     return {
       executable: process.execPath,
-      args: [tsxCli, "src/index.ts"],
+      args: [tsxCli, "desktop/shared/src/index.ts"],
       cwd: sourceRoot,
-      display: "tsx src/index.ts"
+      display: "tsx desktop/shared/src/index.ts"
     };
   }
 

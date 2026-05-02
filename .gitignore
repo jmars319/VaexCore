@@ -27,7 +27,7 @@ config/local.secrets.json
 data/
 tmp/
 temp/
-assets/icon.iconset/
+desktop/macOS/assets/icon.iconset/
 
 # Logs
 logs/

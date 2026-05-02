@@ -1,4 +1,9 @@
-const tabs = [
+const windowParams = new URLSearchParams(window.location.search);
+const isSettingsWindow = windowParams.get("window") === "settings";
+
+document.body.classList.toggle("settings-window", isSettingsWindow);
+
+const mainTabs = [
   ["dashboard", "Dashboard"],
   ["live-mode", "Live Mode"],
   ["commands", "Commands"],
@@ -7,13 +12,14 @@ const tabs = [
   ["giveaways", "Giveaways"],
   ["chat-tools", "Chat Tools"],
   ["testing", "Testing"],
-  ["settings", "Settings"],
   ["diagnostics", "Diagnostics"],
   ["audit-log", "Audit Log"]
 ];
 
+const tabs = isSettingsWindow ? [["settings", "Settings"]] : mainTabs;
+
 const state = {
-  activeTab: "dashboard",
+  activeTab: isSettingsWindow ? "settings" : "dashboard",
   config: null,
   status: null,
   giveaway: null,
@@ -226,6 +232,24 @@ function field(id) {
 }
 
 function render() {
+  if (isSettingsWindow) {
+    app.replaceChildren(
+      h("div", { className: "app-shell settings-shell" }, [
+        renderHeader({
+          title: "Configuration Settings",
+          subtitle: "Twitch OAuth and local setup",
+          showStatus: false
+        }),
+        h("main", { className: "content settings-content" }, [
+          h("section", { id: "settings", className: "tab-panel active" }, renderSettings())
+        ])
+      ])
+    );
+    syncFormValues();
+    updateDisabledState();
+    return;
+  }
+
   app.replaceChildren(
     h("div", { className: "app-shell" }, [
       renderHeader(),
@@ -239,7 +263,10 @@ function render() {
   updateDisabledState();
 }
 
-function renderHeader() {
+function renderHeader(options = {}) {
+  const title = options.title || "vaexcore console";
+  const subtitle = options.subtitle || "Local Twitch operations console";
+  const showStatus = options.showStatus !== false;
   const runtime = state.status?.runtime;
   const giveaway = state.status?.giveaway;
   return h("header", { className: "topbar" }, [
@@ -250,16 +277,16 @@ function renderHeader() {
         alt: "vaexcore console"
       }),
       h("div", {}, [
-        h("h1", { text: "vaexcore console" }),
-        h("p", { className: "subtitle", text: "Local Twitch operations console" })
+        h("h1", { text: title }),
+        h("p", { className: "subtitle", text: subtitle })
       ])
     ]),
-    h("div", { className: "header-status" }, [
+    showStatus ? h("div", { className: "header-status" }, [
       statusPill("Mode", runtime?.mode || "loading"),
       statusPill("Connection", runtime?.tokenValid ? "configured" : "not ready", runtime?.tokenValid),
       statusPill("Chat", runtime?.liveChatConfirmed ? "confirmed" : "pending", runtime?.liveChatConfirmed),
       statusPill("Giveaway", giveaway?.status || "loading", giveaway?.status !== "open")
-    ])
+    ]) : null
   ]);
 }
 
@@ -364,15 +391,8 @@ function renderDashboard() {
       actionButton("Refresh", { id: "refresh", onClick: refreshAll, busyKey: "refresh" })
     ),
     card("Twitch Setup", [
-      callout(setupReady ? "Twitch connection ready" : "Setup incomplete - open Settings -> Setup Guide", setupReady ? "ok" : "warn"),
-      setupReady ? null : actionButton("Open Setup Guide", {
-        variant: "secondary",
-        onClick: () => {
-          state.activeTab = "settings";
-          render();
-          document.getElementById("setupGuide")?.scrollIntoView({ block: "start" });
-        }
-      })
+      callout(setupReady ? "Twitch connection ready" : "Setup incomplete - open Configuration Settings -> Setup Guide", setupReady ? "ok" : "warn"),
+      setupReady ? null : actionButton("Open Setup Guide", { variant: "secondary", onClick: openSetupGuide })
     ]),
     renderLiveStateCard({ prefix: "dashboard" }),
     renderStreamPresetCard({ prefix: "dashboard" }),
@@ -2043,7 +2063,7 @@ function getReadiness() {
   const config = state.config || {};
   const blockers = [];
 
-  if (!isTwitchSetupReady()) blockers.push("Open Settings -> Setup Guide");
+  if (!isTwitchSetupReady()) blockers.push("Open Configuration Settings -> Setup Guide");
   if (!runtime.tokenValid || !runtime.requiredScopesPresent) blockers.push("Run Validate Setup");
   if (!runtime.queueReady) blockers.push("Start the setup console again if queue readiness does not recover");
   if (runtime.outboundRecovery?.needed && runtime.outboundRecovery.severity === "critical") {
@@ -2075,7 +2095,7 @@ function liveRunbookSteps() {
     steps.push({
       id: "setup-guide",
       label: "Complete setup",
-      detail: "Setup is incomplete. Open Settings -> Setup Guide.",
+      detail: "Setup is incomplete. Open Configuration Settings -> Setup Guide.",
       tone: "bad",
       actionLabel: "Open Setup Guide",
       onClick: openSetupGuide
@@ -3558,6 +3578,11 @@ async function runPreflight() {
 }
 
 function openSetupGuide() {
+  if (!isSettingsWindow) {
+    window.open("/?window=settings#setupGuide", "vaexcore-settings");
+    return;
+  }
+
   state.activeTab = "settings";
   render();
   document.getElementById("setupGuide")?.scrollIntoView({ block: "start" });

@@ -242,9 +242,9 @@ async function runSmoke() {
 async function runDirectEnforcementSmoke() {
   const directDir = mkdtempSync(join(tmpdir(), "vaexcore-moderation-direct-"));
   const directDbPath = join(directDir, "data/vaexcore.sqlite");
-  const { createDbClient } = await import(pathToFileURL(resolve("src/db/client.ts")).href);
-  const { createFeatureGateStore } = await import(pathToFileURL(resolve("src/core/featureGates.ts")).href);
-  const { ModerationService } = await import(pathToFileURL(resolve("src/modules/moderation/moderation.module.ts")).href);
+  const { createDbClient } = await import(pathToFileURL(resolve("desktop/shared/src/db/client.ts")).href);
+  const { createFeatureGateStore } = await import(pathToFileURL(resolve("desktop/shared/src/core/featureGates.ts")).href);
+  const { ModerationService } = await import(pathToFileURL(resolve("desktop/shared/src/modules/moderation/moderation.module.ts")).href);
   const db = createDbClient(`file:${directDbPath}`);
   const featureGates = createFeatureGateStore(db);
   const actor = chatMessage({
