@@ -7,6 +7,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { URL } from "node:url";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogger } from "../core/logger";
+import { writeAuditLog } from "../core/auditLog";
 import type { ChatMessage } from "../core/chatMessage";
 import { CommandRouter } from "../core/commandRouter";
 import {
@@ -246,6 +247,17 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
 
   if (request.method === "GET" && url.pathname === "/api/feature-gates") {
     sendJson(response, 200, getFeatureGates());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/stream-presets") {
+    sendJson(response, 200, getStreamPresets());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/stream-presets/apply") {
+    const body = (await readJson(request)) as { id?: string; confirmed?: boolean };
+    sendJson(response, 200, applyStreamPreset(body));
     return;
   }
 
@@ -2581,6 +2593,61 @@ const setFeatureGate = (body: { key?: FeatureKey; mode?: FeatureGateMode }) => {
   }
 };
 
+const getStreamPresets = () => {
+  const gates = featureGates.list();
+
+  return {
+    ok: true,
+    presets: streamPresetDefinitions.map((preset) => inspectStreamPreset(preset, gates)),
+    featureGates: gates
+  };
+};
+
+const applyStreamPreset = (body: { id?: string; confirmed?: boolean }) => {
+  try {
+    const preset = streamPresetDefinitions.find((item) => item.id === body.id);
+
+    if (!preset) {
+      throw new Error("Stream preset was not found.");
+    }
+
+    if (presetRequiresConfirmation(preset) && body.confirmed !== true) {
+      return {
+        ...getStreamPresets(),
+        ok: false,
+        error: `${preset.label} requires confirmation before changing live feature gates.`
+      };
+    }
+
+    const before = featureGates.list();
+    const applied = Object.entries(preset.modes).map(([key, mode]) =>
+      featureGates.setMode(key as FeatureKey, mode as FeatureGateMode, localUiActor)
+    );
+    const after = featureGates.list();
+
+    writeAuditLog(db, localUiActor, "stream_preset.apply", `stream_preset:${preset.id}`, {
+      preset: preset.id,
+      label: preset.label,
+      modes: preset.modes,
+      before: before.map(({ key, mode }) => ({ key, mode })),
+      after: after.map(({ key, mode }) => ({ key, mode }))
+    });
+
+    return {
+      ...getStreamPresets(),
+      ok: true,
+      appliedPreset: preset.id,
+      applied
+    };
+  } catch (error) {
+    return {
+      ...getStreamPresets(),
+      ok: false,
+      error: safeErrorMessage(error, "Stream preset apply failed")
+    };
+  }
+};
+
 const getTimers = () => {
   const timers = timersService.listTimers();
   const readiness = getTimerSendReadiness();
@@ -3442,6 +3509,87 @@ const inspectCustomCommandPreset = (
       nextAction: conflicts.length ? "Resolve the command or alias conflict first." : "Create, edit links/copy, then enable when tested."
     }
   };
+};
+
+const streamPresetDefinitions = [
+  {
+    id: "giveaway-night",
+    label: "Giveaway Night",
+    description: "Keep giveaways and custom commands live while optional timers and moderation stay off.",
+    modes: {
+      custom_commands: "live",
+      timers: "off",
+      moderation_filters: "off"
+    }
+  },
+  {
+    id: "nightbot-rehearsal",
+    label: "Nightbot Rehearsal",
+    description: "Keep custom commands live and move timers/moderation into local test mode.",
+    modes: {
+      custom_commands: "live",
+      timers: "test",
+      moderation_filters: "test"
+    }
+  },
+  {
+    id: "timers-live",
+    label: "Timers Live",
+    description: "Use custom commands and timers in live chat while moderation remains local-test only.",
+    modes: {
+      custom_commands: "live",
+      timers: "live",
+      moderation_filters: "test"
+    }
+  },
+  {
+    id: "nightbot-replacement",
+    label: "Nightbot Replacement",
+    description: "Enable custom commands, timers, and warn-only moderation for live Twitch chat.",
+    modes: {
+      custom_commands: "live",
+      timers: "live",
+      moderation_filters: "live"
+    }
+  }
+] as const satisfies Array<{
+  id: string;
+  label: string;
+  description: string;
+  modes: Record<FeatureKey, FeatureGateMode>;
+}>;
+
+const inspectStreamPreset = (
+  preset: (typeof streamPresetDefinitions)[number],
+  gates: FeatureGateState[]
+) => {
+  const gateModes = new Map(gates.map((gate) => [gate.key, gate.mode]));
+  const changes = Object.entries(preset.modes)
+    .filter(([key, mode]) => gateModes.get(key as FeatureKey) !== mode)
+    .map(([key, mode]) => ({
+      key,
+      from: gateModes.get(key as FeatureKey) || "off",
+      to: mode
+    }));
+
+  return {
+    ...preset,
+    requiresConfirmation: presetRequiresConfirmation(preset),
+    inspection: {
+      status: changes.length ? "changes" : "current",
+      detail: changes.length
+        ? changes.map((change) => `${change.key}: ${change.from} -> ${change.to}`).join("; ")
+        : "Preset is already active.",
+      nextAction: changes.length
+        ? "Apply explicitly, then run preflight and local tests before relying on live chat behavior."
+        : "No feature gate changes needed."
+    }
+  };
+};
+
+const presetRequiresConfirmation = (preset: (typeof streamPresetDefinitions)[number]) => {
+  const modes: Record<FeatureKey, FeatureGateMode> = preset.modes;
+  return modes.timers === "live" || modes.moderation_filters === "live";
 };
 
 const getOutboundMessages = () => ({

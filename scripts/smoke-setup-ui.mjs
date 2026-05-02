@@ -89,6 +89,7 @@ async function runSmoke() {
   assert(appJs.includes("phase-resend"), "giveaway tab exposes phase-level resend controls");
   assert(appJs.includes("shouldWarnBeforeGiveawayAction"), "giveaway actions warn before continuing after critical chat gaps");
   assert(appJs.includes("Live Mode"), "setup UI exposes compact live mode tab");
+  assert(appJs.includes("Stream Night Presets"), "setup UI exposes stream-night presets");
   assert(appJs.includes("Live Runbook"), "dashboard and live mode expose runbook guidance");
   assert(appJs.includes("Copy incident note"), "runbook can copy incident note");
   assert(appJs.includes("liveRunbookSteps"), "runbook derives next actions from current state");
@@ -173,6 +174,9 @@ async function runSmoke() {
   const initialFeatureGates = await json("/api/feature-gates");
   assert(initialFeatureGates.ok === true, "feature gate route exists");
   assert(initialFeatureGates.featureGates.some((gate) => gate.key === "timers" && gate.mode === "off"), "future timers default off");
+  const initialStreamPresets = await json("/api/stream-presets");
+  assert(initialStreamPresets.ok === true, "stream presets route exists");
+  assert(initialStreamPresets.presets.some((preset) => preset.id === "nightbot-rehearsal"), "stream presets include Nightbot rehearsal");
   const initialTimers = await json("/api/timers");
   assert(initialTimers.ok === true, "timer route exists");
   assert(initialTimers.featureGate.mode === "off", "timer route returns feature gate");
@@ -181,6 +185,20 @@ async function runSmoke() {
   assert(initialModeration.featureGate.mode === "off", "moderation route returns feature gate");
   assert(initialModeration.summary.filtersEnabled === 0, "moderation filters default off");
   assert(initialModeration.settings.exemptModerators === true, "moderation trusted role defaults are exposed");
+  const rehearsalPreset = await json("/api/stream-presets/apply", {
+    method: "POST",
+    body: { id: "nightbot-rehearsal" }
+  });
+  assert(rehearsalPreset.ok === true, "safe stream preset can be applied without live confirmation");
+  assert(rehearsalPreset.featureGates.some((gate) => gate.key === "timers" && gate.mode === "test"), "stream preset can move timers to test");
+  assert(rehearsalPreset.featureGates.some((gate) => gate.key === "moderation_filters" && gate.mode === "test"), "stream preset can move moderation to test");
+  const unconfirmedLivePreset = await json("/api/stream-presets/apply", {
+    method: "POST",
+    body: { id: "nightbot-replacement" }
+  });
+  assert(unconfirmedLivePreset.ok === false, "live stream preset requires confirmation");
+  const presetAudit = await json("/api/audit-logs");
+  assert(presetAudit.logs.some((log) => log.action === "stream_preset.apply"), "stream preset application is audited");
 
   const invalidBotStart = await json("/api/bot/start", { method: "POST" });
   assert(invalidBotStart.ok === false, "bot start is blocked before validation");

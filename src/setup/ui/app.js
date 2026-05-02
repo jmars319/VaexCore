@@ -35,6 +35,7 @@ const state = {
   moderationHits: [],
   moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, hits: 0 },
   moderationFeatureGate: null,
+  streamPresets: [],
   featureGates: [],
   templates: [],
   operatorMessages: [],
@@ -112,6 +113,8 @@ const api = {
   supportBundle: () => api.get("/api/support-bundle"),
   featureGates: () => api.get("/api/feature-gates"),
   setFeatureGate: (key, mode) => api.post("/api/feature-gates", { key, mode }),
+  streamPresets: () => api.get("/api/stream-presets"),
+  applyStreamPreset: (id, confirmed = false) => api.post("/api/stream-presets/apply", { id, confirmed }),
   preflight: () => api.post("/api/preflight"),
   botStart: () => api.post("/api/bot/start"),
   botStop: () => api.post("/api/bot/stop"),
@@ -357,6 +360,7 @@ function renderDashboard() {
       })
     ]),
     renderLiveStateCard({ prefix: "dashboard" }),
+    renderStreamPresetCard({ prefix: "dashboard" }),
     renderLiveRunbookCard({ prefix: "dashboard" }),
     renderBotRuntimeCard(runtime),
     renderPreflightCard(),
@@ -391,6 +395,7 @@ function renderLiveMode() {
     readiness.blockers.length
       ? card("Blockers", [list(readiness.blockers, "bad")])
       : card("Ready Summary", [callout("Twitch connection ready", "ok")]),
+    renderStreamPresetCard({ prefix: "live" }),
     renderLiveRunbookCard({ prefix: "live" }),
     renderQueueHealthCard(),
     renderRecoveryChecklistCard(),
@@ -431,6 +436,30 @@ function renderLiveStateCard(options = {}) {
       actionButton("Run preflight", { id: `${prefix}RunPreflight`, variant: "secondary", busyKey: "runPreflight", onClick: runPreflight }),
       actionButton("Copy recap", { id: `${prefix}CopyRecap`, variant: "secondary", busyKey: "copyRecap", onClick: copyRecap })
     ])
+  ]);
+}
+
+function renderStreamPresetCard(options = {}) {
+  const presets = state.streamPresets || [];
+  const prefix = options.prefix || "stream";
+
+  return card("Stream Night Presets", [
+    presets.length
+      ? dataTable(["Preset", "Custom Commands", "Timers", "Moderation", "Status", "Actions"], presets.map((preset) => [
+          preset.label,
+          preset.modes?.custom_commands || "off",
+          preset.modes?.timers || "off",
+          preset.modes?.moderation_filters || "off",
+          preset.inspection?.detail || "",
+          actionButton(preset.inspection?.status === "current" ? "Applied" : "Apply preset", {
+            id: `${prefix}-stream-preset-${preset.id}`,
+            variant: "secondary",
+            busyKey: "streamPreset",
+            disabled: preset.inspection?.status === "current",
+            onClick: () => applyStreamPreset(preset.id)
+          })
+        ]))
+      : callout("No stream presets are available.", "muted")
   ]);
 }
 
@@ -2527,7 +2556,7 @@ function formatMessagePreview(message = "") {
 
 async function refreshAll() {
   await runAction("refresh", async () => {
-    const [config, status, giveaway, commands, timers, moderation, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult] = await Promise.all([
+    const [config, status, giveaway, commands, timers, moderation, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult, streamPresetResult] = await Promise.all([
       api.config(),
       api.status(),
       api.giveaway(),
@@ -2540,7 +2569,8 @@ async function refreshAll() {
       api.auditLogs(),
       api.outboundMessages(),
       api.diagnostics(),
-      api.featureGates()
+      api.featureGates(),
+      api.streamPresets()
     ]);
     state.config = config;
     state.status = status;
@@ -2556,13 +2586,14 @@ async function refreshAll() {
     state.outboundSummary = outbound.summary || {};
     state.diagnostics = diagnostics;
     state.featureGates = featureGateResult.featureGates || [];
+    state.streamPresets = streamPresetResult.presets || [];
     state.validSetup = isValidationPassed();
     return { ok: true };
   }, { quiet: true });
 }
 
 async function refreshAfterAction() {
-  const [status, giveaway, commands, timers, moderation, operatorMessages, reminder, audit, outbound, featureGateResult] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.timers(), api.moderation(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates()]);
+  const [status, giveaway, commands, timers, moderation, operatorMessages, reminder, audit, outbound, featureGateResult, streamPresetResult] = await Promise.all([api.status(), api.giveaway(), api.commands(), api.timers(), api.moderation(), api.operatorMessages(), api.reminder(), api.auditLogs(), api.outboundMessages(), api.featureGates(), api.streamPresets()]);
   state.status = status;
   state.giveaway = giveaway;
   setCommandState(commands);
@@ -2574,6 +2605,7 @@ async function refreshAfterAction() {
   state.outboundMessages = outbound.messages || [];
   state.outboundSummary = outbound.summary || {};
   state.featureGates = featureGateResult.featureGates || [];
+  state.streamPresets = streamPresetResult.presets || [];
   state.validSetup = isValidationPassed();
 }
 
@@ -2720,6 +2752,22 @@ async function setFeatureGate(key, mode) {
   await runAction("featureGate", () => api.setFeatureGate(key, mode), {
     success: "Feature gate updated."
   });
+}
+
+async function applyStreamPreset(id) {
+  const preset = (state.streamPresets || []).find((item) => item.id === id);
+  const confirmed = !preset?.requiresConfirmation || confirm(`Apply ${preset.label}? This changes feature gates for stream operation. Run preflight after applying.`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  await runAction("streamPreset", async () => {
+    const result = await api.applyStreamPreset(id, confirmed);
+    state.streamPresets = result.presets || state.streamPresets;
+    state.featureGates = result.featureGates || state.featureGates;
+    return result;
+  }, { success: "Stream preset applied." });
 }
 
 function newTimer() {

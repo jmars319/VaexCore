@@ -192,6 +192,15 @@ Direct UI actions call the local service layer first. Optional chat echo is visi
 
 Major optional modules use local feature gates with `off`, `test`, and `live` modes. `test` allows local simulation without responding to Twitch chat, which makes new workflows safer to validate during a stream.
 
+Dashboard and Live Mode include `Stream Night Presets` for common operating modes:
+
+- `Giveaway Night`: custom commands live, timers off, moderation off
+- `Nightbot Rehearsal`: custom commands live, timers and moderation in local test mode
+- `Timers Live`: custom commands and timers live, moderation in local test mode
+- `Nightbot Replacement`: custom commands, timers, and warn-only moderation live
+
+Presets only change feature gates, write audit entries, and require explicit confirmation before enabling timers or moderation in live chat.
+
 ## Custom Chat Commands
 
 Open `Commands` to manage local command definitions stored in SQLite. Custom commands support:
@@ -364,6 +373,7 @@ The `Giveaways` tab also includes stream-night controls:
 - `Timers` stores local-only scheduled chat messages in SQLite. Timers are feature-gated, use the outbound queue, and wait for live readiness plus clear queue health before sending.
 - `Moderation` stores local-only warn-only filter settings, blocked phrases, allowed link domains, temporary link permits, and recent hits in SQLite. Moderation is feature-gated, fails open, and exempts protected commands plus active giveaway entry commands.
 - `Feature Gates` keep major modules isolated with `off`, `test`, and `live` states. Custom commands default to `live`; timers and moderation filters start `off` until explicitly enabled.
+- `Stream Night Presets` apply audited feature-gate bundles for giveaway-only nights, Nightbot-style rehearsals, timer-focused streams, or full local Nightbot replacement mode.
 - `Development Guidelines` live in `docs/development-guidelines.md` and define the project rules for preserving the stable core, local-first behavior, secret redaction, feature gates, audit retention, diagnostics, and release discipline.
 - `Live Runbook` turns current setup, bot, queue, recovery, and giveaway state into a prioritized next-action checklist. It reuses existing controls and can copy a compact incident note for post-stream review.
 - `Post-Stream Review` in Audit Log summarizes the latest giveaway, winners, delivery state, outbound failures, retries, bot errors, and recent audit entries. It can copy a text review or export local JSON.

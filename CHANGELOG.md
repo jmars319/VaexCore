@@ -4,6 +4,7 @@
 
 Current release state: clean-main unsigned tester cut for wider local testing.
 
+- Milestone 39: stream-night presets for audited feature-gate bundles covering giveaway-only operation, Nightbot rehearsal, timers-live mode, and full Nightbot replacement mode with explicit live-feature confirmation and smoke coverage.
 - Milestone 38: command ergonomics with disabled starter presets for common Nightbot-style commands, preset conflict inspection, UI creation flow, local service reuse, and expanded custom command smoke coverage.
 - Milestone 37: moderation filters v2 with trusted-role exemptions, allowed link domains, temporary link permits, richer moderation state summaries, UI controls, audited operator actions, and expanded smoke coverage.
 - Milestone 36: timer live polish with preset starters, timer JSON import/export, richer live-readiness checks, next-action explanations for blocked or scheduled timers, and expanded timer smoke coverage.
