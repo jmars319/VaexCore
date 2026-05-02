@@ -39,6 +39,7 @@ async function runSmoke() {
   assert(appJs.includes("Dashboard") && appJs.includes("Giveaways"), "browser UI has tabs");
   assert(appJs.includes("Command Library"), "browser UI exposes custom command library");
   assert(appJs.includes("Response variants"), "custom command editor supports response variants");
+  assert(appJs.includes("Starter Commands"), "custom command UI exposes starter presets");
   assert(appJs.includes("Export commands JSON"), "custom command UI can export commands");
   assert(appJs.includes("Import commands JSON"), "custom command UI can import commands");
   assert(appJs.includes("Preview response"), "custom command UI can preview responses");
@@ -168,6 +169,7 @@ async function runSmoke() {
   assert(Array.isArray(initialCommands.commands), "custom command route returns commands");
   assert(initialCommands.reservedNames.includes("ping"), "custom command route returns reserved names");
   assert(initialCommands.featureGate.mode === "live", "custom command route returns feature gate state");
+  assert(initialCommands.presets.some((preset) => preset.id === "discord"), "custom command route returns starter presets");
   const initialFeatureGates = await json("/api/feature-gates");
   assert(initialFeatureGates.ok === true, "feature gate route exists");
   assert(initialFeatureGates.featureGates.some((gate) => gate.key === "timers" && gate.mode === "off"), "future timers default off");

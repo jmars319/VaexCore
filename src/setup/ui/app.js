@@ -21,6 +21,7 @@ const state = {
   commandHistory: [],
   commandSummary: { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 },
   commandReservedNames: [],
+  commandPresets: [],
   commandFeatureGate: null,
   timers: [],
   timerSummary: { total: 0, enabled: 0, disabled: 0, sent: 0 },
@@ -139,6 +140,7 @@ const api = {
   deleteCommand: (id) => api.post("/api/commands/delete", { id }),
   exportCommands: () => api.get("/api/commands/export"),
   importCommands: (body) => api.post("/api/commands/import", body),
+  applyCommandPreset: (id) => api.post("/api/commands/preset", { id }),
   previewCommand: (body) => api.post("/api/commands/preview", body),
   timers: () => api.get("/api/timers"),
   exportTimers: () => api.get("/api/timers/export"),
@@ -856,6 +858,7 @@ function renderCommands() {
       ])
     ),
     renderFeatureGateCard("custom_commands"),
+    renderCommandPresetCard(),
     card("Command Library", [
       statusGrid([
         ["Total", state.commandSummary.total || 0, true],
@@ -954,6 +957,29 @@ function renderCommands() {
     ]),
     message()
   ];
+}
+
+function renderCommandPresetCard() {
+  const presets = state.commandPresets || [];
+
+  return card("Starter Commands", [
+    presets.length
+      ? dataTable(["Preset", "Command", "Permission", "Response", "Status", "Actions"], presets.map((preset) => [
+          preset.label,
+          `!${preset.commandName}${preset.aliases?.length ? ` (${preset.aliases.map((alias) => `!${alias}`).join(", ")})` : ""}`,
+          commandPermissionChip(preset.permission || "viewer"),
+          formatMessagePreview((preset.responses || [])[0] || ""),
+          preset.inspection?.status === "ready" ? statusChip("ready") : preset.inspection?.detail || "blocked",
+          actionButton("Create disabled", {
+            id: `command-preset-${preset.id}`,
+            variant: "secondary",
+            busyKey: "commandPreset",
+            disabled: preset.inspection?.status !== "ready",
+            onClick: () => applyCommandPreset(preset.id)
+          })
+        ]))
+      : callout("No command presets are available.", "muted")
+  ]);
 }
 
 function renderTimers() {
@@ -2573,6 +2599,7 @@ function setCommandState(result = {}) {
   state.commandHistory = result.invocations || [];
   state.commandSummary = result.summary || { total: 0, enabled: 0, disabled: 0, aliases: 0, uses: 0 };
   state.commandReservedNames = result.reservedNames || [];
+  state.commandPresets = result.presets || state.commandPresets || [];
   state.commandFeatureGate = result.featureGate || state.commandFeatureGate;
 
   if (state.selectedCommandId && !state.commands.some((command) => Number(command.id) === Number(state.selectedCommandId))) {
@@ -2795,6 +2822,16 @@ async function importTimers() {
     state.timerDraft = {};
     return result;
   }, { skipRefresh: true, success: "Timers imported." });
+}
+
+async function applyCommandPreset(id) {
+  await runAction("commandPreset", async () => {
+    const result = await api.applyCommandPreset(id);
+    setCommandState(result);
+    state.selectedCommandId = result.command?.id ?? state.selectedCommandId;
+    state.commandDraft = {};
+    return result;
+  }, { skipRefresh: true, success: "Command preset created disabled." });
 }
 
 async function saveModerationSettings() {

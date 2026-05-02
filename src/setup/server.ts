@@ -448,6 +448,12 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/commands/preset") {
+    const body = (await readJson(request)) as { id?: string };
+    sendJson(response, 200, createCustomCommandFromPreset(body.id));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/commands/preview") {
     const body = await readJson(request);
     sendJson(response, 200, previewCustomCommand(body));
@@ -3138,6 +3144,9 @@ const getCustomCommands = () => {
     commands,
     invocations,
     reservedNames: getCustomCommandReservedNames(),
+    presets: customCommandPresetDefinitions.map((preset) =>
+      inspectCustomCommandPreset(preset, commands, getCustomCommandReservedNames())
+    ),
     featureGate: featureGates.get("custom_commands"),
     summary: {
       total: commands.length,
@@ -3229,6 +3238,42 @@ const deleteCustomCommand = (id: number | undefined) => {
   }
 };
 
+const createCustomCommandFromPreset = (id: string | undefined) => {
+  try {
+    const preset = customCommandPresetDefinitions.find((item) => item.id === id);
+
+    if (!preset) {
+      throw new Error("Command preset was not found.");
+    }
+
+    const command = customCommandsService.saveCommand(
+      {
+        name: preset.commandName,
+        permission: preset.permission,
+        enabled: false,
+        globalCooldownSeconds: preset.globalCooldownSeconds,
+        userCooldownSeconds: preset.userCooldownSeconds,
+        aliases: preset.aliases,
+        responses: preset.responses
+      },
+      localUiActor,
+      { reservedNames: getCustomCommandReservedNames() }
+    );
+
+    return {
+      ...getCustomCommands(),
+      ok: true,
+      command
+    };
+  } catch (error) {
+    return {
+      ...getCustomCommands(),
+      ok: false,
+      error: safeErrorMessage(error, "Command preset create failed")
+    };
+  }
+};
+
 const importCustomCommands = (body: unknown) => {
   try {
     const commands = customCommandsService.importCommands(body, localUiActor, {
@@ -3288,6 +3333,115 @@ const getCustomCommandReservedNames = () => {
   }
 
   return [...names].sort();
+};
+
+const customCommandPresetDefinitions = [
+  {
+    id: "discord",
+    label: "Discord",
+    description: "Community Discord link.",
+    commandName: "discord",
+    permission: "viewer",
+    globalCooldownSeconds: 30,
+    userCooldownSeconds: 10,
+    aliases: ["dc"],
+    responses: ["Join the Discord: https://example.com"]
+  },
+  {
+    id: "socials",
+    label: "Social Links",
+    description: "Primary social and link hub.",
+    commandName: "socials",
+    permission: "viewer",
+    globalCooldownSeconds: 30,
+    userCooldownSeconds: 10,
+    aliases: ["links"],
+    responses: ["Find links and socials here: https://example.com"]
+  },
+  {
+    id: "schedule",
+    label: "Schedule",
+    description: "Streaming schedule reminder.",
+    commandName: "schedule",
+    permission: "viewer",
+    globalCooldownSeconds: 30,
+    userCooldownSeconds: 10,
+    aliases: ["when"],
+    responses: ["Stream schedule: check the channel panels for upcoming streams."]
+  },
+  {
+    id: "lurk",
+    label: "Lurk",
+    description: "Viewer lurk acknowledgement.",
+    commandName: "lurk",
+    permission: "viewer",
+    globalCooldownSeconds: 10,
+    userCooldownSeconds: 30,
+    aliases: [],
+    responses: ["{user} is lurking. Thanks for hanging out."]
+  },
+  {
+    id: "shoutout",
+    label: "Shoutout",
+    description: "Moderator shoutout helper.",
+    commandName: "so",
+    permission: "moderator",
+    globalCooldownSeconds: 10,
+    userCooldownSeconds: 5,
+    aliases: ["shoutout"],
+    responses: ["Go check out {target}: https://twitch.tv/{target}"]
+  },
+  {
+    id: "rules",
+    label: "Rules",
+    description: "Short chat rules reminder.",
+    commandName: "rules",
+    permission: "viewer",
+    globalCooldownSeconds: 30,
+    userCooldownSeconds: 10,
+    aliases: [],
+    responses: ["Keep chat respectful, avoid spoilers, and listen to mods."]
+  },
+  {
+    id: "giveaway",
+    label: "Giveaway Status",
+    description: "Points viewers to giveaway status.",
+    commandName: "giveaway",
+    permission: "viewer",
+    globalCooldownSeconds: 15,
+    userCooldownSeconds: 10,
+    aliases: ["raffle"],
+    responses: ["Giveaway status: use !gstatus when a giveaway is active."]
+  }
+] as const;
+
+const inspectCustomCommandPreset = (
+  preset: (typeof customCommandPresetDefinitions)[number],
+  commands: ReturnType<CustomCommandsService["listCommands"]>,
+  reservedNames: string[]
+) => {
+  const reserved = new Set(reservedNames);
+  const commandNames = new Set(commands.map((command) => command.name));
+  const aliases = new Set(commands.flatMap((command) => command.aliases));
+  const conflicts = [
+    reserved.has(preset.commandName) ? `!${preset.commandName} is reserved` : undefined,
+    commandNames.has(preset.commandName) ? `!${preset.commandName} already exists` : undefined,
+    aliases.has(preset.commandName) ? `!${preset.commandName} is already an alias` : undefined,
+    ...preset.aliases.flatMap((alias) => [
+      reserved.has(alias) ? `!${alias} is reserved` : undefined,
+      commandNames.has(alias) ? `!${alias} already exists` : undefined,
+      aliases.has(alias) ? `!${alias} is already an alias` : undefined
+    ])
+  ].filter(Boolean);
+
+  return {
+    ...preset,
+    inspection: {
+      status: conflicts.length ? "blocked" : "ready",
+      detail: conflicts.join("; ") || "Ready to create disabled.",
+      nextAction: conflicts.length ? "Resolve the command or alias conflict first." : "Create, edit links/copy, then enable when tested."
+    }
+  };
 };
 
 const getOutboundMessages = () => ({

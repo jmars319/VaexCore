@@ -28,6 +28,8 @@ async function runSmoke() {
   const appJs = await text("/ui/app.js");
   assert(appJs.includes("Command Library"), "Commands tab renders command library");
   assert(appJs.includes("Response variants"), "Commands tab renders response variants");
+  assert(appJs.includes("Starter Commands"), "Commands tab renders starter presets");
+  assert(appJs.includes("Create disabled"), "Commands tab can create disabled preset commands");
   assert(appJs.includes("Export commands JSON"), "Commands tab exposes export");
   assert(appJs.includes("Import commands JSON"), "Commands tab exposes import");
 
@@ -35,6 +37,14 @@ async function runSmoke() {
   assert(initial.ok === true, "custom command route returns ok");
   assert(initial.summary.total === 0, "custom command list starts empty");
   assert(initial.reservedNames.includes("ping"), "reserved command names are returned");
+  assert(initial.presets.some((preset) => preset.id === "lurk" && preset.inspection.status === "ready"), "starter command presets are returned");
+
+  const preset = await post("/api/commands/preset", { id: "lurk" });
+  assert(preset.ok === true, "starter command preset can be created");
+  const lurk = preset.commands.find((command) => command.name === "lurk");
+  assert(lurk?.enabled === false, "starter command preset starts disabled");
+  assert(lurk.responses.some((response) => response.includes("{user}")), "starter command preset keeps placeholders");
+  assert(preset.presets.find((item) => item.id === "lurk")?.inspection.status === "blocked", "created preset reports conflict");
 
   const reserved = await post("/api/commands", {
     name: "ping",
