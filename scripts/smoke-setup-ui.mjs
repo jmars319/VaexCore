@@ -8,8 +8,20 @@ const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
 const tempDir = mkdtempSync(join(tmpdir(), "vaexcore-smoke-"));
 const smokeDbPath = join(tempDir, "data/vaexcore.sqlite");
+const realFetch = globalThis.fetch;
+let mockInvalidClientSecretExchange = false;
 process.env.VAEXCORE_CONFIG_DIR = tempDir;
 process.env.DATABASE_URL = `file:${smokeDbPath}`;
+
+globalThis.fetch = async (input, init) => {
+  const url = typeof input === "string" ? input : input.url;
+
+  if (mockInvalidClientSecretExchange && url.startsWith("https://id.twitch.tv/oauth2/token")) {
+    return jsonResponse({ status: 403, message: "invalid client secret" }, 403);
+  }
+
+  return realFetch(input, init);
+};
 
 const { startSetupServer } = await import(
   pathToFileURL(resolve("dist-bundle/setup-server.js")).href
@@ -23,6 +35,7 @@ try {
   console.log("setup UI smoke passed");
 } finally {
   await handle.stop();
+  globalThis.fetch = realFetch;
   rmSync(tempDir, { recursive: true, force: true });
 }
 
@@ -54,9 +67,15 @@ async function runSmoke() {
   assert(appJs.includes("Schedule local stream messages"), "browser UI exposes timers");
   assert(appJs.includes("Save timer"), "browser UI can save timers");
   assert(appJs.includes("Preset Starters"), "browser UI exposes timer presets");
+  assert(appJs.includes("Timer Suggestions"), "timer UI exposes optional starter suggestions");
+  assert(appJs.includes("applyTimerSuggestion"), "timer suggestions can load into the editor without saving");
+  assert(appJs.includes("copyTimerSuggestion"), "timer suggestions can be copied");
   assert(appJs.includes("Chat messages required"), "browser UI exposes timer activity threshold");
   assert(appJs.includes("Export timers JSON"), "browser UI can export timers");
   assert(appJs.includes("scoped warn, delete, and timeout actions"), "browser UI exposes moderation filters");
+  assert(appJs.includes("Moderation Suggestions"), "moderation UI exposes optional examples");
+  assert(appJs.includes("applyModerationSuggestion"), "moderation suggestions can load into matching editors");
+  assert(appJs.includes("copyModerationSuggestion"), "moderation suggestions can be copied");
   assert(appJs.includes("moderator:manage:chat_messages"), "browser UI exposes moderation delete scope status");
   assert(appJs.includes("Run moderation test"), "browser UI can test moderation filters");
   assert(appJs.includes("Allowed Link Domains"), "browser UI exposes moderation link allowlist");
@@ -64,12 +83,19 @@ async function runSmoke() {
   assert(appJs.includes("Temporary Link Permits"), "browser UI exposes moderation link permits");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");
   assert(appJs.includes("Open Twitch Developer Console"), "setup guide includes Twitch Developer Console link");
+  assert(appJs.includes("settingsActionButton"), "main UI exposes compact settings launcher");
+  assert(appJs.includes("openSettingsWindow"), "settings launcher opens the dedicated settings window route");
+  assert(appJs.includes("width=980,height=760"), "settings launcher requests the smaller settings window size");
   assert(appJs.includes("Twitch authorization failed"), "setup guide surfaces OAuth errors");
+  assert(appJs.includes("invalid_client_secret"), "setup guide explains invalid client secret OAuth failures");
   assert(appJs.indexOf("const payload = readSettingsPayload();") < appJs.indexOf('runAction("save"'), "settings save snapshots fields before rerender");
   assert(appJs.includes("const savedCredentialMask"), "settings UI uses visible masked credential sentinel");
   assert(appJs.includes("missingCredentialLabels"), "setup guide names missing credential fields");
   assert(appJs.includes("normalizeLoginInput"), "settings UI normalizes Twitch login fields");
   assert(appJs.includes("Bot Login must be the account that grants OAuth"), "setup guide explains bot OAuth identity");
+  assert(appJs.includes("Connect Twitch as Bot Login"), "connect action names the OAuth account type");
+  assert(appJs.includes("not the Broadcaster Login"), "connect guidance distinguishes bot login from broadcaster channel");
+  assert(appJs.includes('"data-action": "connect-twitch"'), "connect action has stable UI marker");
   assert(appJs.includes("botLoginReconnectCallout"), "settings UI warns when bot login needs reconnect");
   assert(appJs.includes("Disconnect Twitch"), "settings UI can clear the current Twitch OAuth token");
   assert(appJs.includes("wrong_bot_account"), "settings UI explains wrong-account OAuth callbacks");
@@ -92,6 +118,14 @@ async function runSmoke() {
   assert(appJs.includes("Reminder Controls"), "giveaway tab exposes timed reminder controls");
   assert(appJs.includes("Post-Giveaway Recap"), "giveaway tab exposes post-giveaway recap");
   assert(appJs.includes("Run preflight"), "dashboard exposes preflight rehearsal");
+  assert(appJs.includes("Automatic Launch Preparation"), "dashboard exposes automatic launch preparation");
+  assert(appJs.includes("Rerun launch checks"), "dashboard can rerun launch checks");
+  assert(appJs.includes("Start Here"), "dashboard leads with a startup flow");
+  assert(appJs.includes("dashboard-steps"), "dashboard uses a condensed step layout");
+  assert(appJs.includes("Giveaway Snapshot"), "dashboard summarizes giveaway state without the full giveaway workspace");
+  assert(appJs.includes("visibleValidationChecks"), "settings renders automatic launch validation failures");
+  assert(appJs.includes("api.launchPreparation()"), "settings refreshes launch preparation directly");
+  assert(appJs.includes("renderSettingsLaunchNotice"), "settings surfaces launch-check attention before manual validation");
   assert(appJs.includes("Copy winners"), "winner workflow can copy winners");
   assert(appJs.includes("Mark all delivered"), "winner workflow can bulk mark delivery");
   assert(appJs.includes("Do not continue giveaway operations yet"), "giveaway tab warns on critical announcement gaps");
@@ -125,6 +159,7 @@ async function runSmoke() {
   const setupServerJs = readFileSync(resolve("dist-bundle/setup-server.js"), "utf8");
   const liveBotJs = readFileSync(resolve("dist-bundle/live-bot.js"), "utf8");
   assert(setupServerJs.includes("/api/diagnostics"), "setup server exposes diagnostics route");
+  assert(setupServerJs.includes("/api/launch-preparation"), "setup server exposes launch preparation route");
   assert(setupServerJs.includes("/api/support-bundle"), "setup server exposes support bundle route");
   assert(setupServerJs.includes("getDiagnosticsReport"), "setup server builds safe diagnostics reports");
   assert(setupServerJs.includes("getBotStartReadiness"), "setup server gates bot start with readiness checks");
@@ -155,6 +190,7 @@ async function runSmoke() {
   assert(setupServerJs.includes("custom_command_invocations"), "setup server persists custom command usage history");
   assert(setupServerJs.includes("Token refreshed"), "setup server reports automatic token refresh during validation");
   assert(setupServerJs.includes("Twitch token refresh failed"), "setup server can refresh expired Twitch access tokens");
+  assert(setupServerJs.includes("Twitch rejected the saved Client Secret"), "setup server reports invalid refresh secrets with friendly copy");
   assert(liveBotJs.includes("giveaway_message_templates"), "standalone bot reads local giveaway templates");
   assert(liveBotJs.includes("outbound_messages"), "standalone bot persists outbound message history");
   assert(liveBotJs.includes("custom_commands"), "standalone bot reads custom commands");
@@ -177,6 +213,11 @@ async function runSmoke() {
   assert(initialStatus.runtime.queueHealth.status === "clear", "queue health starts clear");
   assert(initialStatus.runtime.queueHealth.nextAction.includes("Outbound queue"), "queue health explains next action");
   assert(initialStatus.runtime.outboundRecovery.needed === false, "outbound recovery starts clear");
+  const initialLaunch = await waitForLaunchPreparation();
+  assert(initialLaunch.status === "setup_required", "launch preparation reports setup required on clean local setup");
+  assert(initialLaunch.nextAction.includes("Setup Guide"), "launch preparation points to setup guide");
+  const launchRerun = await json("/api/launch-preparation", { method: "POST" });
+  assert(launchRerun.status === "setup_required", "launch preparation route can rerun clean setup check");
   const initialCommands = await json("/api/commands");
   assert(initialCommands.ok === true, "custom command route exists");
   assert(Array.isArray(initialCommands.commands), "custom command route returns commands");
@@ -316,6 +357,19 @@ async function runSmoke() {
   assert(authStart.headers.get("location")?.startsWith("https://id.twitch.tv/"), "OAuth start redirects to Twitch");
   assert(authStart.headers.get("location")?.includes("force_verify=true"), "OAuth start forces account verification");
   assert(authStart.headers.get("location")?.includes("moderator%3Amanage%3Achat_messages"), "OAuth start requests optional delete scope");
+  const authLocation = new URL(authStart.headers.get("location"));
+  const authState = authLocation.searchParams.get("state");
+  assert(Boolean(authState), "OAuth start stores callback state");
+
+  mockInvalidClientSecretExchange = true;
+  const invalidSecretCallback = await fetch(`${baseUrl}/auth/twitch/callback?code=smoke-code&state=${authState}`, {
+    redirect: "manual"
+  });
+  mockInvalidClientSecretExchange = false;
+  assert(invalidSecretCallback.status === 302, "OAuth exchange failures redirect back to settings");
+  const invalidSecretLocation = invalidSecretCallback.headers.get("location") || "";
+  assert(invalidSecretLocation.includes("window=settings"), "OAuth exchange failure opens settings");
+  assert(invalidSecretLocation.includes("error=invalid_client_secret"), "OAuth exchange failure classifies invalid client secret");
 
   const authCallback = await fetch(`${baseUrl}/auth/twitch/callback?error=access_denied`, {
     redirect: "manual"
@@ -683,6 +737,29 @@ async function json(path, options = {}) {
   });
   assert(response.ok, `${path} returned ${response.status}`);
   return response.json();
+}
+
+async function waitForLaunchPreparation() {
+  const deadline = Date.now() + 3000;
+
+  while (Date.now() < deadline) {
+    const launch = await json("/api/launch-preparation");
+
+    if (!["pending", "running"].includes(launch.status)) {
+      return launch;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error("Smoke failed: launch preparation did not finish");
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" }
+  });
 }
 
 function assertSafeConfig(config) {
