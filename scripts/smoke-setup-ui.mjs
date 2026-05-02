@@ -127,6 +127,9 @@ async function runSmoke() {
   assert(appJs.includes("visibleValidationChecks"), "settings renders automatic launch validation failures");
   assert(appJs.includes("api.launchPreparation()"), "settings refreshes launch preparation directly");
   assert(appJs.includes("renderSettingsLaunchNotice"), "settings surfaces launch-check attention before manual validation");
+  assert(appJs.includes("packaged desktop app setup"), "setup guide uses platform-neutral packaged app setup copy");
+  assert(appJs.includes("desktopDistributionLabel"), "diagnostics build copy adapts to desktop platform");
+  assert(appJs.includes("desktopUpdateMethod"), "diagnostics update method adapts to desktop platform");
   assert(appJs.includes("Copy winners"), "winner workflow can copy winners");
   assert(appJs.includes("Mark all delivered"), "winner workflow can bulk mark delivery");
   assert(appJs.includes("Do not continue giveaway operations yet"), "giveaway tab warns on critical announcement gaps");

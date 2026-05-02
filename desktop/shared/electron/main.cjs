@@ -14,16 +14,16 @@ const setupUrl = `http://localhost:${setupPort}`;
 const setupProbeUrl = `http://127.0.0.1:${setupPort}/api/config`;
 const productName = "vaexcore console";
 const legacyProductName = "VaexCore";
+const isMac = process.platform === "darwin";
 
 app.setName(productName);
 
 const buildApplicationMenu = () => {
   const template = [
     {
-      label: productName,
+      label: isMac ? productName : "File",
       submenu: [
-        { role: "about" },
-        { type: "separator" },
+        ...(isMac ? [{ role: "about" }, { type: "separator" }] : []),
         {
           label: "Configuration Settings...",
           accelerator: "CommandOrControl+,",
@@ -94,6 +94,7 @@ const createSettingsWindow = async (fragment = "") => {
   }
 
   const settingsUrl = `${activeSetupUrl}/?window=settings${fragment}`;
+  const icon = resolveWindowIconPath();
 
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.focus();
@@ -110,7 +111,7 @@ const createSettingsWindow = async (fragment = "") => {
     minHeight: 620,
     title: `${productName} Configuration Settings`,
     backgroundColor: "#090b12",
-    icon: join(app.getAppPath(), "desktop/macOS/assets/icon.icns"),
+    ...(icon ? { icon } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -127,6 +128,8 @@ const createSettingsWindow = async (fragment = "") => {
 };
 
 const createWindow = async (url) => {
+  const icon = resolveWindowIconPath();
+
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
@@ -134,7 +137,7 @@ const createWindow = async (url) => {
     minHeight: 650,
     title: productName,
     backgroundColor: "#0d1117",
-    icon: join(app.getAppPath(), "desktop/macOS/assets/icon.icns"),
+    ...(icon ? { icon } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -212,6 +215,19 @@ const resolveUserDataPath = () => {
   return existsSync(legacyUserData) ? legacyUserData : app.getPath("userData");
 };
 
+const resolveWindowIconPath = () => {
+  const appPath = app.getAppPath();
+  const candidates = process.platform === "win32"
+    ? ["desktop/windows/assets/icon.ico", "desktop/shared/assets/logo.jpg"]
+    : process.platform === "darwin"
+      ? ["desktop/macOS/assets/icon.icns", "desktop/shared/assets/logo.jpg"]
+      : ["desktop/shared/assets/logo.jpg"];
+
+  return candidates
+    .map((candidate) => join(appPath, candidate))
+    .find((candidate) => existsSync(candidate));
+};
+
 const isConsoleServerRunning = async () => {
   try {
     const config = await getJson(setupProbeUrl);
@@ -255,10 +271,18 @@ const getJson = (url) => new Promise((resolve, reject) => {
 
 const showStartupError = (error) => {
   const message = isAddressInUse(error)
-    ? `Port ${setupPort} is already in use and did not respond as vaexcore console. Quit the other app or process using localhost:${setupPort}, then open vaexcore console again.\n\nFor recovery, run: lsof -nP -iTCP:${setupPort} -sTCP:LISTEN`
+    ? `Port ${setupPort} is already in use and did not respond as vaexcore console. Quit the other app or process using localhost:${setupPort}, then open vaexcore console again.\n\n${portRecoveryHint()}`
     : error?.message || "vaexcore console could not start.";
 
   dialog.showErrorBox("vaexcore console startup failed", message);
+};
+
+const portRecoveryHint = () => {
+  if (process.platform === "win32") {
+    return `For recovery, run: netstat -ano | findstr :${setupPort}`;
+  }
+
+  return `For recovery, run: lsof -nP -iTCP:${setupPort} -sTCP:LISTEN`;
 };
 
 app.whenReady().then(() => {

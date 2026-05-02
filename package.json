@@ -10,9 +10,12 @@
     "dev:local": "tsx desktop/shared/src/dev/local.ts",
     "setup": "tsx desktop/shared/src/setup/server.ts",
     "dev:app-config": "node scripts/run-live-from-app-config.mjs",
-    "app:dev": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
-    "app:build": "npm run build && env -u ELECTRON_RUN_AS_NODE electron-builder --mac dir && node desktop/macOS/scripts/install-electron-better-sqlite3.mjs",
-    "app:dist": "npm run build && env -u ELECTRON_RUN_AS_NODE electron-builder --mac dir && node desktop/macOS/scripts/install-electron-better-sqlite3.mjs && node desktop/macOS/scripts/build-mac-dmg-from-app.mjs",
+    "app:dev": "npm run build && node scripts/run-electron-app.mjs .",
+    "app:build": "npm run app:build:mac",
+    "app:build:mac": "npm run build && node scripts/run-electron-builder.mjs --mac dir && node desktop/macOS/scripts/install-electron-better-sqlite3.mjs",
+    "app:build:windows": "npm run build && node scripts/run-electron-builder.mjs --win dir && node desktop/windows/scripts/install-electron-better-sqlite3.mjs",
+    "app:dist": "npm run app:dist:mac",
+    "app:dist:mac": "npm run build && node scripts/run-electron-builder.mjs --mac dir && node desktop/macOS/scripts/install-electron-better-sqlite3.mjs && node desktop/macOS/scripts/build-mac-dmg-from-app.mjs",
     "app:zip": "npm run app:build && node desktop/macOS/scripts/package-unsigned-mac.mjs",
     "check:env": "tsx desktop/shared/src/cli/checkEnv.ts",
     "build": "tsc && esbuild desktop/shared/src/setup/server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-bundle/setup-server.js && esbuild desktop/shared/src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-bundle/live-bot.js && node scripts/copy-setup-ui.mjs",
@@ -35,6 +38,7 @@
     "smoke:token-refresh": "npm run build && node scripts/smoke-token-refresh.mjs",
     "smoke:diagnostics": "npm run build && node scripts/smoke-diagnostics.mjs",
     "smoke:clean-install": "npm run build && node scripts/smoke-clean-install.mjs",
+    "smoke:desktop-platforms": "node scripts/verify-desktop-platform-config.mjs",
     "smoke:unsigned-release": "npm run app:zip && node desktop/macOS/scripts/smoke-unsigned-release.mjs",
     "smoke:cli-env": "npm run build && tsx scripts/smoke-cli-env-bootstrap.mjs",
     "start": "node --enable-source-maps dist/index.js",
@@ -74,6 +78,7 @@
       "desktop/shared/assets/**/*",
       "desktop/shared/electron/**/*",
       "desktop/macOS/assets/icon.icns",
+      "desktop/windows/assets/icon.ico",
       "package.json",
       "node_modules/**/*"
     ],
@@ -87,6 +92,32 @@
         "dir",
         "dmg"
       ]
+    },
+    "win": {
+      "icon": "desktop/windows/assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "vaexcore-console-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "vaexcore console"
     },
     "dmg": {
       "artifactName": "vaexcore-console-${version}-${arch}.${ext}"

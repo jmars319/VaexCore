@@ -285,7 +285,7 @@ Open `Settings`, then use `Setup Guide`.
 6. Test chat.
    Click `Send test message` to confirm the bot can speak in chat.
 7. Start the bot.
-   Click `Start Bot` in the Setup Guide or Dashboard. CLI fallback is `npm run dev:app-config` after using the packaged macOS app setup, or `npm run dev` after using project-local setup or `.env`. Type `!ping` in Twitch chat and wait for `LIVE CHAT CONFIRMED`.
+   Click `Start Bot` in the Setup Guide or Dashboard. CLI fallback is `npm run dev:app-config` after using packaged desktop app setup, or `npm run dev` after using project-local setup or `.env`. Type `!ping` in Twitch chat and wait for `LIVE CHAT CONFIRMED`.
 
 ### Operator UI Structure
 
@@ -306,7 +306,7 @@ The repo is arranged so platform conversion can happen without mixing packaging 
 desktop/
   shared/   # Electron shell, local server, setup UI, bot runtime
   macOS/    # Current macOS assets and release packaging
-  windows/  # Reserved for Windows conversion
+  windows/  # Windows packaging assets and native module repair/probe scripts
   linux/    # Reserved for Linux conversion
 mobile/     # Reserved for future mobile work
 web/        # Reserved for future hosted web work

@@ -2109,7 +2109,7 @@ function renderSetupGuide() {
             actionButton("Start Bot", { id: "guideBotStart", variant: "secondary", onClick: startBot }),
             actionButton("Stop Bot", { id: "guideBotStop", variant: "secondary", onClick: stopBot })
           ]),
-          h("p", {}, ["CLI after using the macOS app setup: ", h("code", { text: "npm run dev:app-config" })]),
+          h("p", {}, ["CLI after using the packaged desktop app setup: ", h("code", { text: "npm run dev:app-config" })]),
           h("p", {}, ["CLI after using project-local setup or .env: ", h("code", { text: "npm run dev" })]),
           h("p", {}, ["Instruction: type ", h("code", { text: "!ping" }), " in your Twitch chat."]),
           h("p", { className: "ok", text: "Success condition: LIVE CHAT CONFIRMED" })
@@ -2206,15 +2206,15 @@ function renderDiagnostics() {
     card("About This Build", [
       statusGrid([
         ["Version", app.version || "unknown", Boolean(app.version)],
-        ["Distribution", app.runtime === "electron" ? "manual unsigned zip" : "local development", Boolean(app.runtime)],
-        ["Update method", app.runtime === "electron" ? "quit app, replace vaexcore console.app" : "rebuild and restart local server", Boolean(app.runtime)],
+        ["Distribution", app.runtime === "electron" ? desktopDistributionLabel(app.platform) : "local development", Boolean(app.runtime)],
+        ["Update method", app.runtime === "electron" ? desktopUpdateMethod(app.platform) : "rebuild and restart local server", Boolean(app.runtime)],
         ["Runtime", app.runtime || "unknown", Boolean(app.runtime)],
         ["Electron", app.electron || "not electron", Boolean(app.electron)],
         ["Platform", `${app.platform || "unknown"} ${app.arch || ""}`.trim(), Boolean(app.platform)],
         ["Generated", report?.generatedAt || "not run", Boolean(report?.generatedAt)]
       ]),
       app.runtime === "electron"
-        ? callout("Manual updates should replace only vaexcore console.app. Keep the Application Support folder unless you intentionally want to reset Twitch setup and local data.", "muted")
+        ? callout(desktopUpdateNote(app.platform), "muted")
         : null
     ]),
     card("Environment", [
@@ -3114,6 +3114,42 @@ function postStreamReviewText() {
 
 function formatMessagePreview(message = "") {
   return message.length > 120 ? `${message.slice(0, 117)}...` : message;
+}
+
+function desktopDistributionLabel(platform) {
+  if (platform === "win32") {
+    return "manual Windows build";
+  }
+
+  if (platform === "darwin") {
+    return "manual unsigned zip";
+  }
+
+  return "manual desktop build";
+}
+
+function desktopUpdateMethod(platform) {
+  if (platform === "win32") {
+    return "quit app, replace installed Windows app";
+  }
+
+  if (platform === "darwin") {
+    return "quit app, replace vaexcore console.app";
+  }
+
+  return "quit app, replace desktop app";
+}
+
+function desktopUpdateNote(platform) {
+  if (platform === "win32") {
+    return "Manual updates should replace only the installed vaexcore console app files. Keep the AppData folder unless you intentionally want to reset Twitch setup and local data.";
+  }
+
+  if (platform === "darwin") {
+    return "Manual updates should replace only vaexcore console.app. Keep the Application Support folder unless you intentionally want to reset Twitch setup and local data.";
+  }
+
+  return "Manual updates should replace only the app files. Keep the app data folder unless you intentionally want to reset Twitch setup and local data.";
 }
 
 async function refreshAll() {
