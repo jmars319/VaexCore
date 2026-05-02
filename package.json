@@ -71,6 +71,7 @@
     "files": [
       "dist/**/*",
       "dist-bundle/**/*",
+      "desktop/shared/assets/**/*",
       "desktop/shared/electron/**/*",
       "desktop/macOS/assets/icon.icns",
       "package.json",
