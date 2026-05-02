@@ -2304,7 +2304,7 @@ const getBotRuntimeEnv = () => {
     ...process.env,
     VAEXCORE_MODE: "live",
     VAEXCORE_CONFIG_DIR: configDir,
-    DATABASE_URL: process.env.DATABASE_URL || `file:${join(configDir, "data/vaexcore.sqlite")}`
+    DATABASE_URL: databaseUrl
   };
 
   if (process.versions.electron) {
