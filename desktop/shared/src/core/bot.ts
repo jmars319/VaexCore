@@ -24,6 +24,7 @@ import { ModerationService } from "../modules/moderation/moderation.module";
 import { isTimerActivityMessage, TimerScheduler, TimersService } from "../modules/timers/timers.module";
 import { createRuntimeStatus, type RuntimeStatus } from "./runtimeStatus";
 import { registerStatusCommands } from "./statusCommands";
+import { registerStudioCommands } from "../studio/studio.commands";
 import {
   isInvalidTwitchAccessTokenError,
   refreshStoredTwitchToken
@@ -148,6 +149,10 @@ export class ConsoleBot {
       router: this.commandRouter,
       runtimeStatus: this.runtimeStatus,
       giveawaysService
+    });
+    registerStudioCommands({
+      router: this.commandRouter,
+      logger: options.logger
     });
     registerCommandsModule({
       router: this.commandRouter,

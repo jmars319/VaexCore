@@ -1,6 +1,6 @@
 import { normalizeCommandName } from "./security";
 
-export type ProtectedCommandOwner = "core" | "status" | "giveaway";
+export type ProtectedCommandOwner = "core" | "status" | "giveaway" | "studio";
 
 export type ProtectedCommandDefinition = {
   name: string;
@@ -18,6 +18,16 @@ export const protectedCommandDefinitions: ProtectedCommandDefinition[] = [
     name: "vcstatus",
     owner: "status",
     description: "Reports vaexcore console runtime, EventSub, queue, and giveaway status."
+  },
+  {
+    name: "vcstudio",
+    owner: "studio",
+    description: "Checks whether vaexcore console can reach vaexcore studio."
+  },
+  {
+    name: "vcmark",
+    owner: "studio",
+    description: "Creates a marker in vaexcore studio for the current stream recording."
   },
   {
     name: "enter",

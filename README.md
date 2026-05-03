@@ -634,6 +634,8 @@ npm run app:build
 - `!ping`: replies with `pong`
 - `!ghelp`: shows concise giveaway operator commands
 - `!vcstatus`: shows mode, EventSub, subscription, queue, and giveaway status
+- `!vcstudio`: checks the optional vaexcore studio localhost connection
+- `!vcmark label`: creates a vaexcore studio marker when Studio integration is enabled
 - `!enter`: enters the active giveaway when its keyword is `enter`
 - `!gstart codes=3 keyword=enter title="Community Giveaway"`: starts one active giveaway
 - `!gstatus`: reports active giveaway status
@@ -643,6 +645,18 @@ npm run app:build
 - `!gclaim username`: marks a winner as claimed; no prize is stored or sent
 - `!gdeliver username`: marks a winner as delivered; no prize is stored or sent
 - `!gend`: ends the active giveaway
+
+## Optional vaexcore studio Connection
+
+vaexcore console can create markers in vaexcore studio without making Studio required for bot startup. Enable it with:
+
+```bash
+VAEXCORE_STUDIO_INTEGRATION=true
+VAEXCORE_STUDIO_API_URL=http://127.0.0.1:51287
+VAEXCORE_STUDIO_API_TOKEN=
+```
+
+Use `!vcstudio` to check reachability and `!vcmark clutch round` to write a marker into the active Studio timeline.
 
 ## Roadmap
 

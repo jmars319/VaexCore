@@ -62,6 +62,7 @@ import {
   TimersService,
   timerMetadata
 } from "../modules/timers/timers.module";
+import { registerStudioCommands } from "../studio/studio.commands";
 import {
   defaultRedirectUri,
   getLocalSecretsPath,
@@ -5607,6 +5608,10 @@ const simulateCommand = async (body: {
     router,
     db,
     featureGates
+  });
+  registerStudioCommands({
+    router,
+    logger
   });
 
   try {
