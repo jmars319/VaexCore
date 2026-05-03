@@ -41,7 +41,7 @@ const state = {
   moderationBlockedLinks: [],
   moderationLinkPermits: [],
   moderationHits: [],
-  moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, blockedLinks: 0, enabledBlockedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 },
+  moderationSummary: { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, blockedLinks: 0, enabledBlockedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, botShield: "off", hits: 0 },
   moderationEnforcement: null,
   moderationFeatureGate: null,
   streamPresets: [],
@@ -1534,6 +1534,7 @@ function renderModeration() {
         ["Blocked domains", `${state.moderationSummary.enabledBlockedLinks || 0}/${state.moderationSummary.blockedLinks || 0}`, true],
         ["Active permits", state.moderationSummary.activeLinkPermits || 0, true],
         ["Enforced filters", state.moderationSummary.enforcementFilters || 0, true],
+        ["Bot Shield", state.moderationSummary.botShield || "off", Boolean(state.moderationSummary.botShield && state.moderationSummary.botShield !== "off")],
         ["Escalation", state.moderationSummary.escalation || "off", Boolean(state.moderationSummary.escalation && state.moderationSummary.escalation !== "off")],
         ["Recent hits", state.moderationSummary.hits || 0, true]
       ]),
@@ -1544,6 +1545,7 @@ function renderModeration() {
         formRow("Excessive caps", moderationActionSelect("capsFilterAction")),
         formRow("Repeated messages", moderationActionSelect("repeatFilterAction")),
         formRow("Symbol spam", moderationActionSelect("symbolFilterAction")),
+        formRow("Bot Shield", moderationActionSelect("botShieldAction")),
         formRow("Timeout seconds", h("input", {
           id: "timeoutSeconds",
           type: "number",
@@ -1579,19 +1581,25 @@ function renderModeration() {
           h("input", { id: "symbolFilterEnabled", type: "checkbox", onChange: updateModerationDraft }),
           "Symbol spam"
         ]),
+        h("label", { className: "inline-check" }, [
+          h("input", { id: "botShieldEnabled", type: "checkbox", onChange: updateModerationDraft }),
+          "Bot Shield"
+        ]),
         formRow("Warning message", h("input", {
           id: "moderationWarningMessage",
           placeholder: "@{user}, please keep chat within channel guidelines.",
           onInput: updateModerationDraft
         }))
       ]),
+      callout("Bot Shield is heuristic. It scores likely follower/viewer spam using message text, risky links, promo domains, and randomized usernames; use Local Test before live enforcement.", "muted"),
       h("div", { className: "grid three" }, [
         formRow("Caps min length", h("input", { id: "capsMinLength", type: "number", min: "5", max: "450", onInput: updateModerationDraft })),
         formRow("Caps ratio", h("input", { id: "capsRatio", type: "number", min: "0.1", max: "1", step: "0.05", onInput: updateModerationDraft })),
         formRow("Repeat limit", h("input", { id: "repeatLimit", type: "number", min: "2", max: "20", onInput: updateModerationDraft })),
         formRow("Repeat window seconds", h("input", { id: "repeatWindowSeconds", type: "number", min: "5", max: "600", onInput: updateModerationDraft })),
         formRow("Symbol min length", h("input", { id: "symbolMinLength", type: "number", min: "5", max: "450", onInput: updateModerationDraft })),
-        formRow("Symbol ratio", h("input", { id: "symbolRatio", type: "number", min: "0.1", max: "1", step: "0.05", onInput: updateModerationDraft }))
+        formRow("Symbol ratio", h("input", { id: "symbolRatio", type: "number", min: "0.1", max: "1", step: "0.05", onInput: updateModerationDraft })),
+        formRow("Bot Shield score", h("input", { id: "botShieldScoreThreshold", type: "number", min: "30", max: "100", onInput: updateModerationDraft }))
       ]),
       h("h3", { text: "Escalation" }),
       callout("Optional repeat-hit escalation upgrades the same user's recent moderation hits from warn to delete to timeout. It never bypasses trusted-role exemptions or scope checks.", "muted"),
@@ -3266,7 +3274,7 @@ function setModerationState(result = {}) {
   state.moderationBlockedLinks = result.blockedLinks || [];
   state.moderationLinkPermits = result.linkPermits || [];
   state.moderationHits = result.hits || [];
-  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, blockedLinks: 0, enabledBlockedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, hits: 0 };
+  state.moderationSummary = result.summary || { terms: 0, enabledTerms: 0, allowedLinks: 0, enabledAllowedLinks: 0, blockedLinks: 0, enabledBlockedLinks: 0, activeLinkPermits: 0, roleExemptions: 0, filtersEnabled: 0, enforcementFilters: 0, botShield: "off", hits: 0 };
   state.moderationEnforcement = result.enforcement || null;
   state.moderationFeatureGate = result.featureGate || state.moderationFeatureGate;
 }
@@ -4021,11 +4029,14 @@ function readModerationSettingsPayload() {
     capsFilterEnabled: Boolean(field("capsFilterEnabled")?.checked),
     repeatFilterEnabled: Boolean(field("repeatFilterEnabled")?.checked),
     symbolFilterEnabled: Boolean(field("symbolFilterEnabled")?.checked),
+    botShieldEnabled: Boolean(field("botShieldEnabled")?.checked),
     blockedTermsAction: field("blockedTermsAction")?.value || "warn",
     linkFilterAction: field("linkFilterAction")?.value || "warn",
     capsFilterAction: field("capsFilterAction")?.value || "warn",
     repeatFilterAction: field("repeatFilterAction")?.value || "warn",
     symbolFilterAction: field("symbolFilterAction")?.value || "warn",
+    botShieldAction: field("botShieldAction")?.value || "delete",
+    botShieldScoreThreshold: Number(field("botShieldScoreThreshold")?.value || 70),
     timeoutSeconds: Number(field("timeoutSeconds")?.value || 60),
     warningMessage: field("moderationWarningMessage")?.value || "",
     capsMinLength: Number(field("capsMinLength")?.value || 20),
@@ -4452,6 +4463,10 @@ function renderModerationTestResult() {
       ["Action", result.hit?.action || "none", !result.hit],
       ["Filter actions", (result.hit?.filterActions || []).map((item) => `${item.filterType}:${item.action}`).join(", ") || "none", !result.hit],
       ["Matched rules", (result.hit?.matches || []).map((item) => item.detail).join("; ") || "none", !result.hit],
+      ["Bot Shield", result.botShield ? `${result.botShield.score}/${result.botShield.threshold}` : "off", !result.hit],
+      ["Bot reasons", (result.botShield?.reasons || []).join(", ") || "none", !result.hit],
+      ["First-time chatter", result.botShield ? (result.botShield.firstTimeChatter ? "yes" : "no") : "unknown", !result.botShield?.firstTimeChatter],
+      ["Silent first action", result.hit?.silent ? "yes" : "no", !result.hit?.silent],
       ["Escalation", result.hit?.escalation?.reason || "none", !result.hit || !result.hit.escalation],
       ["Timeout", result.hit?.timeoutSeconds ? `${result.hit.timeoutSeconds}s` : "none", !result.hit],
       ["Enforcement", plan ? `${plan.status}: ${plan.reason}` : "none", !result.hit || plan?.status === "skipped"],
@@ -4501,11 +4516,14 @@ function syncFormValues() {
   setChecked("capsFilterEnabled", Boolean(moderationValue("capsFilterEnabled", moderationSettings.capsFilterEnabled)));
   setChecked("repeatFilterEnabled", Boolean(moderationValue("repeatFilterEnabled", moderationSettings.repeatFilterEnabled)));
   setChecked("symbolFilterEnabled", Boolean(moderationValue("symbolFilterEnabled", moderationSettings.symbolFilterEnabled)));
+  setChecked("botShieldEnabled", Boolean(moderationValue("botShieldEnabled", moderationSettings.botShieldEnabled)));
   setValue("blockedTermsAction", moderationValue("blockedTermsAction", moderationSettings.blockedTermsAction || "warn"));
   setValue("linkFilterAction", moderationValue("linkFilterAction", moderationSettings.linkFilterAction || "warn"));
   setValue("capsFilterAction", moderationValue("capsFilterAction", moderationSettings.capsFilterAction || "warn"));
   setValue("repeatFilterAction", moderationValue("repeatFilterAction", moderationSettings.repeatFilterAction || "warn"));
   setValue("symbolFilterAction", moderationValue("symbolFilterAction", moderationSettings.symbolFilterAction || "warn"));
+  setValue("botShieldAction", moderationValue("botShieldAction", moderationSettings.botShieldAction || "delete"));
+  setValue("botShieldScoreThreshold", moderationValue("botShieldScoreThreshold", moderationSettings.botShieldScoreThreshold || 70));
   setValue("timeoutSeconds", moderationValue("timeoutSeconds", moderationSettings.timeoutSeconds || 60));
   setValue("moderationWarningMessage", moderationValue("moderationWarningMessage", moderationSettings.warningMessage || "@{user}, please keep chat within channel guidelines."));
   setValue("capsMinLength", moderationValue("capsMinLength", moderationSettings.capsMinLength || 20));

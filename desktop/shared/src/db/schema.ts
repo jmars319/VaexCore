@@ -156,12 +156,15 @@ export const initializeSchema = (db: DbClient) => {
       caps_filter_enabled INTEGER NOT NULL DEFAULT 0 CHECK (caps_filter_enabled IN (0, 1)),
       repeat_filter_enabled INTEGER NOT NULL DEFAULT 0 CHECK (repeat_filter_enabled IN (0, 1)),
       symbol_filter_enabled INTEGER NOT NULL DEFAULT 0 CHECK (symbol_filter_enabled IN (0, 1)),
+      bot_shield_enabled INTEGER NOT NULL DEFAULT 0 CHECK (bot_shield_enabled IN (0, 1)),
       action TEXT NOT NULL DEFAULT 'warn' CHECK (action IN ('warn')),
       blocked_terms_action TEXT NOT NULL DEFAULT 'warn' CHECK (blocked_terms_action IN ('warn', 'delete', 'timeout')),
       link_filter_action TEXT NOT NULL DEFAULT 'warn' CHECK (link_filter_action IN ('warn', 'delete', 'timeout')),
       caps_filter_action TEXT NOT NULL DEFAULT 'warn' CHECK (caps_filter_action IN ('warn', 'delete', 'timeout')),
       repeat_filter_action TEXT NOT NULL DEFAULT 'warn' CHECK (repeat_filter_action IN ('warn', 'delete', 'timeout')),
       symbol_filter_action TEXT NOT NULL DEFAULT 'warn' CHECK (symbol_filter_action IN ('warn', 'delete', 'timeout')),
+      bot_shield_action TEXT NOT NULL DEFAULT 'delete' CHECK (bot_shield_action IN ('warn', 'delete', 'timeout')),
+      bot_shield_score_threshold INTEGER NOT NULL DEFAULT 70,
       timeout_seconds INTEGER NOT NULL DEFAULT 60,
       warning_message TEXT NOT NULL DEFAULT '@{user}, please keep chat within channel guidelines.',
       caps_min_length INTEGER NOT NULL DEFAULT 20,
@@ -278,6 +281,9 @@ export const initializeSchema = (db: DbClient) => {
   ensureColumn(db, "moderation_settings", "caps_filter_action", "TEXT NOT NULL DEFAULT 'warn' CHECK (caps_filter_action IN ('warn', 'delete', 'timeout'))");
   ensureColumn(db, "moderation_settings", "repeat_filter_action", "TEXT NOT NULL DEFAULT 'warn' CHECK (repeat_filter_action IN ('warn', 'delete', 'timeout'))");
   ensureColumn(db, "moderation_settings", "symbol_filter_action", "TEXT NOT NULL DEFAULT 'warn' CHECK (symbol_filter_action IN ('warn', 'delete', 'timeout'))");
+  ensureColumn(db, "moderation_settings", "bot_shield_enabled", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "moderation_settings", "bot_shield_action", "TEXT NOT NULL DEFAULT 'delete' CHECK (bot_shield_action IN ('warn', 'delete', 'timeout'))");
+  ensureColumn(db, "moderation_settings", "bot_shield_score_threshold", "INTEGER NOT NULL DEFAULT 70");
   ensureColumn(db, "moderation_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 60");
   ensureColumn(db, "moderation_settings", "escalation_enabled", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "moderation_settings", "escalation_window_seconds", "INTEGER NOT NULL DEFAULT 300");

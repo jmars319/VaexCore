@@ -36,6 +36,7 @@ async function runSmoke() {
   assert(appJs.includes("Temporary Link Permits"), "Moderation tab exposes link permits");
   assert(appJs.includes("Timeout seconds"), "Moderation tab exposes timeout duration");
   assert(appJs.includes("Escalation"), "Moderation tab exposes repeat-hit escalation");
+  assert(appJs.includes("Bot Shield"), "Moderation tab exposes bot shield");
   assert(appJs.includes("moderator:manage:chat_messages"), "Moderation tab exposes delete scope status");
   assert(appJs.includes("moderator:manage:banned_users"), "Moderation tab exposes timeout scope status");
 
@@ -46,6 +47,10 @@ async function runSmoke() {
   assert(initial.summary.enforcementFilters === 0, "enforcement actions default off");
   assert(initial.settings.blockedTermsAction === "warn", "blocked phrase action defaults warn");
   assert(initial.settings.linkFilterAction === "warn", "link action defaults warn");
+  assert(initial.settings.botShieldEnabled === false, "bot shield defaults off");
+  assert(initial.settings.botShieldAction === "delete", "bot shield default action is protective when enabled");
+  assert(initial.settings.botShieldScoreThreshold === 70, "bot shield score threshold defaults safely");
+  assert(initial.summary.botShield === "off", "bot shield summary defaults off");
   assert(initial.settings.timeoutSeconds === 60, "timeout duration defaults safely");
   assert(initial.settings.escalationEnabled === false, "repeat-hit escalation defaults off");
   assert(initial.summary.escalation === "off", "repeat-hit escalation summary defaults off");
@@ -75,11 +80,14 @@ async function runSmoke() {
     capsFilterEnabled: true,
     repeatFilterEnabled: true,
     symbolFilterEnabled: true,
+    botShieldEnabled: true,
     blockedTermsAction: "delete",
     linkFilterAction: "timeout",
     capsFilterAction: "warn",
     repeatFilterAction: "warn",
     symbolFilterAction: "warn",
+    botShieldAction: "delete",
+    botShieldScoreThreshold: 65,
     timeoutSeconds: 90,
     warningMessage: "@{user}, warning: {reason}",
     capsMinLength: 8,
@@ -98,8 +106,9 @@ async function runSmoke() {
     exemptSubscribers: false
   });
   assert(saved.ok === true, "moderation settings save");
-  assert(saved.summary.filtersEnabled === 5, "moderation filters can be enabled");
-  assert(saved.summary.enforcementFilters === 2, "delete and timeout actions can be assigned per filter");
+  assert(saved.summary.filtersEnabled === 6, "moderation filters can be enabled");
+  assert(saved.summary.enforcementFilters === 3, "delete and timeout actions can be assigned per filter");
+  assert(saved.summary.botShield === "65+ delete", "bot shield summary is readable");
   assert(saved.settings.timeoutSeconds === 90, "timeout duration can be saved");
   assert(saved.settings.escalationEnabled === true, "repeat-hit escalation can be enabled");
   assert(saved.summary.escalation === "2/3 in 300s", "repeat-hit escalation summary is readable");
@@ -189,6 +198,37 @@ async function runSmoke() {
   assert(!allowedLink.result.hit, "allowed domain does not trigger link filter");
   assert(allowedLink.result.allowedLinks.includes("example.com"), "allowed domain is reported in simulation");
 
+  const botSpam = await post("/api/moderation/simulate", {
+    actor: "famebot1234",
+    role: "viewer",
+    text: "Want to become famous? Buy followers and viewers at example.com"
+  });
+  assert(botSpam.result.hit.filterTypes.includes("bot_shield"), "bot shield detects likely follower/viewer spam");
+  assert(botSpam.result.hit.action === "delete", "bot shield can resolve to delete action without link timeout");
+  assert(botSpam.result.botShield.score >= botSpam.result.botShield.threshold, "bot shield reports score and threshold");
+  assert(botSpam.result.botShield.firstTimeChatter === true, "bot shield detects first-time chatter context");
+  assert(botSpam.result.hit.silent === true, "bot shield silently handles first protective delete");
+  assert(botSpam.result.hit.detail.includes("bot shield score"), "bot shield hit detail includes score");
+
+  const legitNewViewer = await post("/api/moderation/simulate", {
+    actor: "newviewer",
+    role: "viewer",
+    text: "first time here, this stream is cool"
+  });
+  assert(!legitNewViewer.result.hit, "bot shield allows normal first-time chat");
+  assert(legitNewViewer.result.botShield.firstTimeChatter === true, "bot shield reports first-time clean chatter");
+  assert(legitNewViewer.result.botShield.score < legitNewViewer.result.botShield.threshold, "clear bot shield result still reports score");
+
+  await post("/api/moderation/simulate", { actor: "raidone", role: "viewer", text: "Vaex raid lets go" });
+  await post("/api/moderation/simulate", { actor: "raidtwo", role: "viewer", text: "Vaex raid lets go" });
+  const raidChatter = await post("/api/moderation/simulate", {
+    actor: "raidthree",
+    role: "viewer",
+    text: "Vaex raid lets go"
+  });
+  assert(!raidChatter.result.hit, "bot shield allows repeated legit raid chatter");
+  assert(raidChatter.result.botShield.reasons.includes("raid-friendly chatter"), "raid-friendly chatter is explained");
+
   const caps = await post("/api/moderation/simulate", {
     actor: "viewer",
     role: "viewer",
@@ -233,6 +273,38 @@ async function runSmoke() {
     command: "!enter spoiler"
   });
   assert(command.moderation?.skipped === true, "!enter is exempt from moderation filters");
+
+  const botShieldOnly = await post("/api/moderation/settings", {
+    blockedTermsEnabled: false,
+    linkFilterEnabled: false,
+    capsFilterEnabled: false,
+    repeatFilterEnabled: false,
+    symbolFilterEnabled: false,
+    botShieldEnabled: true,
+    botShieldAction: "delete",
+    botShieldScoreThreshold: 70
+  });
+  assert(botShieldOnly.ok === true, "bot shield can run without basic filters");
+
+  await post("/api/moderation/simulate", { actor: "repeatbot", role: "viewer", text: "limited drop code now" });
+  await post("/api/moderation/simulate", { actor: "repeatbot", role: "viewer", text: "limited drop code now" });
+  const repeatedBot = await post("/api/moderation/simulate", {
+    actor: "repeatbot",
+    role: "viewer",
+    text: "limited drop code now"
+  });
+  assert(repeatedBot.result.hit.filterTypes.includes("bot_shield"), "bot shield rate-limits repeated messages");
+  assert(repeatedBot.result.hit.detail.includes("rate-limited repeated message"), "bot shield explains repeated-message rate limit");
+
+  await post("/api/moderation/simulate", { actor: "copypaste1", role: "viewer", text: "limited drop code now" });
+  await post("/api/moderation/simulate", { actor: "copypaste2", role: "viewer", text: "limited drop code now" });
+  const copiedBot = await post("/api/moderation/simulate", {
+    actor: "copypaste3",
+    role: "viewer",
+    text: "limited drop code now"
+  });
+  assert(copiedBot.result.hit.filterTypes.includes("bot_shield"), "bot shield catches copy/paste patterns across chat");
+  assert(copiedBot.result.hit.detail.includes("copy/paste pattern across chat"), "bot shield explains copy/paste pattern");
 
   const afterHits = await json("/api/moderation");
   assert(afterHits.hits.length >= 5, "recent moderation hits are listed");

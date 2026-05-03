@@ -20,12 +20,15 @@ const moderationLimits = {
   hitLimit: 100,
   linkPermitLimit: 100,
   repeatMemoryMax: 50,
+  globalRepeatMemoryMax: 300,
   warningCooldownMs: 60_000,
   timeoutMinSeconds: 10,
   timeoutMaxSeconds: 1200,
   escalationMinWindowSeconds: 30,
   escalationMaxWindowSeconds: 3600,
-  escalationMaxHitCount: 25
+  escalationMaxHitCount: 25,
+  botShieldMinScore: 30,
+  botShieldMaxScore: 100
 } as const;
 
 export type ModerationFilterType =
@@ -33,7 +36,8 @@ export type ModerationFilterType =
   | "link"
   | "caps"
   | "repeat"
-  | "symbols";
+  | "symbols"
+  | "bot_shield";
 
 export type ModerationAction = "warn" | "delete" | "timeout";
 
@@ -43,12 +47,15 @@ export type ModerationSettings = {
   capsFilterEnabled: boolean;
   repeatFilterEnabled: boolean;
   symbolFilterEnabled: boolean;
+  botShieldEnabled: boolean;
   action: ModerationAction;
   blockedTermsAction: ModerationAction;
   linkFilterAction: ModerationAction;
   capsFilterAction: ModerationAction;
   repeatFilterAction: ModerationAction;
   symbolFilterAction: ModerationAction;
+  botShieldAction: ModerationAction;
+  botShieldScoreThreshold: number;
   timeoutSeconds: number;
   warningMessage: string;
   capsMinLength: number;
@@ -119,12 +126,15 @@ type ModerationSettingsRow = {
   caps_filter_enabled: number;
   repeat_filter_enabled: number;
   symbol_filter_enabled: number;
+  bot_shield_enabled: number;
   action: ModerationAction;
   blocked_terms_action: ModerationAction;
   link_filter_action: ModerationAction;
   caps_filter_action: ModerationAction;
   repeat_filter_action: ModerationAction;
   symbol_filter_action: ModerationAction;
+  bot_shield_action: ModerationAction;
+  bot_shield_score_threshold: number;
   timeout_seconds: number;
   warning_message: string;
   caps_min_length: number;
@@ -190,7 +200,15 @@ type ModerationLinkPermitRow = {
 
 type ModerationMemoryEntry = {
   normalizedText: string;
+  userKey: string;
   at: number;
+};
+
+type ChatterContext = {
+  firstTimeChatter: boolean;
+  sameUserRepeatCount: number;
+  rapidUserMessageCount: number;
+  globalCopyPasteUserCount: number;
 };
 
 export type ModerationEvaluation = {
@@ -198,6 +216,13 @@ export type ModerationEvaluation = {
   skipped?: boolean;
   reason?: string;
   allowedLinks?: string[];
+  botShield?: {
+    score: number;
+    threshold: number;
+    reasons: string[];
+    firstTimeChatter: boolean;
+    silent: boolean;
+  };
   consumedPermit?: {
     id: number;
     userLogin: string;
@@ -223,6 +248,7 @@ export type ModerationEvaluation = {
     };
     detail: string;
     warningMessage: string;
+    silent?: boolean;
     timeoutSeconds?: number;
   };
 };
@@ -258,6 +284,8 @@ export type ModerationEnforcementOutcome = {
 
 export class ModerationService {
   private readonly recentByUser = new Map<string, ModerationMemoryEntry[]>();
+  private recentGlobal: ModerationMemoryEntry[] = [];
+  private readonly seenUserKeys = new Set<string>();
   private readonly lastWarningAt = new Map<string, number>();
 
   constructor(
@@ -302,9 +330,13 @@ export class ModerationService {
           settings.linkFilterEnabled,
           settings.capsFilterEnabled,
           settings.repeatFilterEnabled,
-          settings.symbolFilterEnabled
+          settings.symbolFilterEnabled,
+          settings.botShieldEnabled
         ].filter(Boolean).length,
         enforcementFilters: enabledEnforcementFilterNames(settings).length,
+        botShield: settings.botShieldEnabled
+          ? `${settings.botShieldScoreThreshold}+ ${settings.botShieldAction}`
+          : "off",
         escalation: settings.escalationEnabled
           ? `${settings.escalationDeleteAfter}/${settings.escalationTimeoutAfter} in ${settings.escalationWindowSeconds}s`
           : "off",
@@ -337,6 +369,7 @@ export class ModerationService {
       capsFilterEnabled: booleanValue(body.capsFilterEnabled, current.capsFilterEnabled),
       repeatFilterEnabled: booleanValue(body.repeatFilterEnabled, current.repeatFilterEnabled),
       symbolFilterEnabled: booleanValue(body.symbolFilterEnabled, current.symbolFilterEnabled),
+      botShieldEnabled: booleanValue(body.botShieldEnabled, current.botShieldEnabled),
       action: "warn",
       blockedTermsAction: normalizeModerationAction(
         body.blockedTermsAction ?? current.blockedTermsAction,
@@ -358,6 +391,16 @@ export class ModerationService {
         body.symbolFilterAction ?? current.symbolFilterAction,
         current.symbolFilterAction
       ),
+      botShieldAction: normalizeModerationAction(
+        body.botShieldAction ?? current.botShieldAction,
+        current.botShieldAction
+      ),
+      botShieldScoreThreshold: parseSafeInteger(body.botShieldScoreThreshold, {
+        field: "Bot Shield score threshold",
+        fallback: current.botShieldScoreThreshold,
+        min: moderationLimits.botShieldMinScore,
+        max: moderationLimits.botShieldMaxScore
+      }),
       timeoutSeconds: parseSafeInteger(body.timeoutSeconds, {
         field: "Timeout seconds",
         fallback: current.timeoutSeconds,
@@ -432,12 +475,15 @@ export class ModerationService {
             caps_filter_enabled,
             repeat_filter_enabled,
             symbol_filter_enabled,
+            bot_shield_enabled,
             action,
             blocked_terms_action,
             link_filter_action,
             caps_filter_action,
             repeat_filter_action,
             symbol_filter_action,
+            bot_shield_action,
+            bot_shield_score_threshold,
             timeout_seconds,
             warning_message,
             caps_min_length,
@@ -462,12 +508,15 @@ export class ModerationService {
             @capsFilterEnabled,
             @repeatFilterEnabled,
             @symbolFilterEnabled,
+            @botShieldEnabled,
             'warn',
             @blockedTermsAction,
             @linkFilterAction,
             @capsFilterAction,
             @repeatFilterAction,
             @symbolFilterAction,
+            @botShieldAction,
+            @botShieldScoreThreshold,
             @timeoutSeconds,
             @warningMessage,
             @capsMinLength,
@@ -492,12 +541,15 @@ export class ModerationService {
             caps_filter_enabled = excluded.caps_filter_enabled,
             repeat_filter_enabled = excluded.repeat_filter_enabled,
             symbol_filter_enabled = excluded.symbol_filter_enabled,
+            bot_shield_enabled = excluded.bot_shield_enabled,
             action = excluded.action,
             blocked_terms_action = excluded.blocked_terms_action,
             link_filter_action = excluded.link_filter_action,
             caps_filter_action = excluded.caps_filter_action,
             repeat_filter_action = excluded.repeat_filter_action,
             symbol_filter_action = excluded.symbol_filter_action,
+            bot_shield_action = excluded.bot_shield_action,
+            bot_shield_score_threshold = excluded.bot_shield_score_threshold,
             timeout_seconds = excluded.timeout_seconds,
             warning_message = excluded.warning_message,
             caps_min_length = excluded.caps_min_length,
@@ -523,11 +575,14 @@ export class ModerationService {
         capsFilterEnabled: settings.capsFilterEnabled ? 1 : 0,
         repeatFilterEnabled: settings.repeatFilterEnabled ? 1 : 0,
         symbolFilterEnabled: settings.symbolFilterEnabled ? 1 : 0,
+        botShieldEnabled: settings.botShieldEnabled ? 1 : 0,
         blockedTermsAction: settings.blockedTermsAction,
         linkFilterAction: settings.linkFilterAction,
         capsFilterAction: settings.capsFilterAction,
         repeatFilterAction: settings.repeatFilterAction,
         symbolFilterAction: settings.symbolFilterAction,
+        botShieldAction: settings.botShieldAction,
+        botShieldScoreThreshold: settings.botShieldScoreThreshold,
         timeoutSeconds: settings.timeoutSeconds,
         warningMessage: settings.warningMessage,
         capsMinLength: settings.capsMinLength,
@@ -555,6 +610,7 @@ export class ModerationService {
       escalationDeleteAfter: settings.escalationDeleteAfter,
       escalationTimeoutAfter: settings.escalationTimeoutAfter,
       escalationWindowSeconds: settings.escalationWindowSeconds,
+      botShieldScoreThreshold: settings.botShieldScoreThreshold,
       timeoutSeconds: settings.timeoutSeconds
     });
 
@@ -971,25 +1027,32 @@ export class ModerationService {
     }
 
     if (this.isExemptCommand(message.text)) {
-      this.trackRepeatMemory(message);
+      this.trackChatMemory(message);
       return { ok: true, skipped: true, reason: "Protected command or giveaway entry is exempt." };
     }
 
     const settings = this.getSettings();
 
     if (this.isExemptRole(message, settings)) {
-      this.trackRepeatMemory(message);
+      this.trackChatMemory(message);
       return { ok: true, skipped: true, reason: "Trusted chat role is exempt from moderation filters." };
     }
 
-    const { matches, allowedLinks, consumedPermit } = this.findMatches(message, settings, options);
+    const chatterContext = this.getChatterContext(message, settings);
+    const { matches, allowedLinks, consumedPermit, botShield } = this.findMatches(
+      message,
+      settings,
+      options,
+      chatterContext
+    );
 
-    this.trackRepeatMemory(message);
+    this.trackChatMemory(message);
 
     if (matches.length === 0) {
       return {
         ok: true,
         allowedLinks: allowedLinks.length ? allowedLinks : undefined,
+        botShield,
         consumedPermit
       };
     }
@@ -1007,6 +1070,11 @@ export class ModerationService {
       detailParts.push(escalation.reason);
     }
 
+    const silent = isSilentBotShieldHit(matches, action, escalation.applied);
+    if (botShield) {
+      botShield.silent = silent;
+    }
+
     const detail = sanitizeText(detailParts.join("; "), {
       field: "Moderation detail",
       maxLength: moderationLimits.detailLength
@@ -1020,6 +1088,7 @@ export class ModerationService {
     return {
       ok: true,
       allowedLinks: allowedLinks.length ? allowedLinks : undefined,
+      botShield,
       consumedPermit,
       hit: {
         filterTypes: matches.map((match) => match.type),
@@ -1040,6 +1109,7 @@ export class ModerationService {
           : undefined,
         detail,
         warningMessage,
+        silent,
         timeoutSeconds: action === "timeout" ? settings.timeoutSeconds : undefined
       }
     };
@@ -1147,8 +1217,12 @@ export class ModerationService {
     }, { createdAt: now });
   }
 
-  shouldWarn(message: ChatMessage, filterTypes: ModerationFilterType[]) {
-    const key = `${userKey(message)}:${filterTypes.join(",")}`;
+  shouldWarn(message: ChatMessage, hit: NonNullable<ModerationEvaluation["hit"]>) {
+    if (hit.silent) {
+      return false;
+    }
+
+    const key = `${userKey(message)}:${hit.filterTypes.join(",")}`;
     const now = Date.now();
     const last = this.lastWarningAt.get(key) ?? 0;
 
@@ -1163,7 +1237,8 @@ export class ModerationService {
   private findMatches(
     message: ChatMessage,
     settings: ModerationSettings,
-    options: { consumePermits?: boolean }
+    options: { consumePermits?: boolean },
+    chatterContext: ChatterContext
   ) {
     const text = message.text.trim();
     const matches: Array<{
@@ -1173,6 +1248,7 @@ export class ModerationService {
     }> = [];
     const allowedLinks: string[] = [];
     let consumedPermit: ModerationEvaluation["consumedPermit"] | undefined;
+    let botShield: ModerationEvaluation["botShield"] | undefined;
 
     if (settings.blockedTermsEnabled) {
       const term = this.enabledTerms()
@@ -1216,7 +1292,36 @@ export class ModerationService {
       matches.push({ type: "symbols", action: settings.symbolFilterAction, detail: "excessive symbols" });
     }
 
-    return { matches, allowedLinks, consumedPermit };
+    if (settings.botShieldEnabled) {
+      const botShieldScore = scoreBotShieldMessage(message, {
+        allowedDomains: this.enabledAllowedLinks().map((entry) => entry.domain),
+        blockedDomains: this.enabledBlockedLinks().map((entry) => entry.domain),
+        chatterContext
+      });
+      botShield = {
+        score: botShieldScore.score,
+        threshold: settings.botShieldScoreThreshold,
+        reasons: botShieldScore.reasons,
+        firstTimeChatter: chatterContext.firstTimeChatter,
+        silent: false
+      };
+
+      if (botShield.score >= settings.botShieldScoreThreshold) {
+        const botShieldMatch = {
+          type: "bot_shield" as const,
+          action: settings.botShieldAction,
+          detail: botShieldDetail(botShield)
+        };
+        botShield.silent = isSilentBotShieldHit([botShieldMatch], settings.botShieldAction, false);
+        matches.push({
+          type: "bot_shield",
+          action: settings.botShieldAction,
+          detail: botShieldDetail(botShield)
+        });
+      }
+    }
+
+    return { matches, allowedLinks, consumedPermit, botShield };
   }
 
   private enabledTerms() {
@@ -1353,16 +1458,53 @@ export class ModerationService {
     return repeats + 1 >= settings.repeatLimit;
   }
 
-  private trackRepeatMemory(message: ChatMessage) {
+  private getChatterContext(message: ChatMessage, settings: ModerationSettings): ChatterContext {
+    const normalizedText = normalizeRepeatText(message.text);
+    const now = Date.now();
+    const key = userKey(message);
+    const userEntries = (this.recentByUser.get(key) ?? [])
+      .filter((entry) => entry.at >= now - settings.repeatWindowSeconds * 1000);
+    const sameUserRepeatCount = normalizedText
+      ? userEntries.filter((entry) => entry.normalizedText === normalizedText).length
+      : 0;
+    const rapidUserMessageCount = userEntries
+      .filter((entry) => entry.at >= now - 10_000).length;
+    const globalCopyPasteUserCount = normalizedText
+      ? unique(this.recentGlobal
+        .filter((entry) =>
+          entry.userKey !== key &&
+          entry.normalizedText === normalizedText &&
+          entry.at >= now - 120_000
+        )
+        .map((entry) => entry.userKey)).length
+      : 0;
+
+    return {
+      firstTimeChatter: message.badges.includes("first-msg") || !this.seenUserKeys.has(key),
+      sameUserRepeatCount,
+      rapidUserMessageCount,
+      globalCopyPasteUserCount
+    };
+  }
+
+  private trackChatMemory(message: ChatMessage) {
+    this.seenUserKeys.add(userKey(message));
     const normalizedText = normalizeRepeatText(message.text);
 
     if (!normalizedText) {
       return;
     }
 
+    const entry = {
+      normalizedText,
+      userKey: userKey(message),
+      at: Date.now()
+    };
     const entries = this.recentByUser.get(userKey(message)) ?? [];
-    entries.push({ normalizedText, at: Date.now() });
+    entries.push(entry);
     this.recentByUser.set(userKey(message), entries.slice(-moderationLimits.repeatMemoryMax));
+    this.recentGlobal.push(entry);
+    this.recentGlobal = this.recentGlobal.slice(-moderationLimits.globalRepeatMemoryMax);
   }
 
   private inspectLinks(message: ChatMessage, consumePermit: boolean) {
@@ -1578,12 +1720,15 @@ const defaultSettings = (): ModerationSettings => ({
   capsFilterEnabled: false,
   repeatFilterEnabled: false,
   symbolFilterEnabled: false,
+  botShieldEnabled: false,
   action: "warn",
   blockedTermsAction: "warn",
   linkFilterAction: "warn",
   capsFilterAction: "warn",
   repeatFilterAction: "warn",
   symbolFilterAction: "warn",
+  botShieldAction: "delete",
+  botShieldScoreThreshold: 70,
   timeoutSeconds: 60,
   warningMessage: "@{user}, please keep chat within channel guidelines.",
   capsMinLength: 20,
@@ -1609,12 +1754,15 @@ const settingsFromRow = (row: ModerationSettingsRow): ModerationSettings => ({
   capsFilterEnabled: row.caps_filter_enabled === 1,
   repeatFilterEnabled: row.repeat_filter_enabled === 1,
   symbolFilterEnabled: row.symbol_filter_enabled === 1,
+  botShieldEnabled: row.bot_shield_enabled === 1,
   action: "warn",
   blockedTermsAction: normalizeStoredModerationAction(row.blocked_terms_action),
   linkFilterAction: normalizeStoredModerationAction(row.link_filter_action),
   capsFilterAction: normalizeStoredModerationAction(row.caps_filter_action),
   repeatFilterAction: normalizeStoredModerationAction(row.repeat_filter_action),
   symbolFilterAction: normalizeStoredModerationAction(row.symbol_filter_action),
+  botShieldAction: normalizeStoredModerationAction(row.bot_shield_action),
+  botShieldScoreThreshold: clampBotShieldScoreThreshold(row.bot_shield_score_threshold),
   timeoutSeconds: clampTimeoutSeconds(row.timeout_seconds),
   warningMessage: row.warning_message,
   capsMinLength: row.caps_min_length,
@@ -1775,6 +1923,19 @@ const clampEscalationHitCount = (value: unknown, fallback: number) => {
   );
 };
 
+const clampBotShieldScoreThreshold = (value: unknown) => {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return 70;
+  }
+
+  return Math.min(
+    moderationLimits.botShieldMaxScore,
+    Math.max(moderationLimits.botShieldMinScore, Math.trunc(parsed))
+  );
+};
+
 const ratioValue = (value: unknown, fallback: number, field: string) => {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -1794,7 +1955,8 @@ const enabledFilterNames = (settings: ModerationSettings) => [
   settings.linkFilterEnabled ? "links" : undefined,
   settings.capsFilterEnabled ? "caps" : undefined,
   settings.repeatFilterEnabled ? "repeat" : undefined,
-  settings.symbolFilterEnabled ? "symbols" : undefined
+  settings.symbolFilterEnabled ? "symbols" : undefined,
+  settings.botShieldEnabled ? "bot_shield" : undefined
 ].filter(Boolean);
 
 const enabledExemptionNames = (settings: ModerationSettings) => [
@@ -1819,6 +1981,9 @@ const enabledEnforcementFilterNames = (settings: ModerationSettings) => [
     : undefined,
   settings.symbolFilterEnabled && settings.symbolFilterAction !== "warn"
     ? `symbols:${settings.symbolFilterAction}`
+    : undefined,
+  settings.botShieldEnabled && settings.botShieldAction !== "warn"
+    ? `bot_shield:${settings.botShieldAction}`
     : undefined
 ].filter(Boolean);
 
@@ -1848,6 +2013,16 @@ const strongestAction = (actions: ModerationAction[]): ModerationAction =>
     "warn"
   );
 
+const isSilentBotShieldHit = (
+  matches: Array<{ type: ModerationFilterType }>,
+  action: ModerationAction,
+  escalationApplied: boolean
+) =>
+  action === "delete" &&
+  !escalationApplied &&
+  matches.length === 1 &&
+  matches[0]?.type === "bot_shield";
+
 const findLinkDomains = (text: string) => {
   const matches = text.matchAll(
     /\b(?:https?:\/\/)?(?:www\.)?([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)(?:\/[^\s]*)?/gi
@@ -1865,6 +2040,192 @@ const unique = <T>(items: T[]) => [...new Set(items)];
 
 const domainMatchesAllowed = (domain: string, allowedDomain: string) =>
   domain === allowedDomain || domain.endsWith(`.${allowedDomain}`);
+
+type BotShieldScore = {
+  score: number;
+  reasons: string[];
+};
+
+const botShieldHighConfidencePatterns = [
+  /\bwant\s+to\s+(?:become|get)\s+famous\b/i,
+  /\b(?:buy|cheap|free|get|boost|increase)\s+(?:twitch\s+)?(?:followers?|viewers?|views?|subs?)\b/i,
+  /\b(?:followers?|viewers?|views?|subs?)\s+(?:for|at|from)\s+(?:cheap|free|sale|low\s+price)\b/i,
+  /\bgrow\s+your\s+channel\b/i
+];
+
+const botShieldPromoObjectPattern = /\b(?:followers?|viewers?|views?|subs?|chatters?)\b/i;
+const botShieldPromoActionPattern = /\b(?:buy|cheap|free|boost|increase|promot(?:e|ion)|famous|viral|grow)\b/i;
+const botShieldOffPlatformPattern = /\b(?:telegram|whatsapp|discord|dm\s+me)\b/i;
+const botShieldRaidFriendlyPattern = /\b(?:raid|raiders?|raiding|from\s+\w{3,25}|welcome\s+in|hype|lets?\s+go|ggs?|pog)\b/i;
+const botShieldShortenerDomains = new Set([
+  "bit.ly",
+  "buff.ly",
+  "cutt.ly",
+  "goo.gl",
+  "is.gd",
+  "lnkd.in",
+  "ow.ly",
+  "rb.gy",
+  "rebrand.ly",
+  "shorturl.at",
+  "t.co",
+  "tinyurl.com"
+]);
+
+const scoreBotShieldMessage = (
+  message: ChatMessage,
+  options: {
+    allowedDomains: string[];
+    blockedDomains: string[];
+    chatterContext: ChatterContext;
+  }
+): BotShieldScore => {
+  const text = message.text.trim();
+  const lower = text.toLowerCase();
+  const domains = unique(findLinkDomains(text));
+  const blockedDomains = domains.filter((domain) =>
+    options.blockedDomains.some((entry) => domainMatchesAllowed(domain, entry))
+  );
+  const allowedDomains = domains.filter((domain) =>
+    !blockedDomains.includes(domain) &&
+    options.allowedDomains.some((entry) => domainMatchesAllowed(domain, entry))
+  );
+  const untrustedDomains = domains.filter((domain) =>
+    !allowedDomains.includes(domain) &&
+    !blockedDomains.includes(domain)
+  );
+  const riskyDomains = unique([...blockedDomains, ...untrustedDomains]);
+  const highConfidenceMatches = botShieldHighConfidencePatterns
+    .filter((pattern) => pattern.test(lower)).length;
+  const hasPromoPair = botShieldPromoObjectPattern.test(lower) && botShieldPromoActionPattern.test(lower);
+  const raidFriendly = isRaidFriendlyMessage(text, {
+    domains,
+    highConfidenceMatches,
+    hasPromoPair
+  });
+  let score = 0;
+  const reasons: string[] = raidFriendly ? ["raid-friendly chatter"] : [];
+  const add = (points: number, reason: string) => {
+    score += points;
+    if (!reasons.includes(reason)) {
+      reasons.push(reason);
+    }
+  };
+
+  if (blockedDomains.length) {
+    add(60, `blocked link domain ${shortDomainList(blockedDomains)}`);
+  }
+
+  if (untrustedDomains.length) {
+    add(20, `untrusted link ${shortDomainList(untrustedDomains)}`);
+  }
+
+  if (riskyDomains.length > 1) {
+    add(15, "multiple risky links");
+  }
+
+  if (riskyDomains.some(isShortenerDomain)) {
+    add(15, "link shortener");
+  }
+
+  if (riskyDomains.some(isLikelyPromoDomain)) {
+    add(40, "promo-looking domain");
+  }
+
+  if (highConfidenceMatches > 0) {
+    add(highConfidenceMatches > 1 ? 65 : 55, "known follower/viewer spam wording");
+  } else if (hasPromoPair) {
+    add(35, "follower/viewer promotion wording");
+  }
+
+  if (hasPromoPair && riskyDomains.length) {
+    add(15, "promotion paired with link");
+  }
+
+  if (hasPromoPair && botShieldOffPlatformPattern.test(lower)) {
+    add(10, "off-platform promotion wording");
+  }
+
+  if (riskyDomains.length && text.length > 160) {
+    add(10, "long linked promo message");
+  }
+
+  if (options.chatterContext.sameUserRepeatCount >= 2) {
+    add(70, "rate-limited repeated message");
+  } else if (options.chatterContext.sameUserRepeatCount === 1 && !raidFriendly) {
+    add(35, "rapid repeated message");
+  }
+
+  if (options.chatterContext.rapidUserMessageCount >= 5 && !raidFriendly) {
+    add(35, "rapid message burst");
+  }
+
+  if (options.chatterContext.globalCopyPasteUserCount >= 2 && !raidFriendly) {
+    add(60, "copy/paste pattern across chat");
+  }
+
+  if (
+    options.chatterContext.firstTimeChatter &&
+    (
+      riskyDomains.length ||
+      highConfidenceMatches > 0 ||
+      hasPromoPair ||
+      options.chatterContext.sameUserRepeatCount > 0 ||
+      options.chatterContext.globalCopyPasteUserCount >= 2
+    )
+  ) {
+    add(10, "first-time chatter with risk signals");
+  }
+
+  if (looksRandomizedLogin(message.userLogin)) {
+    add(10, "randomized username");
+  }
+
+  return {
+    score: Math.min(moderationLimits.botShieldMaxScore, score),
+    reasons
+  };
+};
+
+const botShieldDetail = (score: NonNullable<ModerationEvaluation["botShield"]>) =>
+  `bot shield score ${score.score}/${score.threshold}: ${score.reasons.join(", ") || "heuristic match"}`;
+
+const shortDomainList = (domains: string[]) =>
+  unique(domains).slice(0, 3).join(", ");
+
+const isShortenerDomain = (domain: string) =>
+  [...botShieldShortenerDomains].some((entry) => domainMatchesAllowed(domain, entry));
+
+const isLikelyPromoDomain = (domain: string) =>
+  /(?:buy|cheap|follow|followers|fame|promo|boost|viral|viewbot|viewers)/i.test(domain.replace(/[.-]/g, " "));
+
+const isRaidFriendlyMessage = (
+  text: string,
+  context: {
+    domains: string[];
+    highConfidenceMatches: number;
+    hasPromoPair: boolean;
+  }
+) =>
+  context.domains.length === 0 &&
+  context.highConfidenceMatches === 0 &&
+  !context.hasPromoPair &&
+  text.length <= 180 &&
+  botShieldRaidFriendlyPattern.test(text);
+
+const looksRandomizedLogin = (login: string) => {
+  const normalized = login.toLowerCase().replace(/^@/, "");
+
+  if (normalized.length < 9) {
+    return false;
+  }
+
+  const digits = normalized.replace(/\D/g, "").length;
+  const digitRatio = digits / normalized.length;
+  const alternatingChunks = normalized.match(/(?:[a-z]\d|\d[a-z]){3,}/i);
+
+  return (digits >= 4 && digitRatio >= 0.25) || Boolean(alternatingChunks);
+};
 
 const matchBlockedTerm = (text: string, term: string) => {
   const normalized = term.trim();

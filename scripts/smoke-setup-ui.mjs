@@ -82,6 +82,8 @@ async function runSmoke() {
   assert(appJs.includes("Blocked Link Domains"), "browser UI exposes moderation link blocklist");
   assert(appJs.includes("Temporary Link Permits"), "browser UI exposes moderation link permits");
   assert(appJs.includes("Escalation"), "browser UI exposes moderation escalation settings");
+  assert(appJs.includes("Bot Shield"), "browser UI exposes moderation bot shield settings");
+  assert(appJs.includes("Silent first action"), "browser UI exposes bot shield silent-first result");
   assert(appJs.includes("Setup Guide"), "setup guide renders from UI bundle");
   assert(appJs.includes("Open Twitch Developer Console"), "setup guide includes Twitch Developer Console link");
   assert(appJs.includes("settingsActionButton"), "main UI exposes compact settings launcher");
@@ -249,9 +251,11 @@ async function runSmoke() {
   assert(initialModeration.summary.filtersEnabled === 0, "moderation filters default off");
   assert(initialModeration.summary.enforcementFilters === 0, "moderation enforcement defaults off");
   assert(initialModeration.summary.escalation === "off", "moderation escalation defaults off");
+  assert(initialModeration.summary.botShield === "off", "moderation bot shield defaults off");
   assert(initialModeration.enforcement.deleteMessages.available === false, "moderation delete enforcement reports unavailable before setup");
   assert(initialModeration.settings.exemptModerators === true, "moderation trusted role defaults are exposed");
   assert(initialModeration.settings.escalationEnabled === false, "moderation escalation setting is exposed");
+  assert(initialModeration.settings.botShieldEnabled === false, "moderation bot shield setting is exposed");
   const rehearsalPreset = await json("/api/stream-presets/apply", {
     method: "POST",
     body: { id: "local-bot-rehearsal" }

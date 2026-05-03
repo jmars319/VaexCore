@@ -345,7 +345,7 @@ export class ConsoleBot {
 
       await this.enforceModeration(message, result.hit);
 
-      if (this.moderationService.shouldWarn(message, result.hit.filterTypes)) {
+      if (this.moderationService.shouldWarn(message, result.hit)) {
         this.messageQueue.enqueue(result.hit.warningMessage, {
           category: "system",
           action: `moderation:${result.hit.action}`,
