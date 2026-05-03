@@ -104,6 +104,11 @@ async function runSmoke() {
   assert(appJs.includes("wrong_bot_account"), "settings UI explains wrong-account OAuth callbacks");
   assert(appJs.includes("npm run dev:app-config"), "setup guide points packaged app users at app-config live runtime");
   assert(appJs.includes("Start Bot") && appJs.includes("Stop Bot"), "setup UI exposes bot runtime controls");
+  assert(appJs.includes("refreshAll({ background: true })"), "setup UI polls with background refresh");
+  assert(appJs.includes("backgroundRefreshPromise"), "setup UI keeps background refresh separate from visible busy state");
+  assert(appJs.includes("await backgroundRefreshPromise"), "setup UI queues user actions behind in-flight background refreshes");
+  assert(appJs.includes("renderWhenIdle"), "setup UI defers background rerenders during interaction");
+  assert(appJs.includes("restoreScrollPosition"), "setup UI restores scroll position after rerenders");
   assert(appJs.includes("Saved Client ID and Client Secret are intentionally not shown"), "settings UI explains masked credentials");
   assert(appJs.includes("Refresh Token"), "settings UI reports refresh-token availability");
   assert(appJs.includes("refresh expired Twitch access tokens automatically"), "setup guide explains automatic token refresh");

@@ -290,6 +290,13 @@ function withEcho(body = {}) {
 }
 
 const app = document.getElementById("app");
+const backgroundRefreshMs = 5000;
+const renderIdleDelayMs = 900;
+const interactionQuietMs = 1400;
+const scrollPositions = {};
+let deferredRenderTimer = null;
+let lastUserInteractionAt = 0;
+let backgroundRefreshPromise = null;
 
 function h(tag, attributes = {}, children = []) {
   const element = document.createElement(tag);
@@ -324,7 +331,42 @@ function field(id) {
   return document.getElementById(id);
 }
 
-function render() {
+function currentContentNode() {
+  return app.querySelector(".content");
+}
+
+function saveScrollPosition(tabId = state.activeTab) {
+  const content = currentContentNode();
+  if (!content) {
+    return;
+  }
+  scrollPositions[tabId] = content.scrollTop;
+}
+
+function restoreScrollPosition(tabId = state.activeTab) {
+  const top = scrollPositions[tabId];
+  if (top === undefined) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    const content = currentContentNode();
+    if (content) {
+      content.scrollTop = top;
+    }
+  });
+}
+
+function render(options = {}) {
+  if (deferredRenderTimer) {
+    clearTimeout(deferredRenderTimer);
+    deferredRenderTimer = null;
+  }
+
+  if (options.preserveScroll !== false && !options.skipSaveScroll) {
+    saveScrollPosition();
+  }
+
   if (isSettingsWindow) {
     app.replaceChildren(
       h("div", { className: "app-shell settings-shell" }, [
@@ -340,6 +382,9 @@ function render() {
     );
     syncFormValues();
     updateDisabledState();
+    if (options.preserveScroll !== false) {
+      restoreScrollPosition();
+    }
     return;
   }
 
@@ -354,6 +399,9 @@ function render() {
   );
   syncFormValues();
   updateDisabledState();
+  if (options.preserveScroll !== false) {
+    restoreScrollPosition();
+  }
 }
 
 function renderHeader(options = {}) {
@@ -409,8 +457,9 @@ function renderSidebar() {
     tabs.map(([id, label]) => actionButton(label, {
       className: `nav-button${state.activeTab === id ? " active" : ""}`,
       onClick: () => {
+        saveScrollPosition();
         state.activeTab = id;
-        render();
+        render({ skipSaveScroll: true });
       }
     }))
   );
@@ -3160,46 +3209,66 @@ function desktopUpdateNote(platform) {
   return "Manual updates should replace only the app files. Keep the app data folder unless you intentionally want to reset Twitch setup and local data.";
 }
 
-async function refreshAll() {
-  await runAction("refresh", async () => {
-    const [config, status, launchPreparation, giveaway, commands, timers, moderation, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult, streamPresetResult] = await Promise.all([
-      api.config(),
-      api.status(),
-      api.launchPreparation(),
-      api.giveaway(),
-      api.commands(),
-      api.timers(),
-      api.moderation(),
-      api.templates(),
-      api.operatorMessages(),
-      api.reminder(),
-      api.auditLogs(),
-      api.outboundMessages(),
-      api.diagnostics(),
-      api.featureGates(),
-      api.streamPresets()
-    ]);
-    state.config = config;
-    state.status = status;
-    syncLaunchPreparation(launchPreparation);
-    state.giveaway = giveaway;
-    setCommandState(commands);
-    setTimerState(timers);
-    setModerationState(moderation);
-    state.templates = templates.templates || [];
-    state.operatorMessages = operatorMessages.templates || [];
-    state.reminder = reminder.reminder || {};
-    state.auditLogs = audit.logs || [];
-    state.outboundMessages = outbound.messages || [];
-    state.outboundSummary = outbound.summary || {};
-    state.diagnostics = diagnostics;
-    state.featureGates = featureGateResult.featureGates || [];
-    state.streamPresets = streamPresetResult.presets || [];
-    syncLaunchPreparation(status);
-    syncLaunchPreparation(diagnostics);
-    state.validSetup = isValidationPassed();
-    return { ok: true };
-  }, { quiet: true });
+async function loadFreshState() {
+  const [config, status, launchPreparation, giveaway, commands, timers, moderation, templates, operatorMessages, reminder, audit, outbound, diagnostics, featureGateResult, streamPresetResult] = await Promise.all([
+    api.config(),
+    api.status(),
+    api.launchPreparation(),
+    api.giveaway(),
+    api.commands(),
+    api.timers(),
+    api.moderation(),
+    api.templates(),
+    api.operatorMessages(),
+    api.reminder(),
+    api.auditLogs(),
+    api.outboundMessages(),
+    api.diagnostics(),
+    api.featureGates(),
+    api.streamPresets()
+  ]);
+  state.config = config;
+  state.status = status;
+  syncLaunchPreparation(launchPreparation);
+  state.giveaway = giveaway;
+  setCommandState(commands);
+  setTimerState(timers);
+  setModerationState(moderation);
+  state.templates = templates.templates || [];
+  state.operatorMessages = operatorMessages.templates || [];
+  state.reminder = reminder.reminder || {};
+  state.auditLogs = audit.logs || [];
+  state.outboundMessages = outbound.messages || [];
+  state.outboundSummary = outbound.summary || {};
+  state.diagnostics = diagnostics;
+  state.featureGates = featureGateResult.featureGates || [];
+  state.streamPresets = streamPresetResult.presets || [];
+  syncLaunchPreparation(status);
+  syncLaunchPreparation(diagnostics);
+  state.validSetup = isValidationPassed();
+  return { ok: true };
+}
+
+async function refreshAll(options = {}) {
+  if (options.background) {
+    if (backgroundRefreshPromise) {
+      return backgroundRefreshPromise;
+    }
+
+    backgroundRefreshPromise = loadFreshState()
+      .catch((error) => {
+        state.message = { text: error.message || "Refresh failed.", tone: "bad" };
+        return null;
+      })
+      .finally(() => {
+        backgroundRefreshPromise = null;
+        renderWhenIdle();
+      });
+
+    return backgroundRefreshPromise;
+  }
+
+  await runAction("refresh", loadFreshState, { quiet: true });
 }
 
 async function refreshAfterAction() {
@@ -3282,9 +3351,14 @@ function setModerationState(result = {}) {
 async function runAction(key, fn, options = {}) {
   state.busy.add(key);
   if (!options.quiet) state.message = { text: "Working...", tone: "muted" };
-  render();
+  if (!options.background) {
+    render();
+  }
 
   try {
+    if (!options.background && backgroundRefreshPromise) {
+      await backgroundRefreshPromise;
+    }
     const result = await fn();
     if (result && result.ok === false) {
       throw new Error(result.error || "Action failed");
@@ -3297,7 +3371,11 @@ async function runAction(key, fn, options = {}) {
     return null;
   } finally {
     state.busy.delete(key);
-    render();
+    if (options.background) {
+      renderWhenIdle();
+    } else {
+      render();
+    }
   }
 }
 
@@ -4743,13 +4821,43 @@ function summarizeMetadata(raw) {
   }
 }
 
+function noteUserInteraction() {
+  lastUserInteractionAt = Date.now();
+}
+
 function isEditingFormField() {
   return ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
 }
 
+function isUserInteracting() {
+  return isEditingFormField() || Date.now() - lastUserInteractionAt < interactionQuietMs;
+}
+
+function renderWhenIdle() {
+  if (!isUserInteracting()) {
+    render();
+    return;
+  }
+
+  if (deferredRenderTimer) {
+    clearTimeout(deferredRenderTimer);
+  }
+  deferredRenderTimer = setTimeout(renderWhenIdle, renderIdleDelayMs);
+}
+
+for (const eventName of ["input", "keydown", "pointerdown", "touchstart", "wheel"]) {
+  document.addEventListener(eventName, noteUserInteraction, { capture: true, passive: true });
+}
+document.addEventListener("scroll", noteUserInteraction, { capture: true, passive: true });
+document.addEventListener("focusout", () => {
+  if (deferredRenderTimer) {
+    renderWhenIdle();
+  }
+}, { capture: true });
+
 refreshAll();
 setInterval(() => {
-  if (state.busy.size === 0 && !isEditingFormField()) {
-    void refreshAll();
+  if (state.busy.size === 0) {
+    void refreshAll({ background: true });
   }
-}, 5000);
+}, backgroundRefreshMs);
