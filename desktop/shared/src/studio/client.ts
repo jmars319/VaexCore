@@ -7,7 +7,25 @@ export type StudioIntegrationConfig = {
 export type StudioMarker = {
   id: string;
   label: string | null;
+  source_app: string | null;
+  source_event_id: string | null;
+  recording_session_id: string | null;
+  media_path: string | null;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  metadata: Record<string, unknown>;
   created_at: string;
+};
+
+export type StudioMarkerInput = {
+  label?: string | null;
+  source_app?: string | null;
+  source_event_id?: string | null;
+  recording_session_id?: string | null;
+  media_path?: string | null;
+  start_seconds?: number | null;
+  end_seconds?: number | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type StudioApiResponse<T> = {
@@ -37,10 +55,15 @@ export class StudioClient {
     }>("/health");
   }
 
-  async createMarker(label: string) {
+  async createMarker(marker: string | StudioMarkerInput) {
+    const body =
+      typeof marker === "string"
+        ? { label: marker, source_app: "vaexcore-console" }
+        : { ...marker, source_app: marker.source_app ?? "vaexcore-console" };
+
     return this.request<StudioMarker>("/marker/create", {
       method: "POST",
-      body: JSON.stringify({ label })
+      body: JSON.stringify(body)
     });
   }
 

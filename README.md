@@ -656,7 +656,7 @@ VAEXCORE_STUDIO_API_URL=http://127.0.0.1:51287
 VAEXCORE_STUDIO_API_TOKEN=
 ```
 
-Use `!vcstudio` to check reachability and `!vcmark clutch round` to write a marker into the active Studio timeline.
+Use `!vcstudio` to check reachability and `!vcmark clutch round` to write a marker into Studio. Console sends `source_app=vaexcore-console`, a stable chat source event id, and chat command metadata with each marker.
 
 ## Roadmap
 

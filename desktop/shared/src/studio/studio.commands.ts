@@ -47,7 +47,18 @@ export const registerStudioCommands = ({
     const label = markerLabel(rawArgs, message.userDisplayName);
 
     try {
-      await client.createMarker(label);
+      await client.createMarker({
+        label,
+        source_app: "vaexcore-console",
+        source_event_id: markerSourceEventId(message),
+        metadata: {
+          command: "vcmark",
+          source: message.source,
+          userLogin: message.userLogin,
+          userDisplayName: message.userDisplayName,
+          receivedAt: message.receivedAt.toISOString()
+        }
+      });
       reply(`Studio marker created: ${label}`);
     } catch (error) {
       logger.warn({ error, label }, "Studio marker creation failed");
@@ -55,6 +66,16 @@ export const registerStudioCommands = ({
     }
   });
 };
+
+const markerSourceEventId = (message: {
+  id?: string;
+  source: string;
+  userLogin: string;
+  receivedAt: Date;
+}) =>
+  message.id
+    ? `chat:${message.id}`
+    : `chat:${message.source}:${message.userLogin}:${message.receivedAt.toISOString()}`;
 
 const markerLabel = (rawArgs: string, displayName: string) => {
   const fallback = `chat marker from ${displayName}`;
