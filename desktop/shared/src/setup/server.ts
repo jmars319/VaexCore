@@ -2,7 +2,8 @@ import "dotenv/config";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { URL } from "node:url";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -95,6 +96,8 @@ const queueStaleWarningMs = 30_000;
 const tokenRefreshLeadMs = 5 * 60 * 1000;
 const tokenValidationMaxAgeMs = 24 * 60 * 60 * 1000;
 const databaseUrl = process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite";
+const suiteDiscoverySchemaVersion = 1;
+const suiteDiscoveryHeartbeatMs = 15_000;
 const vaexcoreSuiteApps = [
   "vaexcore studio",
   "vaexcore pulse",
@@ -167,6 +170,7 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
     "vaexcore console setup server started"
   );
 
+  const suiteDiscoveryTimer = startSuiteDiscoveryHeartbeat(port);
   scheduleGiveawayReminder();
   setTimeout(() => {
     void queueLaunchPreparation("launch");
@@ -175,6 +179,7 @@ export const startSetupServer = async (options: { port?: number } = {}) => {
   return {
     url: `http://localhost:${port}`,
     stop: async () => {
+      clearInterval(suiteDiscoveryTimer);
       clearGiveawayReminderTimer();
       await stopBotProcess({ force: true });
       await chatQueue.drain(3000);
@@ -5948,6 +5953,52 @@ const launchMacApp = (appName: string): Promise<SuiteLaunchResult> =>
       });
     });
   });
+
+const startSuiteDiscoveryHeartbeat = (port: number) => {
+  const startedAt = new Date().toISOString();
+  const write = () => {
+    try {
+      writeSuiteDiscoveryDocument(port, startedAt);
+    } catch (error) {
+      logger.warn({ error: redactSecrets(error) }, "Unable to write vaexcore console suite discovery");
+    }
+  };
+
+  write();
+  return setInterval(write, suiteDiscoveryHeartbeatMs);
+};
+
+const writeSuiteDiscoveryDocument = (port: number, startedAt: string) => {
+  const apiUrl = `http://127.0.0.1:${port}`;
+  const directory = suiteDiscoveryDir();
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    join(directory, "vaexcore-console.json"),
+    `${JSON.stringify({
+      schemaVersion: suiteDiscoverySchemaVersion,
+      appId: "vaexcore-console",
+      appName: "vaexcore console",
+      bundleIdentifier: "com.vaexil.vaexcore.console",
+      version: "0.1.2",
+      pid: process.pid,
+      startedAt,
+      updatedAt: new Date().toISOString(),
+      apiUrl,
+      wsUrl: null,
+      healthUrl: `${apiUrl}/api/status`,
+      capabilities: [
+        "console.setup",
+        "twitch.operations",
+        "studio.chat-markers",
+        "suite.launcher"
+      ],
+      launchName: "vaexcore console"
+    }, null, 2)}\n`
+  );
+};
+
+const suiteDiscoveryDir = () =>
+  join(homedir(), "Library", "Application Support", "vaexcore", "suite");
 
 const getSharedAssetDir = () => {
   const currentDir = dirname(fileURLToPath(import.meta.url));
