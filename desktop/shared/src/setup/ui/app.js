@@ -210,6 +210,7 @@ const api = {
   status: () => api.get("/api/status"),
   launchPreparation: () => api.get("/api/launch-preparation"),
   runLaunchPreparation: () => api.post("/api/launch-preparation"),
+  launchSuite: () => api.post("/api/launch-suite"),
   diagnostics: () => api.get("/api/diagnostics"),
   supportBundle: () => api.get("/api/support-bundle"),
   featureGates: () => api.get("/api/feature-gates"),
@@ -436,6 +437,7 @@ function renderHeader(options = {}) {
         statusPill("Chat", runtime?.liveChatConfirmed ? "confirmed" : "pending", runtime?.liveChatConfirmed),
         statusPill("Giveaway", giveaway?.status || "loading", giveaway?.status !== "open")
       ]) : null,
+      actionButton("Launch Suite", { id: "launchSuite", variant: "secondary", busyKey: "launchSuite", onClick: launchSuite }),
       showSettingsAction ? settingsActionButton() : null
     ]) : null
   ]);
@@ -4253,6 +4255,26 @@ async function runLaunchPreparation() {
     return { ok: true };
   }, { skipRefresh: true, success: "Launch checks completed." });
   await refreshAll();
+}
+
+async function launchSuite() {
+  await runAction("launchSuite", async () => {
+    const result = await api.launchSuite();
+    if (!result.ok) {
+      throw new Error(formatSuiteLaunchFailure(result.results || []));
+    }
+    return { ok: true };
+  }, { skipRefresh: true, success: "Launch requested for Studio, Pulse, and Console." });
+}
+
+function formatSuiteLaunchFailure(results) {
+  const appNames = results
+    .filter((result) => !result.ok)
+    .map((result) => result.appName)
+    .join(", ");
+  return appNames
+    ? `Could not launch ${appNames}. Install the app bundles in Applications, then try again.`
+    : "Unable to launch the vaexcore suite.";
 }
 
 function openSettingsWindow(fragment = "") {

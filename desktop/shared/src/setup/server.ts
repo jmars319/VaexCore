@@ -95,6 +95,11 @@ const queueStaleWarningMs = 30_000;
 const tokenRefreshLeadMs = 5 * 60 * 1000;
 const tokenValidationMaxAgeMs = 24 * 60 * 60 * 1000;
 const databaseUrl = process.env.DATABASE_URL ?? "file:./data/vaexcore.sqlite";
+const vaexcoreSuiteApps = [
+  "vaexcore studio",
+  "vaexcore pulse",
+  "vaexcore console"
+] as const;
 const logger = createLogger("info");
 const oauthStates = new Map<string, number>();
 const db = createDbClient(databaseUrl);
@@ -256,6 +261,11 @@ const route = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "POST" && url.pathname === "/api/launch-preparation") {
     await queueLaunchPreparation("manual");
     sendJson(response, 200, getLaunchPreparationSnapshot());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/launch-suite") {
+    sendJson(response, 200, await launchVaexcoreSuite());
     return;
   }
 
@@ -5887,6 +5897,57 @@ const getSetupUiDir = () => {
 
   return existsSync(bundledPath) ? bundledPath : sourcePath;
 };
+
+type SuiteLaunchResult = {
+  appName: string;
+  ok: boolean;
+  detail: string;
+};
+
+const launchVaexcoreSuite = async () => {
+  const results = process.platform === "darwin"
+    ? await Promise.all(vaexcoreSuiteApps.map((appName) => launchMacApp(appName)))
+    : vaexcoreSuiteApps.map((appName) => ({
+        appName,
+        ok: false,
+        detail: "Launch Suite is only implemented for macOS Applications."
+      }));
+
+  return {
+    ok: results.every((result) => result.ok),
+    results
+  };
+};
+
+const launchMacApp = (appName: string): Promise<SuiteLaunchResult> =>
+  new Promise((resolveLaunch) => {
+    const child = spawn("open", ["-a", appName], {
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    let stderr = "";
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (error) => {
+      resolveLaunch({
+        appName,
+        ok: false,
+        detail: safeErrorMessage(error, "Launch failed.")
+      });
+    });
+
+    child.on("close", (code) => {
+      resolveLaunch({
+        appName,
+        ok: code === 0,
+        detail: code === 0
+          ? "Launch requested."
+          : stderr.trim() || `open exited with code ${code}.`
+      });
+    });
+  });
 
 const getSharedAssetDir = () => {
   const currentDir = dirname(fileURLToPath(import.meta.url));

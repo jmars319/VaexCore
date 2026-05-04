@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
+const { spawn } = require("node:child_process");
 const { existsSync } = require("node:fs");
 const { get } = require("node:http");
 const { join } = require("node:path");
@@ -15,6 +16,11 @@ const setupProbeUrl = `http://127.0.0.1:${setupPort}/api/config`;
 const productName = "vaexcore console";
 const legacyProductName = "VaexCore";
 const isMac = process.platform === "darwin";
+const vaexcoreSuiteApps = [
+  "vaexcore studio",
+  "vaexcore pulse",
+  "vaexcore console"
+];
 
 app.setName(productName);
 
@@ -30,6 +36,10 @@ const buildApplicationMenu = () => {
           click: () => {
             void createSettingsWindow();
           }
+        },
+        {
+          label: "Launch vaexcore Suite",
+          click: () => launchVaexcoreSuite()
         },
         { type: "separator" },
         {
@@ -85,6 +95,30 @@ const closeMainWindow = () => {
   const window = BrowserWindow.getFocusedWindow() || mainWindow;
   if (window && !window.isDestroyed()) {
     window.close();
+  }
+};
+
+const launchVaexcoreSuite = () => {
+  if (!isMac) {
+    dialog.showMessageBox({
+      type: "info",
+      message: "Launch Suite is only implemented for macOS Applications."
+    });
+    return;
+  }
+
+  for (const appName of vaexcoreSuiteApps) {
+    const child = spawn("open", ["-a", appName], {
+      detached: true,
+      stdio: "ignore"
+    });
+    child.on("error", (error) => {
+      dialog.showErrorBox(
+        "Unable to Launch vaexcore Suite",
+        `Could not launch ${appName}: ${error.message}`
+      );
+    });
+    child.unref();
   }
 };
 
